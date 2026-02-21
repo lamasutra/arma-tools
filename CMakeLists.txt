@@ -116,7 +116,7 @@ endif()
 # --- Packaging ---
 install(FILES
     ${CMAKE_SOURCE_DIR}/LICENSE.md
-    ${CMAKE_SOURCE_DIR}/LEGALD.md
+    ${CMAKE_SOURCE_DIR}/LEGAL.md
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/arma-tools")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/licenses"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/arma-tools")
