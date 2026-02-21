@@ -5,7 +5,11 @@ pkg_check_modules(VORBISFILE REQUIRED IMPORTED_TARGET vorbisfile)
 pkg_check_modules(LIBPANEL REQUIRED IMPORTED_TARGET libpanel-1)
 pkg_check_modules(LIBADWAITA REQUIRED IMPORTED_TARGET libadwaita-1)
 
-file(GLOB GUI_SOURCES src/*.cpp)
+file(GLOB_RECURSE GUI_SOURCES
+    CONFIGURE_DEPENDS
+    src/*.cpp
+    src/*.c
+)
 find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
 
 set(GUI_GRESOURCE_XML ${CMAKE_CURRENT_SOURCE_DIR}/resources/arma-tools.gresource.xml)
@@ -27,7 +31,7 @@ if(WIN32)
     set(ARMA_TOOLS_ICON_PATH "${CMAKE_SOURCE_DIR}/assets/arma-tools.ico")
     cmake_path(NATIVE_PATH ARMA_TOOLS_ICON_PATH ARMA_TOOLS_ICON_PATH_NATIVE)
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/arma-tools.rc.in
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/arma-tools.rc.in
         ${CMAKE_CURRENT_BINARY_DIR}/arma-tools.rc
         @ONLY
     )
@@ -36,8 +40,16 @@ endif()
 add_executable(arma-tools
     ${GUI_SOURCES}
     ${GUI_GRESOURCE_C}
-    src/miniaudio_impl.c
     $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_BINARY_DIR}/arma-tools.rc>
+)
+
+target_include_directories(arma-tools PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/panels
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/services
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tabs
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
 )
 
 # Suppress warnings in miniaudio (third-party header-only lib)
