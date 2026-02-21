@@ -264,23 +264,24 @@ static std::string resolve_roads_shp_near(const std::string& base_dir, const std
 }
 
 static void print_usage() {
-    std::cerr << "Usage: wrp_info [flags] <input.wrp> [output_dir]\n\n"
-              << "Parses OFP/Resistance WRP files and outputs structured JSON.\n\n"
-              << "Output files:\n"
-              << "  world.json    - World metadata (format, grid, bounds, stats)\n"
-              << "  objects.jsonl - One JSON object per line for each placed object\n"
-              << "  objects.txt   - Terrain Builder text import format\n"
-              << "  classes.json  - Summary of unique classes with counts\n"
-              << "  roads.geojson - Road networks (1WVR only)\n\n"
-              << "Flags:\n"
-              << "  --pretty       Pretty-print JSON output\n"
-              << "  --json         Write world.json to stdout instead of files\n"
-              << "  --strict       Fail on unexpected data\n"
-              << "  --no-objects   Skip objects output (faster)\n"
-              << "  -v, --verbose  Enable verbose logging\n"
-              << "  -vv, --debug   Enable debug logging and diagnostics\n"
-              << "  -offset-x <n>  X coordinate offset (default: 200000)\n"
-              << "  -offset-z <n>  Z coordinate offset (default: 0)\n";
+    armatools::cli::print("Usage: wrp_info [flags] <input.wrp> [output_dir]");
+    armatools::cli::print("Parses OFP/Resistance WRP files and outputs structured JSON.");
+    armatools::cli::print("Output files:");
+    armatools::cli::print("  world.json    - World metadata (format, grid, bounds, stats)");
+    armatools::cli::print("  objects.jsonl - One JSON object per line for each placed object");
+    armatools::cli::print("  objects.txt   - Terrain Builder text import format");
+    armatools::cli::print("  classes.json  - Summary of unique classes with counts");
+    armatools::cli::print("  roads.geojson - Road networks (1WVR only)");
+    armatools::cli::print("");
+    armatools::cli::print("Flags:");
+    armatools::cli::print("  --pretty       Pretty-print JSON output");
+    armatools::cli::print("  --json         Write world.json to stdout instead of files");
+    armatools::cli::print("  --strict       Fail on unexpected data");
+    armatools::cli::print("  --no-objects   Skip objects output (faster)");
+    armatools::cli::print("  -v, --verbose  Enable verbose logging");
+    armatools::cli::print("  -vv, --debug   Enable debug logging and diagnostics");
+    armatools::cli::print("  -offset-x <n>  X coordinate offset (default: 200000)");
+    armatools::cli::print("  -offset-z <n>  Z coordinate offset (default: 0)");
 }
 
 int main(int argc, char* argv[]) {
@@ -341,7 +342,7 @@ int main(int argc, char* argv[]) {
 
     std::ifstream f(input_path, std::ios::binary);
     if (!f) {
-        std::cerr << "Error: cannot open " << input_path << '\n';
+        armatools::cli::log_error("cannot open", input_path);
         return 1;
     }
 
@@ -351,7 +352,7 @@ int main(int argc, char* argv[]) {
     try {
         world = armatools::wrp::read(f, opts);
     } catch (const std::exception& e) {
-        std::cerr << "Error: parsing " << input_path << ": " << e.what() << '\n';
+        armatools::cli::log_error("parsing", input_path, e.what());
         return 1;
     }
 
@@ -367,7 +368,7 @@ int main(int argc, char* argv[]) {
         armatools::cli::log_verbose("Writing outputs to", output_dir);
         write_outputs(world, output_dir, pretty, offset_x, offset_z);
     } catch (const std::exception& e) {
-        std::cerr << "Error: writing output: " << e.what() << '\n';
+        armatools::cli::log_error("writing output:", e.what());
         return 1;
     }
 
@@ -386,45 +387,47 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Summary
-    std::cerr << "Parsed: " << input_path << " (" << world.format.signature << " v" << world.format.version << ")\n";
-    std::cerr << std::format("Grid: {}x{} cells ({:.0f}m cell size)\n",
-                             world.grid.cells_x, world.grid.cells_y, world.grid.cell_size);
-    std::cerr << std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m\n",
-                             world.bounds.world_size_x, world.bounds.world_size_y,
-                             world.bounds.min_elevation, world.bounds.max_elevation);
-    std::cerr << "Textures: " << world.stats.texture_count << ", Models: " << world.stats.model_count
-              << ", Objects: " << world.stats.object_count << '\n';
+    armatools::cli::log_plain(std::format("Parsed: {} ({} v{})",
+                                       input_path, world.format.signature, world.format.version));
+    armatools::cli::log_plain(std::format("Grid: {}x{} cells ({:.0f}m cell size)",
+                                       world.grid.cells_x, world.grid.cells_y, world.grid.cell_size));
+    armatools::cli::log_plain(std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m",
+                                       world.bounds.world_size_x, world.bounds.world_size_y,
+                                       world.bounds.min_elevation, world.bounds.max_elevation));
+    armatools::cli::log_plain("Textures:", world.stats.texture_count,
+                              "Models:", world.stats.model_count,
+                              "Objects:", world.stats.object_count);
     if (world.stats.road_net_count > 0) {
-        std::cerr << "Road nets: " << world.stats.road_net_count << '\n';
+        armatools::cli::log_plain("Road nets:", world.stats.road_net_count);
     }
     if (!world.warnings.empty()) {
-        std::cerr << "Warnings: " << world.warnings.size() << '\n';
+        armatools::cli::log_plain("Warnings:", world.warnings.size());
         for (const auto& w : world.warnings) {
-            std::cerr << "  [" << w.code << "] " << w.message << '\n';
+            armatools::cli::log_plain("  [", w.code, "]", w.message);
         }
     }
 
     if (auto config_path = find_config_cpp(input_path); !config_path.empty()) {
-        std::cerr << "Config: " << config_path << " (auto-detected)\n";
+        armatools::cli::log_plain("Config:", config_path, "(auto-detected)");
         if (auto nrs = parse_new_roads_shape(config_path); !nrs.empty()) {
             auto wrp_dir = fs::path(input_path).parent_path().string();
             if (auto shp_path = resolve_roads_shp_near(wrp_dir, nrs); !shp_path.empty()) {
-                std::cerr << "Roads shape detected: " << shp_path << '\n';
+                armatools::cli::log_plain("Roads shape detected:", shp_path);
                 try {
                     auto bbox = armatools::shp::read_bbox(shp_path);
-                    std::cerr << std::format("  BBox: X=[{:.0f}, {:.0f}] Y=[{:.0f}, {:.0f}]\n",
-                                             bbox.x_min, bbox.x_max, bbox.y_min, bbox.y_max);
+                    armatools::cli::log_plain(std::format("  BBox: X=[{:.0f}, {:.0f}] Y=[{:.0f}, {:.0f}]",
+                                                      bbox.x_min, bbox.x_max, bbox.y_min, bbox.y_max));
                     double map_size_x = world.bounds.world_size_x;
                     if (map_size_x > 0 && bbox.x_min > map_size_x) {
                         double detected_offset = std::floor((bbox.x_max - map_size_x) / 1000) * 1000;
-                        std::cerr << std::format("  Offset: X={:.0f} (map size {:.0f})\n", detected_offset, map_size_x);
+                        armatools::cli::log_plain(std::format("  Offset: X={:.0f} (map size {:.0f})",
+                                                          detected_offset, map_size_x));
                     }
                 } catch (...) {}
             }
         }
     }
 
-    std::cerr << "Output: " << output_dir << '\n';
+    armatools::cli::log_plain("Output:", output_dir);
     return 0;
 }

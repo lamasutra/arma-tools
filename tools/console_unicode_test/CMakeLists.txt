@@ -1,0 +1,4 @@
+add_executable(console_unicode_test main.cpp)
+target_link_libraries(console_unicode_test PRIVATE consoleu)
+armatools_set_warnings(console_unicode_test)
+install(TARGETS console_unicode_test RUNTIME DESTINATION bin)

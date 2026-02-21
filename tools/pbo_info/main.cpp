@@ -82,15 +82,16 @@ static void write_output_files(const json& doc, const armatools::pbo::PBO& p,
 }
 
 static void print_usage() {
-    std::cerr << "Usage: pbo_info [flags] [input.pbo] [output_dir]\n\n"
-              << "Parses PBO archives and outputs structured JSON metadata.\n"
-              << "Reads from file argument or stdin (use - or omit argument).\n\n"
-              << "Output files:\n"
-              << "  pbo.json   - Full structured metadata (extensions, file list, checksum)\n"
-              << "  files.txt  - One file per line: <size>\\t<path>\n\n"
-              << "Flags:\n"
-              << "  --pretty   Pretty-print JSON output\n"
-              << "  --json     Write single JSON to stdout instead of files\n";
+    armatools::cli::print("Usage: pbo_info [flags] [input.pbo] [output_dir]");
+    armatools::cli::print("Parses PBO archives and outputs structured JSON metadata.");
+    armatools::cli::print("Reads from file argument or stdin (use - or omit argument).");
+    armatools::cli::print("Output files:");
+    armatools::cli::print("  pbo.json   - Full structured metadata (extensions, file list, checksum)");
+    armatools::cli::print("  files.txt  - One file per line: <size>\\t<path>");
+    armatools::cli::print("");
+    armatools::cli::print("Flags:");
+    armatools::cli::print("  --pretty   Pretty-print JSON output");
+    armatools::cli::print("  --json     Write single JSON to stdout instead of files");
 }
 
 int main(int argc, char* argv[]) {
@@ -136,7 +137,7 @@ int main(int argc, char* argv[]) {
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
-            std::cerr << "Error: cannot open " << positional[0] << '\n';
+            armatools::cli::log_error("cannot open", positional[0]);
             return 1;
         }
         input = &file_stream;
@@ -155,7 +156,7 @@ int main(int argc, char* argv[]) {
     try {
         p = armatools::pbo::read(*input);
     } catch (const std::exception& e) {
-        std::cerr << "Error: parsing " << filename << ": " << e.what() << '\n';
+        armatools::cli::log_error("parsing", filename, e.what());
         return 1;
     }
 
@@ -175,10 +176,10 @@ int main(int argc, char* argv[]) {
             }
             armatools::cli::log_verbose("Writing outputs to", output_dir.string());
             write_output_files(doc, p, output_dir, pretty);
-            std::cerr << "Output: " << output_dir.string() << '\n';
+            armatools::cli::log_plain("Output:", output_dir.string());
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error: writing output: " << e.what() << '\n';
+        armatools::cli::log_error("writing output:", e.what());
         return 1;
     }
 
@@ -193,14 +194,14 @@ int main(int argc, char* argv[]) {
 
     // Summary to stderr
     auto ext_it = p.extensions.find("prefix");
-    std::cerr << "PBO: " << filename;
+    std::string prefix_suffix;
     if (ext_it != p.extensions.end() && !ext_it->second.empty())
-        std::cerr << " (prefix: " << ext_it->second << ")";
-    std::cerr << '\n';
-    std::cerr << "Files: " << doc["totalFiles"].get<int>()
-              << ", Data size: " << doc["totalDataSize"].get<int64_t>()
-              << ", Original size: " << doc["totalOriginalSize"].get<int64_t>() << '\n';
-    std::cerr << "SHA1: " << doc["checksum"].get<std::string>() << '\n';
+        prefix_suffix = " (prefix: " + ext_it->second + ")";
+    armatools::cli::log_plain("PBO:", filename + prefix_suffix);
+    armatools::cli::log_plain("Files:", doc["totalFiles"].get<int>(),
+                              "Data size:", doc["totalDataSize"].get<int64_t>(),
+                              "Original size:", doc["totalOriginalSize"].get<int64_t>());
+    armatools::cli::log_plain("SHA1:", doc["checksum"].get<std::string>());
 
     return 0;
 }

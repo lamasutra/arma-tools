@@ -74,7 +74,7 @@ static json build_json(const armatools::p3d::P3DFile& model, const std::string& 
 
     auto result = armatools::p3d::calculate_size(model);
     if (!result.warning.empty()) {
-        std::cerr << "Warning: " << result.warning << '\n';
+        armatools::cli::log_warning(result.warning);
     }
     if (result.info) {
         const auto& si = *result.info;
@@ -104,14 +104,15 @@ static std::string version_string(const std::string& format, int version) {
 }
 
 static void print_usage() {
-    std::cerr << "Usage: p3d_info [flags] [input.p3d]\n\n"
-              << "Extracts metadata from P3D model files (ODOL and MLOD formats).\n"
-              << "Reads from file argument or stdin (use - or omit argument).\n\n"
-              << "Output:\n"
-              << "  p3d.json   - Full structured metadata (LODs, textures, model info)\n\n"
-              << "Flags:\n"
-              << "  --pretty   Pretty-print JSON output\n"
-              << "  --json     Write JSON to stdout instead of file\n";
+    armatools::cli::print("Usage: p3d_info [flags] [input.p3d]");
+    armatools::cli::print("Extracts metadata from P3D model files (ODOL and MLOD formats).");
+    armatools::cli::print("Reads from file argument or stdin (use - or omit argument).");
+    armatools::cli::print("Output:");
+    armatools::cli::print("  p3d.json   - Full structured metadata (LODs, textures, model info)");
+    armatools::cli::print("");
+    armatools::cli::print("Flags:");
+    armatools::cli::print("  --pretty   Pretty-print JSON output");
+    armatools::cli::print("  --json     Write JSON to stdout instead of file");
 }
 
 int main(int argc, char* argv[]) {
@@ -153,7 +154,7 @@ int main(int argc, char* argv[]) {
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
-            std::cerr << "Error: cannot open " << positional[0] << '\n';
+            armatools::cli::log_error("cannot open", positional[0]);
             return 1;
         }
         input = &file_stream;
@@ -172,7 +173,7 @@ int main(int argc, char* argv[]) {
     try {
         model = armatools::p3d::read(*input);
     } catch (const std::exception& e) {
-        std::cerr << "Error: parsing " << filename << ": " << e.what() << '\n';
+        armatools::cli::log_error("parsing", filename, e.what());
         return 1;
     }
 
@@ -189,10 +190,10 @@ int main(int argc, char* argv[]) {
             std::ofstream jf(output_dir / "p3d.json");
             if (!jf) throw std::runtime_error("failed to create p3d.json");
             write_json(jf, doc, pretty);
-            std::cerr << "Output: " << output_dir.string() << '\n';
+            armatools::cli::log_plain("Output:", output_dir.string());
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error: writing output: " << e.what() << '\n';
+        armatools::cli::log_error("writing output:", e.what());
         return 1;
     }
 
@@ -209,23 +210,23 @@ int main(int argc, char* argv[]) {
         armatools::cli::log_debug("Total textures tracked", doc["textures"].size());
     }
 
-    // Summary to stderr
-    std::cerr << "P3D: " << filename << " (" << version_string(model.format, model.version) << ")\n";
+    std::string version = version_string(model.format, model.version);
+    armatools::cli::log_plain("P3D:", filename, "(", version, ")");
 
     std::string lod_names;
     for (size_t i = 0; i < model.lods.size(); i++) {
         if (i > 0) lod_names += ", ";
         lod_names += model.lods[i].resolution_name;
     }
-    std::cerr << "LODs: " << model.lods.size() << " (" << lod_names << ")\n";
-    std::cerr << "Textures: " << doc["textures"].size() << " unique\n";
+    armatools::cli::log_plain("LODs:", model.lods.size(), "(", lod_names, ")");
+    armatools::cli::log_plain("Textures:", doc["textures"].size(), "unique");
     if (!model.lods.empty()) {
-        std::cerr << "Vertices: " << model.lods[0].vertex_count << " (LOD 0)\n";
+        armatools::cli::log_plain("Vertices:", model.lods[0].vertex_count, "(LOD 0)");
     }
     if (doc.contains("size")) {
         auto& d = doc["size"]["dimensions"];
-        std::cerr << "Size: " << d[0].get<float>() << " x " << d[1].get<float>() << " x " << d[2].get<float>()
-                  << " m (from " << doc["size"]["source"].get<std::string>() << ")\n";
+        armatools::cli::log_plain("Size:", d[0].get<float>(), "x", d[1].get<float>(), "x", d[2].get<float>(),
+                                  "m (from", doc["size"]["source"].get<std::string>() + ")");
     }
 
     return 0;

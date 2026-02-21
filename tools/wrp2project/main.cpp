@@ -73,35 +73,36 @@ static double detect_offset_from_shp(const std::string& shp_path, double map_siz
 }
 
 static void print_usage() {
-    std::cerr << "Usage: wrp2project [flags] <input.wrp> [output_dir]\n\n"
-              << "Generates a Terrain Builder project directory from a WRP file.\n\n"
-              << "Output structure:\n"
-              << "  map_Name/\n"
-              << "    config.cpp, cfgSurfaces.hpp, cfgClutter.hpp, Map_Name.hpp\n"
-              << "    data/roads/RoadsLib.cfg\n"
-              << "    source/heightmap.asc, layers.cfg\n"
-              << "    TemplateLibs/<category>.tml\n"
-              << "    source/objects_<category>.txt\n"
-              << "    map_name.tv4p\n\n"
-              << "Flags:\n"
-              << "  --name <s>        Terrain name (default: derived from WRP filename)\n"
-              << "  -offset-x <n>     X coordinate offset (default: 200000)\n"
-              << "  -offset-z <n>     Z coordinate offset (default: 0)\n"
-              << "  --prefix <s>      Layer name prefix (default: derived from name)\n"
-              << "  --roads <f>       Road type mapping file (TSV: pattern<TAB>RoadType)\n"
-              << "  --roads-shp <f>   Import roads from existing .shp file\n"
-              << "  --config <f>      Import metadata from derap'd config.cpp\n"
-              << "  --drive <d>       Project drive root for P3D paths (e.g., /mnt/p)\n"
-              << "  --db <f>          a3db database for model bounding boxes\n"
-              << "  --split <n>       Max objects per text import file (default: 10000, 0=no split)\n"
-              << "  --style <f>       JSON file mapping categories to TML shape/color styles\n"
-              << "  --hm-scale <n>    Heightmap upscale factor (1, 2, 4, 8, 16)\n"
-              << "  --extract-models  Extract P3D models and textures to drive\n"
-              << "  --empty-layers    Generate TV4L layers without objects (for txt import)\n"
-              << "  --replace <f>     Apply model name replacements from TSV file\n"
-              << "  -v, --verbose     Emit verbose logs\n"
-              << "  -vv, --debug      Emit debug logs\n"
-              << "  --pretty          Pretty-print JSON output\n";
+    armatools::cli::print("Usage: wrp2project [flags] <input.wrp> [output_dir]");
+    armatools::cli::print("Generates a Terrain Builder project directory from a WRP file.");
+    armatools::cli::print("Output structure:");
+    armatools::cli::print("  map_Name/");
+    armatools::cli::print("    config.cpp, cfgSurfaces.hpp, cfgClutter.hpp, Map_Name.hpp");
+    armatools::cli::print("    data/roads/RoadsLib.cfg");
+    armatools::cli::print("    source/heightmap.asc, layers.cfg");
+    armatools::cli::print("    TemplateLibs/<category>.tml");
+    armatools::cli::print("    source/objects_<category>.txt");
+    armatools::cli::print("    map_name.tv4p");
+    armatools::cli::print("");
+    armatools::cli::print("Flags:");
+    armatools::cli::print("  --name <s>        Terrain name (default: derived from WRP filename)");
+    armatools::cli::print("  -offset-x <n>     X coordinate offset (default: 200000)");
+    armatools::cli::print("  -offset-z <n>     Z coordinate offset (default: 0)");
+    armatools::cli::print("  --prefix <s>      Layer name prefix (default: derived from name)");
+    armatools::cli::print("  --roads <f>       Road type mapping file (TSV: pattern<TAB>RoadType)");
+    armatools::cli::print("  --roads-shp <f>   Import roads from existing .shp file");
+    armatools::cli::print("  --config <f>      Import metadata from derap'd config.cpp");
+    armatools::cli::print("  --drive <d>       Project drive root for P3D paths (e.g., /mnt/p)");
+    armatools::cli::print("  --db <f>          a3db database for model bounding boxes");
+    armatools::cli::print("  --split <n>       Max objects per text import file (default: 10000, 0=no split)");
+    armatools::cli::print("  --style <f>       JSON file mapping categories to TML shape/color styles");
+    armatools::cli::print("  --hm-scale <n>    Heightmap upscale factor (1, 2, 4, 8, 16)");
+    armatools::cli::print("  --extract-models  Extract P3D models and textures to drive");
+    armatools::cli::print("  --empty-layers    Generate TV4L layers without objects (for txt import)");
+    armatools::cli::print("  --replace <f>     Apply model name replacements from TSV file");
+    armatools::cli::print("  -v, --verbose     Emit verbose logs");
+    armatools::cli::print("  -vv, --debug      Emit debug logs");
+    armatools::cli::print("  --pretty          Pretty-print JSON output");
 }
 
 int main(int argc, char* argv[]) {
@@ -172,7 +173,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cerr << "Creating project for " << terrain_name << " (" << fs::path(input_path).filename().string() << ")\n";
+    armatools::cli::log_verbose(std::format("Creating project for {} ({})", terrain_name, fs::path(input_path).filename().string()));
 
     std::string layer_prefix = prefix_flag;
     if (layer_prefix.empty()) {
@@ -206,7 +207,7 @@ int main(int argc, char* argv[]) {
     // Parse WRP
     std::ifstream f(input_path, std::ios::binary);
     if (!f) {
-        std::cerr << "Error: cannot open " << input_path << '\n';
+        armatools::cli::log_error("cannot open", input_path);
         return 1;
     }
 
@@ -215,7 +216,7 @@ int main(int argc, char* argv[]) {
         armatools::cli::log_verbose("Reading WRP", input_path);
         world = armatools::wrp::read(f, {});
     } catch (const std::exception& e) {
-        std::cerr << "Error: parsing " << input_path << ": " << e.what() << '\n';
+        armatools::cli::log_error("parsing", input_path, e.what());
         return 1;
     }
     armatools::cli::log_debug("WRP format", world.format.signature, "v", world.format.version,
@@ -299,7 +300,7 @@ int main(int argc, char* argv[]) {
             rmap = load_replacements(replace_file);
             armatools::cli::log_debug("Replacement rules count", rmap.len());
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << '\n';
+            armatools::cli::log_error("replacement map", e.what());
             return 1;
         }
     }
@@ -353,30 +354,32 @@ int main(int argc, char* argv[]) {
     int num_steps = static_cast<int>(std::size(steps));
 
     for (int i = 0; i < num_steps; i++) {
-        armatools::cli::log_verbose("Step", i + 1, "/", num_steps, steps[i].desc);
+        armatools::cli::print("Step", i + 1, "/", num_steps, steps[i].desc);
         try {
             steps[i].fn(proj);
         } catch (const std::exception& e) {
             armatools::cli::log_debug("Error writing", steps[i].desc, ":", e.what());
+            armatools::cli::log_error("Error writing", steps[i].desc, e.what());
             return 1;
         }
     }
 
     // Summary
-    std::cerr << "wrp2project: " << input_path << " (" << world.format.signature << " v" << world.format.version << ")\n";
-    std::cerr << "Terrain: " << terrain_name << " (prefix: " << layer_prefix << ")\n";
-    std::cerr << std::format("Grid: {}x{} cells, cell size {:.0f}m\n",
-                              world.grid.cells_x, world.grid.cells_y, world.grid.cell_size);
-    std::cerr << std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m\n",
-                              world.bounds.world_size_x, world.bounds.world_size_y,
-                              world.bounds.min_elevation, world.bounds.max_elevation);
-    std::cerr << std::format("Textures: {}, Models: {}, Objects: {}\n",
-                              world.stats.texture_count, world.stats.model_count, world.stats.object_count);
-    std::cerr << std::format("Heightmap: {}x{} (cell {:.1f}m)\n",
-                              proj.hm_width, proj.hm_height,
-                              world.bounds.world_size_x / static_cast<double>(proj.hm_width));
-    std::cerr << std::format("Offset: X+{:.0f} Z+{:.0f}\n", proj.offset_x, proj.offset_z);
-    std::cerr << "Output: " << output_dir << '\n';
+    armatools::cli::print(std::format("wrp2project: {} ({} v{})",
+                                       input_path, world.format.signature, world.format.version));
+    armatools::cli::print(std::format("Terrain: {} (prefix: {})", terrain_name, layer_prefix));
+    armatools::cli::print(std::format("Grid: {}x{} cells, cell size {:.0f}m",
+                                       world.grid.cells_x, world.grid.cells_y, world.grid.cell_size));
+    armatools::cli::print(std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m",
+                                       world.bounds.world_size_x, world.bounds.world_size_y,
+                                       world.bounds.min_elevation, world.bounds.max_elevation));
+    armatools::cli::print(std::format("Textures: {}, Models: {}, Objects: {}",
+                                       world.stats.texture_count, world.stats.model_count, world.stats.object_count));
+    armatools::cli::print(std::format("Heightmap: {}x{} (cell {:.1f}m)",
+                                       proj.hm_width, proj.hm_height,
+                                       world.bounds.world_size_x / static_cast<double>(proj.hm_width)));
+    armatools::cli::print(std::format("Offset: X+{:.0f} Z+{:.0f}", proj.offset_x, proj.offset_z));
+    armatools::cli::print(std::format("Output: {}", output_dir));
 
     return 0;
 }

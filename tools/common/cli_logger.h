@@ -72,4 +72,73 @@ void log_debug(Args&&... args) {
     log(VerbosityLevel::Debug, std::forward<Args>(args)...);
 }
 
+template <typename... Args>
+void log_warning(Args&&... args) {
+    auto& stream = std::cerr;
+    if (supports_utf())
+        stream << "[⚠️] ";
+    else
+        stream << "[WARN] ";
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args) << ' '), ...);
+    }
+    stream << '\n';
+}
+
+template <typename... Args>
+void log_error(Args&&... args) {
+    auto& stream = std::cerr;
+    if (supports_utf())
+        stream << "[❌] ";
+    else
+        stream << "[ERROR] ";
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args) << ' '), ...);
+    }
+    stream << '\n';
+}
+
+template <typename... Args>
+void print(Args&&... args) {
+    auto& stream = std::cout;
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args) << ' '), ...);
+    }
+    stream << '\n';
+}
+
+template <typename... Args>
+void log_plain(Args&&... args) {
+    auto& stream = std::cerr;
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args) << ' '), ...);
+    }
+    stream << '\n';
+}
+
+template <typename... Args>
+void log_stdout(Args&&... args) {
+    auto& stream = std::cout;
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args) << ' '), ...);
+    }
+    stream << '\n';
+}
+
+template <typename... Args>
+void log_raw(Args&&... args) {
+    auto& stream = std::cerr;
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args)), ...);
+    }
+}
+
+template <typename... Args>
+void log_stdout_raw(Args&&... args) {
+    auto& stream = std::cout;
+    if constexpr (sizeof...(Args) > 0) {
+        ((stream << std::forward<Args>(args)), ...);
+    }
+}
+
 } // namespace armatools::cli
