@@ -554,8 +554,18 @@ void TabWrpInfo::on_hm_export() {
                 if (ext == ".tif" || ext == ".tiff") {
                     // Export TIFF using wrp_heightmap tool (native resolution only)
                     auto wrp_path = loaded_wrp_path_;
-                    auto res = run_subprocess("wrp_heightmap",
-                        {"-offset-x", "200000", "-offset-z", "0", wrp_path, output_path});
+                    if (!cfg_) {
+                        app_log(LogLevel::Error, "WrpInfo: Configuration not available for wrp_heightmap");
+                        return;
+                    }
+                    auto tool = resolve_tool_path(*cfg_, "wrp_heightmap");
+                    if (tool.empty()) {
+                        app_log(LogLevel::Error, "WrpInfo: wrp_heightmap binary not found");
+                        return;
+                    }
+                    auto args = apply_tool_verbosity(cfg_,
+                        {"-offset-x", "200000", "-offset-z", "0", wrp_path, output_path}, false);
+                    auto res = run_subprocess(tool, args);
                     if (res.status == 0) {
                         app_log(LogLevel::Info, "WrpInfo: Exported GeoTIFF to " + output_path);
                     } else {

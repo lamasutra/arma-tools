@@ -236,10 +236,13 @@ void TabConversions::convert_asc_to_geotiff(const std::string& input,
         return;
     }
 
-    append_log("Running: " + tool + " " + input + " " + output + "\n");
+    auto args = apply_tool_verbosity(cfg_, {input, output}, false);
+    std::string display_cmd = tool;
+    for (const auto& a : args) display_cmd += " " + a;
+    append_log("Running: " + display_cmd + "\n");
 
-    worker_ = std::thread([this, tool, input, output]() {
-        auto res = run_subprocess(tool, {input, output});
+    worker_ = std::thread([this, tool, args]() {
+        auto res = run_subprocess(tool, args);
 
         Glib::signal_idle().connect_once([this, res]() {
             append_log(res.output);

@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "../common/cli_logger.h"
 
 namespace fs = std::filesystem;
 using json = nlohmann::ordered_json;
@@ -93,6 +96,7 @@ static void print_usage() {
 int main(int argc, char* argv[]) {
     bool pretty = false;
     bool json_stdout = false;
+    int verbosity = 0;
     std::vector<std::string> positional;
 
     for (int i = 1; i < argc; i++) {
@@ -100,6 +104,10 @@ int main(int argc, char* argv[]) {
             pretty = true;
         } else if (std::strcmp(argv[i], "--json") == 0) {
             json_stdout = true;
+        } else if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0) {
+            verbosity = std::min(verbosity + 1, 2);
+        } else if (std::strcmp(argv[i], "-vv") == 0 || std::strcmp(argv[i], "--debug") == 0) {
+            verbosity = 2;
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage();
             return 0;
@@ -107,6 +115,8 @@ int main(int argc, char* argv[]) {
             positional.push_back(argv[i]);
         }
     }
+
+    armatools::cli::set_verbosity(verbosity);
 
     bool from_stdin = positional.empty() || positional[0] == "-";
     std::string filename;
@@ -122,6 +132,7 @@ int main(int argc, char* argv[]) {
         stdin_stream = std::istringstream(buf.str());
         input = &stdin_stream;
         filename = "stdin";
+        armatools::cli::log_verbose("Reading PBO from stdin");
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
@@ -130,6 +141,14 @@ int main(int argc, char* argv[]) {
         }
         input = &file_stream;
         filename = fs::path(positional[0]).filename().string();
+        armatools::cli::log_verbose("Reading", positional[0]);
+        if (armatools::cli::debug_enabled()) {
+            try {
+                armatools::cli::log_debug("Input size (bytes):", fs::file_size(positional[0]));
+            } catch (const std::exception&) {
+                armatools::cli::log_debug("Input size unavailable for", positional[0]);
+            }
+        }
     }
 
     armatools::pbo::PBO p;
@@ -154,12 +173,22 @@ int main(int argc, char* argv[]) {
                 std::string stem = input_path.stem().string();
                 output_dir = input_path.parent_path() / (stem + "_pbo_info");
             }
+            armatools::cli::log_verbose("Writing outputs to", output_dir.string());
             write_output_files(doc, p, output_dir, pretty);
             std::cerr << "Output: " << output_dir.string() << '\n';
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: writing output: " << e.what() << '\n';
         return 1;
+    }
+
+    if (armatools::cli::verbose_enabled()) {
+        armatools::cli::log_verbose("Total entries:", doc["totalFiles"].get<int>());
+    }
+    if (armatools::cli::debug_enabled() && !p.entries.empty()) {
+        const auto& first = p.entries.front();
+        armatools::cli::log_debug("First entry:", first.filename,
+                                 "size", first.data_size, "method", first.packing_method);
     }
 
     // Summary to stderr

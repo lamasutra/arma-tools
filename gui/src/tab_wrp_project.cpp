@@ -534,6 +534,8 @@ void TabWrpProject::on_generate() {
     if (empty_layers_check_.get_active()) { args.push_back("--empty-layers"); }
 #endif
 
+    args = apply_tool_verbosity(cfg_, args, true);
+
     const int hm_scale = std::stoi(scale);
     const bool use_heightpipe = use_heightpipe_check_.get_active();
     const hp::CorrectionPreset hp_preset = parse_heightpipe_preset(heightpipe_preset_combo_.get_active_text());
@@ -557,9 +559,16 @@ void TabWrpProject::on_generate() {
     if (worker_.joinable())
         worker_.join();
 
+    auto stream_consumer = [this](std::string chunk) {
+        Glib::signal_idle().connect_once([this, chunk = std::move(chunk)]() {
+            auto tbuf = log_view_.get_buffer();
+            tbuf->insert(tbuf->end(), chunk);
+        });
+    };
+
     worker_ = std::thread([this, tool, args, hm_scale, use_heightpipe, hp_preset, hp_seed,
-                           offset_x, offset_z, selected_wrp_path, output]() {
-        auto result = run_subprocess(tool, args);
+                           offset_x, offset_z, selected_wrp_path, output, stream_consumer]() mutable {
+        auto result = run_subprocess(tool, args, stream_consumer);
         std::string post_log;
 
         if (result.status == 0 && use_heightpipe && hm_scale > 1) {
@@ -572,7 +581,6 @@ void TabWrpProject::on_generate() {
 
         Glib::signal_idle().connect_once([this, result, post_log = std::move(post_log)]() {
             auto tbuf = log_view_.get_buffer();
-            tbuf->insert(tbuf->end(), result.output);
             if (!post_log.empty()) {
                 tbuf->insert(tbuf->end(), "\n");
                 tbuf->insert(tbuf->end(), post_log);

@@ -260,7 +260,8 @@ void TabPbo::on_extract() {
         worker_.join();
 
     worker_ = std::thread([this, tool, pbo_path, out_dir]() {
-        auto result = run_subprocess(tool, {pbo_path, out_dir});
+        auto args = apply_tool_verbosity(cfg_, {pbo_path, out_dir}, false);
+        auto result = run_subprocess(tool, args);
         Glib::signal_idle().connect_once([this, result]() {
             if (result.status == 0) {
                 app_log(LogLevel::Info, "PBO extraction complete");
@@ -318,7 +319,8 @@ void TabPbo::on_extract_selected() {
         worker_.join();
 
     worker_ = std::thread([this, tool, pbo_path, out_dir, entry_name]() {
-        auto result = run_subprocess(tool, {pbo_path, out_dir, entry_name});
+        auto args = apply_tool_verbosity(cfg_, {pbo_path, out_dir, entry_name}, false);
+        auto result = run_subprocess(tool, args);
         Glib::signal_idle().connect_once([this, result, entry_name]() {
             if (result.status == 0) {
                 app_log(LogLevel::Info, "Extracted: " + entry_name);

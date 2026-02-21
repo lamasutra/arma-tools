@@ -88,7 +88,8 @@ void TabOggValidate::on_validate() {
     if (worker_.joinable()) worker_.join();
 
     worker_ = std::thread([this, tool, input]() {
-        auto res = run_subprocess(tool, {"-r", "--warn", input});
+        auto args = apply_tool_verbosity(cfg_, {"-r", "--warn", input}, false);
+        auto res = run_subprocess(tool, args);
 
         Glib::signal_idle().connect_once([this, res]() {
             results_view_.get_buffer()->set_text(res.output);

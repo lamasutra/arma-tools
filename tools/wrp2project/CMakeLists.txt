@@ -49,6 +49,7 @@ target_link_libraries(wrp2project PRIVATE
     armatools::pbo
     nlohmann_json::nlohmann_json
     ${WRP2PROJECT_ZLIB_TARGET}
+    armatools_cli_logger
 )
 target_include_directories(wrp2project PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(WRP2PROJECT_WITH_TV4L)

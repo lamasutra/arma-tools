@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/cli_logger.h"
+
 namespace fs = std::filesystem;
 
 static std::string expand_user_path(const std::string& path) {
@@ -97,6 +99,8 @@ static void print_usage() {
               << "  --extract-models  Extract P3D models and textures to drive\n"
               << "  --empty-layers    Generate TV4L layers without objects (for txt import)\n"
               << "  --replace <f>     Apply model name replacements from TSV file\n"
+              << "  -v, --verbose     Emit verbose logs\n"
+              << "  -vv, --debug      Emit debug logs\n"
               << "  --pretty          Pretty-print JSON output\n";
 }
 
@@ -118,8 +122,14 @@ int main(int argc, char* argv[]) {
     bool empty_layers = false;
     std::string replace_file;
     std::vector<std::string> positional;
+    int verbosity = 0;
 
     for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0) {
+            verbosity = std::min(verbosity + 1, 2);
+        } else if (std::strcmp(argv[i], "-vv") == 0 || std::strcmp(argv[i], "--debug") == 0) {
+            verbosity = 2;
+        } else
         if (std::strcmp(argv[i], "--name") == 0 && i + 1 < argc) name_flag = argv[++i];
         else if (std::strcmp(argv[i], "-offset-x") == 0 && i + 1 < argc) { offset_x = std::stod(argv[++i]); offset_x_explicit = true; }
         else if (std::strcmp(argv[i], "-offset-z") == 0 && i + 1 < argc) offset_z = std::stod(argv[++i]);
@@ -142,6 +152,8 @@ int main(int argc, char* argv[]) {
             positional.push_back(argv[i]);
         }
     }
+
+    armatools::cli::set_verbosity(verbosity);
 
     if (positional.empty()) {
         print_usage();
@@ -186,6 +198,7 @@ int main(int argc, char* argv[]) {
     replace_file = expand_user_path(replace_file);
 
     // Load road map
+    armatools::cli::log_verbose("Loading road map", roads_file.empty() ? "(default)" : roads_file);
     armatools::roadobj::RoadMap roads = roads_file.empty()
         ? armatools::roadobj::default_map()
         : armatools::roadobj::load_map(roads_file);
@@ -199,13 +212,17 @@ int main(int argc, char* argv[]) {
 
     armatools::wrp::WorldData world;
     try {
+        armatools::cli::log_verbose("Reading WRP", input_path);
         world = armatools::wrp::read(f, {});
     } catch (const std::exception& e) {
         std::cerr << "Error: parsing " << input_path << ": " << e.what() << '\n';
         return 1;
     }
+    armatools::cli::log_debug("WRP format", world.format.signature, "v", world.format.version,
+                              "objects", world.stats.object_count, "models", world.stats.model_count);
 
     // Create directory structure
+    armatools::cli::log_verbose("Preparing output directories in", output_dir);
     std::string lower_name = terrain_name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -239,12 +256,14 @@ int main(int argc, char* argv[]) {
     MapMetadata* meta = nullptr;
     std::unique_ptr<MapMetadata> meta_ptr;
     if (!config_file.empty()) {
+        armatools::cli::log_verbose("Importing config metadata from", config_file);
         meta = read_map_metadata(config_file);
         if (meta) {
             meta_ptr.reset(meta);
-            std::cerr << std::format("Config: {} (world={}, mapSize={}, lon={:.3f}, lat={:.3f}, elev={})\n",
-                                      config_file, meta->world_name, meta->map_size,
-                                      meta->longitude, meta->latitude, meta->elevation_offset);
+            armatools::cli::log_debug("Config metadata world", meta->world_name,
+                                      "mapSize", meta->map_size,
+                                      "lon", meta->longitude, "lat", meta->latitude,
+                                      "elev", meta->elevation_offset);
         }
     }
 
@@ -253,7 +272,7 @@ int main(int argc, char* argv[]) {
     if (resolved_roads_shp.empty() && meta && !meta->new_roads_shape.empty() && !drive.empty()) {
         resolved_roads_shp = resolve_new_roads_shape(drive, meta->new_roads_shape);
         if (!resolved_roads_shp.empty()) {
-            std::cerr << "Roads SHP: auto-discovered " << resolved_roads_shp << " (from config newRoadsShape)\n";
+            armatools::cli::log_verbose("Roads SHP auto-discovered", resolved_roads_shp);
         }
     }
 
@@ -263,11 +282,10 @@ int main(int argc, char* argv[]) {
         double detected = detect_offset_from_shp(resolved_roads_shp, world.bounds.world_size_x);
         if (detected != final_offset_x && detected != 0) {
             if (offset_x_explicit) {
-                std::cerr << std::format("Note: SHP suggests offset X={:.0f} but using explicit -offset-x={:.0f}\n",
-                                          detected, final_offset_x);
+                armatools::cli::log_verbose("SHP offset suggestion", detected,
+                                            "but using explicit", final_offset_x);
             } else {
-                std::cerr << std::format("Offset X: using {:.0f} (detected from roads SHP, was {:.0f})\n",
-                                          detected, final_offset_x);
+                armatools::cli::log_verbose("Offset X", detected, "(detected from roads SHP)");
                 final_offset_x = detected;
             }
         }
@@ -277,8 +295,9 @@ int main(int argc, char* argv[]) {
     ReplacementMap rmap;
     if (!replace_file.empty()) {
         try {
+            armatools::cli::log_verbose("Loading replacement map", replace_file);
             rmap = load_replacements(replace_file);
-            std::cerr << "Loaded " << rmap.len() << " replacement rules from " << replace_file << '\n';
+            armatools::cli::log_debug("Replacement rules count", rmap.len());
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << '\n';
             return 1;
@@ -334,11 +353,11 @@ int main(int argc, char* argv[]) {
     int num_steps = static_cast<int>(std::size(steps));
 
     for (int i = 0; i < num_steps; i++) {
-        std::cerr << std::format("[{}/{}] {}\n", i + 1, num_steps, steps[i].desc);
+        armatools::cli::log_verbose("Step", i + 1, "/", num_steps, steps[i].desc);
         try {
             steps[i].fn(proj);
         } catch (const std::exception& e) {
-            std::cerr << "Error: writing " << steps[i].desc << ": " << e.what() << '\n';
+            armatools::cli::log_debug("Error writing", steps[i].desc, ":", e.what());
             return 1;
         }
     }

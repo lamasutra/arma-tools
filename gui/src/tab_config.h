@@ -30,6 +30,7 @@ private:
         Gtk::Button browse{"Browse..."};
     };
     std::vector<std::unique_ptr<PathRow>> path_rows_;
+    Gtk::ComboBoxText tool_verbosity_combo_;
 
     // Asset Browser tab
     Gtk::ScrolledWindow asset_scroll_;

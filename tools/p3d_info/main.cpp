@@ -12,6 +12,8 @@
 #include <sstream>
 #include <string>
 
+#include "../common/cli_logger.h"
+
 namespace fs = std::filesystem;
 using json = nlohmann::ordered_json;
 
@@ -115,11 +117,16 @@ static void print_usage() {
 int main(int argc, char* argv[]) {
     bool pretty = false;
     bool json_stdout = false;
+    int verbosity = 0;
     std::vector<std::string> positional;
 
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--pretty") == 0) pretty = true;
         else if (std::strcmp(argv[i], "--json") == 0) json_stdout = true;
+        else if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0)
+            verbosity = std::min(verbosity + 1, 2);
+        else if (std::strcmp(argv[i], "-vv") == 0 || std::strcmp(argv[i], "--debug") == 0)
+            verbosity = 2;
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage();
             return 0;
@@ -127,6 +134,8 @@ int main(int argc, char* argv[]) {
             positional.push_back(argv[i]);
         }
     }
+
+    armatools::cli::set_verbosity(verbosity);
 
     bool from_stdin = positional.empty() || positional[0] == "-";
     std::string filename;
@@ -140,6 +149,7 @@ int main(int argc, char* argv[]) {
         stdin_stream = std::istringstream(buf.str());
         input = &stdin_stream;
         filename = "stdin";
+        armatools::cli::log_verbose("Reading from stdin");
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
@@ -148,6 +158,14 @@ int main(int argc, char* argv[]) {
         }
         input = &file_stream;
         filename = fs::path(positional[0]).filename().string();
+        armatools::cli::log_verbose("Reading", positional[0]);
+        if (armatools::cli::debug_enabled()) {
+            try {
+                armatools::cli::log_debug("Size (bytes):", fs::file_size(positional[0]));
+            } catch (const std::exception&) {
+                // ignore missing file size
+            }
+        }
     }
 
     armatools::p3d::P3DFile model;
@@ -166,6 +184,7 @@ int main(int argc, char* argv[]) {
         } else {
             std::string base = fs::path(positional[0]).stem().string();
             fs::path output_dir = fs::path(positional[0]).parent_path() / (base + "_p3d_info");
+            armatools::cli::log_verbose("Writing to", output_dir.string());
             fs::create_directories(output_dir);
             std::ofstream jf(output_dir / "p3d.json");
             if (!jf) throw std::runtime_error("failed to create p3d.json");
@@ -175,6 +194,19 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         std::cerr << "Error: writing output: " << e.what() << '\n';
         return 1;
+    }
+
+    if (armatools::cli::verbose_enabled()) {
+        armatools::cli::log_verbose("LOD count:", model.lods.size(), "Textures:", doc["textures"].size());
+    }
+    if (armatools::cli::debug_enabled()) {
+        size_t limit = std::min<size_t>(model.lods.size(), 3);
+        for (size_t i = 0; i < limit; ++i) {
+            const auto& lod = model.lods[i];
+            armatools::cli::log_debug("LOD", lod.index, "resolution", lod.resolution,
+                                     "verts", lod.vertex_count, "faces", lod.face_count);
+        }
+        armatools::cli::log_debug("Total textures tracked", doc["textures"].size());
     }
 
     // Summary to stderr

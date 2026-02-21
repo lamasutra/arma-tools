@@ -41,6 +41,7 @@ struct Config {
     std::string arma1_dir;
     std::string arma2_dir;
     std::string ffmpeg_path;
+    int tool_verbosity_level = 0;
 
     std::map<std::string, std::string> binaries;
     std::vector<std::string> recent_wrps;

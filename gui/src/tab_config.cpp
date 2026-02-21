@@ -67,9 +67,22 @@ void TabConfig::build_general_tab() {
         bool is_file = f.is_file;
         row->browse.signal_clicked().connect(
             [this, entry = &row->entry, is_file]() { on_browse_path(*entry, !is_file); });
-        general_box_.append(row->box);
-        path_rows_.push_back(std::move(row));
-    }
+    general_box_.append(row->box);
+    path_rows_.push_back(std::move(row));
+}
+
+    auto verbosity_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+    auto verbosity_label = Gtk::make_managed<Gtk::Label>("Tool verbosity");
+    verbosity_label->set_size_request(150, -1);
+    verbosity_label->set_xalign(1.0);
+    tool_verbosity_combo_.append("0", "Off");
+    tool_verbosity_combo_.append("1", "Verbose (-v)");
+    tool_verbosity_combo_.append("2", "Debug (-vv)");
+    tool_verbosity_combo_.set_active_id("0");
+    tool_verbosity_combo_.set_hexpand(true);
+    verbosity_box->append(*verbosity_label);
+    verbosity_box->append(tool_verbosity_combo_);
+    general_box_.append(*verbosity_box);
 }
 
 void TabConfig::build_asset_tab() {
@@ -218,6 +231,11 @@ void TabConfig::populate_from_config() {
         path_rows_[i]->entry.set_text(*paths[i]);
     }
 
+    int tool_level = cfg_->tool_verbosity_level;
+    if (tool_level < 0) tool_level = 0;
+    if (tool_level > 2) tool_level = 2;
+    tool_verbosity_combo_.set_active_id(std::to_string(tool_level));
+
     // Asset browser
     auto_derap_.set_active(cfg_->asset_browser_defaults.auto_derap);
     on_demand_metadata_.set_active(cfg_->asset_browser_defaults.on_demand_metadata);
@@ -275,6 +293,18 @@ void TabConfig::save_to_config() {
     for (size_t i = 0; i < path_rows_.size() && i < std::size(paths); ++i) {
         *paths[i] = path_rows_[i]->entry.get_text();
     }
+
+    auto level_id = tool_verbosity_combo_.get_active_id();
+    int tool_level = 0;
+    if (!level_id.empty()) {
+        try {
+            tool_level = std::stoi(level_id);
+        } catch (...) {
+        }
+    }
+    if (tool_level < 0) tool_level = 0;
+    if (tool_level > 2) tool_level = 2;
+    cfg_->tool_verbosity_level = tool_level;
 
     cfg_->asset_browser_defaults.auto_derap = auto_derap_.get_active();
     cfg_->asset_browser_defaults.on_demand_metadata = on_demand_metadata_.get_active();

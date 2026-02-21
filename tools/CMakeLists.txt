@@ -1,3 +1,4 @@
+add_subdirectory(common)
 add_subdirectory(pbo_info)
 add_subdirectory(pbo_extract)
 add_subdirectory(p3d_info)

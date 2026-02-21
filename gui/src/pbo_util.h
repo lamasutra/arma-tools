@@ -1,6 +1,9 @@
 #pragma once
 
+#include "config.h"
+
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -16,8 +19,13 @@ struct SubprocessResult {
     int status = -1;
     std::string output;
 };
+using OutputConsumer = std::function<void(std::string&& chunk)>;
 SubprocessResult run_subprocess(const std::string& program,
-                                 const std::vector<std::string>& args);
+                                 const std::vector<std::string>& args,
+                                 OutputConsumer consumer = {});
+std::vector<std::string> apply_tool_verbosity(const Config* cfg,
+                                              std::vector<std::string> args,
+                                              bool supports_flags = false);
 
 // Resolve a texture path to a file on disk (drive_root or relative to model).
 // Returns true if the texture exists on disk at any candidate path.

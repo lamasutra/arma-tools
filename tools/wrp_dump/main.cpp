@@ -12,6 +12,8 @@
 #include <iostream>
 #include <string>
 
+#include "../common/cli_logger.h"
+
 namespace fs = std::filesystem;
 using json = nlohmann::ordered_json;
 
@@ -237,6 +239,7 @@ int main(int argc, char* argv[]) {
     bool no_cells = false;
     bool no_objects = false;
     bool no_elevations = false;
+    int verbosity = 0;
     std::vector<std::string> positional;
 
     for (int i = 1; i < argc; i++) {
@@ -245,6 +248,10 @@ int main(int argc, char* argv[]) {
         else if (std::strcmp(argv[i], "--no-cells") == 0) no_cells = true;
         else if (std::strcmp(argv[i], "--no-objects") == 0) no_objects = true;
         else if (std::strcmp(argv[i], "--no-elevations") == 0) no_elevations = true;
+        else if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0)
+            verbosity = std::min(verbosity + 1, 2);
+        else if (std::strcmp(argv[i], "-vv") == 0 || std::strcmp(argv[i], "--debug") == 0)
+            verbosity = 2;
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage();
             return 0;
@@ -252,6 +259,8 @@ int main(int argc, char* argv[]) {
             positional.push_back(argv[i]);
         }
     }
+
+    armatools::cli::set_verbosity(verbosity);
 
     if (positional.empty()) {
         print_usage();
@@ -268,6 +277,15 @@ int main(int argc, char* argv[]) {
     }
 
     if (output_dir == "-") json_stdout = true;
+
+    armatools::cli::log_verbose("Reading", input_path);
+    if (armatools::cli::debug_enabled()) {
+        try {
+            armatools::cli::log_debug("Input size (bytes):", fs::file_size(input_path));
+        } catch (const std::exception&) {
+            armatools::cli::log_debug("Input size unavailable for", input_path);
+        }
+    }
 
     std::ifstream f(input_path, std::ios::binary);
     if (!f) {
@@ -286,6 +304,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (json_stdout) {
+        armatools::cli::log_verbose("Writing JSON summary to stdout");
         auto doc = build_world_json(world);
         if (pretty) std::cout << std::setw(2) << doc << '\n';
         else std::cout << doc << '\n';
@@ -293,10 +312,24 @@ int main(int argc, char* argv[]) {
     }
 
     try {
+        armatools::cli::log_verbose("Writing outputs to", output_dir);
         write_outputs(world, output_dir, {pretty, no_cells, no_objects, no_elevations});
     } catch (const std::exception& e) {
         std::cerr << "Error: writing output: " << e.what() << '\n';
         return 1;
+    }
+
+    if (armatools::cli::verbose_enabled()) {
+        armatools::cli::log_verbose("Textures:", world.stats.texture_count,
+                                     "Models:", world.stats.model_count,
+                                     "Objects:", world.stats.object_count);
+    }
+    if (armatools::cli::debug_enabled()) {
+        armatools::cli::log_debug("Road nets:", world.stats.road_net_count,
+                                  "Elevations:", world.elevations.size());
+        for (const auto& warning : world.warnings) {
+            armatools::cli::log_debug("Warning", warning.code, warning.message);
+        }
     }
 
     // Summary

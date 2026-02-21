@@ -117,6 +117,7 @@ void TabP3dConvert::on_convert() {
     std::vector<std::string> args;
     args.push_back(input);
     if (!output.empty()) args.push_back(output);
+    args = apply_tool_verbosity(cfg_, args, false);
 
     std::string display_cmd = tool;
     for (const auto& a : args) display_cmd += " " + a;

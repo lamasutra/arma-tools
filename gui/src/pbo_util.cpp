@@ -46,7 +46,8 @@ std::vector<uint8_t> extract_from_pbo(const std::string& pbo_path,
 }
 
 SubprocessResult run_subprocess(const std::string& program,
-                                 const std::vector<std::string>& args) {
+                                 const std::vector<std::string>& args,
+                                 OutputConsumer consumer) {
     // Log the command being invoked
     {
         std::string cmdline = program;
@@ -90,7 +91,9 @@ SubprocessResult run_subprocess(const std::string& program,
     char buf[512];
     DWORD n = 0;
     while (ReadFile(read_pipe, buf, sizeof(buf), &n, nullptr) && n > 0) {
-        result.output.append(buf, static_cast<size_t>(n));
+        std::string chunk(buf, static_cast<size_t>(n));
+        result.output.append(chunk);
+        if (consumer) consumer(std::move(chunk));
     }
     CloseHandle(read_pipe);
 
@@ -134,8 +137,11 @@ SubprocessResult run_subprocess(const std::string& program,
     SubprocessResult result;
     char buf[512];
     ssize_t n = 0;
-    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0)
-        result.output.append(buf, static_cast<size_t>(n));
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        std::string chunk(buf, static_cast<size_t>(n));
+        result.output.append(chunk);
+        if (consumer) consumer(std::move(chunk));
+    }
     close(pipefd[0]);
 
     int wstatus = 0;
@@ -143,6 +149,20 @@ SubprocessResult run_subprocess(const std::string& program,
     result.status = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
     return result;
 #endif
+    }
+
+std::vector<std::string> apply_tool_verbosity(const Config* cfg,
+                                              std::vector<std::string> args,
+                                              bool supports_flags) {
+    if (!supports_flags || !cfg) return args;
+    int level = cfg->tool_verbosity_level;
+    if (level <= 0) return args;
+    if (level >= 2) {
+        args.insert(args.begin(), "-vv");
+    } else {
+        args.insert(args.begin(), "-v");
+    }
+    return args;
 }
 
 bool resolve_texture_on_disk(const std::string& texture,

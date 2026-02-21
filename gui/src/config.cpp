@@ -135,6 +135,12 @@ Config load_config() {
         json j = json::parse(f);
         if (j.contains("worlds_dir")) j.at("worlds_dir").get_to(cfg.worlds_dir);
         if (j.contains("project_debug_dir")) j.at("project_debug_dir").get_to(cfg.project_debug_dir);
+        if (j.contains("tool_verbosity_level")) {
+            int level = j.at("tool_verbosity_level").get<int>();
+            if (level < 0) level = 0;
+            if (level > 2) level = 2;
+            cfg.tool_verbosity_level = level;
+        }
         if (j.contains("drive_root")) j.at("drive_root").get_to(cfg.drive_root);
         if (j.contains("a3db_path")) j.at("a3db_path").get_to(cfg.a3db_path);
         if (j.contains("arma3_dir")) j.at("arma3_dir").get_to(cfg.arma3_dir);
@@ -161,6 +167,7 @@ void save_config(const Config& cfg) {
     json j;
     j["worlds_dir"] = cfg.worlds_dir;
     j["project_debug_dir"] = cfg.project_debug_dir;
+    j["tool_verbosity_level"] = cfg.tool_verbosity_level;
     j["drive_root"] = cfg.drive_root;
     j["a3db_path"] = cfg.a3db_path;
     j["arma3_dir"] = cfg.arma3_dir;
