@@ -1,0 +1,2 @@
+armatools_add_test(heightpipe_test heightpipe_test.cpp)
+target_link_libraries(heightpipe_test PRIVATE armatools::heightpipe)

@@ -1,0 +1,21 @@
+#pragma once
+
+#define ARMATOOLS_VERSION       "@PROJECT_VERSION@"
+#define ARMATOOLS_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define ARMATOOLS_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define ARMATOOLS_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define ARMATOOLS_GIT_HASH      "@GIT_HASH@"
+#define ARMATOOLS_GIT_DIRTY     @GIT_DIRTY@
+
+namespace armatools {
+
+inline const char* version_string() {
+    if constexpr (ARMATOOLS_GIT_DIRTY)
+        return ARMATOOLS_VERSION "+" ARMATOOLS_GIT_HASH "-dirty";
+    else if constexpr (sizeof(ARMATOOLS_GIT_HASH) > 1)
+        return ARMATOOLS_VERSION "+" ARMATOOLS_GIT_HASH;
+    else
+        return ARMATOOLS_VERSION;
+}
+
+} // namespace armatools

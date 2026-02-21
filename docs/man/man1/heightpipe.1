@@ -1,0 +1,65 @@
+.TH heightpipe 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+heightpipe \- upscale/correct/erode heightmaps with deterministic multi-scale pipeline
+.SH SYNOPSIS
+.B heightpipe
+.I input.rawf32 output.rawf32
+.B --in-width
+.I N
+.B --in-height
+.I N
+.RI [ options ]
+.SH DESCRIPTION
+.B heightpipe
+reads a headerless row-major float32 heightmap, upscales by 2/4/8/16,
+applies scale-aware correction modes, runs stepped erosion, and writes
+a headerless row-major float32 output.
+.SH OPTIONS
+.TP
+.BI "--scale " 2|4|8|16
+Upscale factor (default 2).
+.TP
+.BI "--resample " bicubic|lanczos3
+Upscale kernel (default bicubic).
+.TP
+.BI "--correction " mode
+Correction mode:
+.B preset
+(default),
+.B none,
+.B unsharp,
+.B curv_gain,
+.B residual,
+.B guided_sharp,
+.B hybrid,
+.B terrain_16x
+(alias for preset chain).
+.TP
+.BI "--preset " name
+Preset chain for
+.B --correction preset
+:
+.B none,
+.B sharp,
+.B retain_detail,
+.BR terrain_16x .
+.TP
+.BI "--macro " 0|1
+Enable macro erosion pass (default 1).
+.TP
+.BI "--meso " 0|1
+Enable meso erosion pass (default 1).
+.TP
+.BI "--micro " 0|1
+Enable micro erosion pass (default 1).
+.TP
+.BI "--seed " N
+Deterministic RNG seed (default 1).
+.TP
+.BI "--dump " slope.raw curvature.raw flow.raw
+Write diagnostics as raw float32 maps at output resolution.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_heightmap (1)

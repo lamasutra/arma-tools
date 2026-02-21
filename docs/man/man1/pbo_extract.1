@@ -1,0 +1,36 @@
+.TH pbo_extract 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+pbo_extract \- extract files from PBO archives
+.SH SYNOPSIS
+.B pbo_extract
+.RB [ -derap | -auto-derap ]
+.I input.pbo output_dir
+.RI [ patterns... ]
+.SH DESCRIPTION
+.B pbo_extract
+extracts selected files from a PBO archive.
+Patterns are case-insensitive and support
+.B *
+and
+.B ?
+wildcards.
+.SH OPTIONS
+.TP
+.B -derap
+Debinarize all rapified files to text
+.B .cpp
+output.
+.TP
+.B -auto-derap
+Debinarize only
+.B config.bin
+files.
+.TP
+.BR -h , " --help"
+Show help.
+.SH NOTES
+Use
+.B -
+as output path to write one matched file to stdout.
+.SH SEE ALSO
+.BR pbo_info (1)

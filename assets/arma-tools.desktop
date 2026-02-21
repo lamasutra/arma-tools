@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Arma Tools
+Comment=Arma modding tools (GUI)
+Exec=arma-tools
+Icon=arma-tools
+Terminal=false
+Type=Application
+Categories=Game;Utility;

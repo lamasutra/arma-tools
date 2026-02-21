@@ -1,0 +1,30 @@
+.TH audio_player 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+audio_player \- play OGG, WSS, and WAV audio files
+.SH SYNOPSIS
+.B audio_player
+.RI [ options ]
+.I input.ogg|input.wss|input.wav
+.SH DESCRIPTION
+.B audio_player
+plays supported audio files using miniaudio backends.
+.SH OPTIONS
+.TP
+.BI "--backend " name
+Force backend (pulse, alsa, wasapi, coreaudio, jack, null, default).
+.TP
+.BI "--device " name
+Select playback device by case-insensitive substring match.
+.TP
+.B
+--list-backends
+List available audio backends and exit.
+.TP
+.B
+--list-devices
+List playback devices for the selected backend and exit.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR ogg_validate (1)

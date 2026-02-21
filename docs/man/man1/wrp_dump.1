@@ -1,0 +1,39 @@
+.TH wrp_dump 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_dump \- full structured dump of OFP/Resistance WRP files
+.SH SYNOPSIS
+.B wrp_dump
+.RI [ flags ]
+.I input.wrp
+.RI [ output_dir ]
+.SH DESCRIPTION
+.B wrp_dump
+writes comprehensive JSON/GeoJSON exports for world, elevations, cell data, objects, classes, and roads.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print JSON.
+.TP
+.B
+--json
+Write world JSON to stdout instead of files.
+.TP
+.B
+--no-cells
+Skip
+.BR cells.json .
+.TP
+.B
+--no-objects
+Skip object/class outputs.
+.TP
+.B
+--no-elevations
+Skip
+.BR elevations.json .
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_info (1)

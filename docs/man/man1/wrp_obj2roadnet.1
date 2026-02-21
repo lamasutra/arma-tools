@@ -1,0 +1,26 @@
+.TH wrp_obj2roadnet 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_obj2roadnet \- derive road polylines from OFP road objects in WRP
+.SH SYNOPSIS
+.B wrp_obj2roadnet
+.RI [ flags ]
+.I input.wrp output.geojson
+.SH DESCRIPTION
+.B wrp_obj2roadnet
+reconstructs road networks from placed OFP road segment objects and emits GeoJSON.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print GeoJSON output.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_roadnet (1)

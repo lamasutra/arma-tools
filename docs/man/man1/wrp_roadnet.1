@@ -1,0 +1,26 @@
+.TH wrp_roadnet 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_roadnet \- export native OPRW road links as GeoJSON
+.SH SYNOPSIS
+.B wrp_roadnet
+.RI [ flags ]
+.I input.wrp output.geojson
+.SH DESCRIPTION
+.B wrp_roadnet
+extracts built-in road link data from modern OPRW v12+ maps.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print GeoJSON output.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_obj2roadnet (1)

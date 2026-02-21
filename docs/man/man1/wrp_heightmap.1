@@ -1,0 +1,30 @@
+.TH wrp_heightmap 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_heightmap \- export WRP elevation data as GeoTIFF or XYZ
+.SH SYNOPSIS
+.B wrp_heightmap
+.RI [ flags ]
+.I input.wrp output.tif|output.xyz
+.SH DESCRIPTION
+.B wrp_heightmap
+extracts terrain elevations and writes float32/uint16 GeoTIFF or ASCII XYZ output.
+.SH OPTIONS
+.TP
+.BI "-format " fmt
+Output format:
+.B float32
+(default),
+.B uint16
+or
+.BR xyz .
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_satmask (1)

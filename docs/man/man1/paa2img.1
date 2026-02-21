@@ -1,0 +1,22 @@
+.TH paa2img 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+paa2img \- convert PAA textures to PNG
+.SH SYNOPSIS
+.B paa2img
+.RI [ flags ]
+.RI [ input.paa ]
+.SH DESCRIPTION
+.B paa2img
+reads PAA from file or stdin and writes PNG output.
+.SH OPTIONS
+.TP
+.BI "-o " path
+Output PNG path. Use
+.B -
+for stdout.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR paa2tga (1),
+.BR tga2paa (1)

@@ -1,0 +1,5 @@
+add_library(armatools_heightpipe src/heightpipe.cpp)
+add_library(armatools::heightpipe ALIAS armatools_heightpipe)
+
+target_include_directories(armatools_heightpipe PUBLIC include)
+armatools_set_warnings(armatools_heightpipe)

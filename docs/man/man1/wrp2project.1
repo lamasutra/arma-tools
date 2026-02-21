@@ -1,0 +1,63 @@
+.TH wrp2project 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp2project \- generate a Terrain Builder project from a WRP file
+.SH SYNOPSIS
+.B wrp2project
+.RI [ flags ]
+.I input.wrp
+.RI [ output_dir ]
+.SH DESCRIPTION
+.B wrp2project
+creates a project directory with terrain config, road data, layers, object imports, and TV4 project files.
+.SH OPTIONS
+.TP
+.BI "--name " s
+Override terrain name.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BI "--prefix " s
+Layer name prefix.
+.TP
+.BI "--roads " f
+Road type mapping TSV.
+.TP
+.BI "--roads-shp " f
+Import roads from SHP.
+.TP
+.BI "--config " f
+Import metadata from derapified config.cpp.
+.TP
+.BI "--drive " d
+Drive root for P3D paths.
+.TP
+.BI "--db " f
+Use a3db database for model bounding boxes.
+.TP
+.BI "--split " n
+Max objects per import file.
+.TP
+.BI "--style " f
+JSON style map for TML output.
+.TP
+.BI "--hm-scale " n
+Heightmap upscale factor (1,2,4,8,16).
+.TP
+.B
+--extract-models
+Extract models and textures to drive.
+.TP
+.B
+--pretty
+Pretty-print JSON output.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_info (1),
+.BR wrp_dump (1),
+.BR a3db (1)

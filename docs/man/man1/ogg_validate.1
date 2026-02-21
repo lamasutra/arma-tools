@@ -1,0 +1,35 @@
+.TH ogg_validate 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+ogg_validate \- validate OGG/Vorbis files for compatibility issues
+.SH SYNOPSIS
+.B ogg_validate
+.RI [ flags ]
+.RI [ file.ogg | file.pbo | dir ... ]
+.SH DESCRIPTION
+.B ogg_validate
+checks OGG files directly, inside PBO archives, or recursively in directories.
+.SH OPTIONS
+.TP
+.B
+-r
+Recursively scan input directories for
+.B .ogg
+and
+.B .pbo
+files.
+.TP
+.B
+--json
+Print results as JSON.
+.TP
+.B
+--warn
+Show only files with warnings or errors.
+.TP
+.BR -h , " --help"
+Show help.
+.SH CHECKS
+The tool reports old encoder versions, floor type 0, lookup1Values precision risk, and low sample rate.
+.SH SEE ALSO
+.BR audio_player (1),
+.BR pbo_extract (1)

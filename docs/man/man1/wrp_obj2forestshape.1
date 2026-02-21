@@ -1,0 +1,29 @@
+.TH wrp_obj2forestshape 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_obj2forestshape \- convert OFP forest objects to GeoJSON polygons
+.SH SYNOPSIS
+.B wrp_obj2forestshape
+.RI [ flags ]
+.I input.wrp output.geojson
+.SH DESCRIPTION
+.B wrp_obj2forestshape
+extracts forest blocks from WRP objects, merges adjacent cells, and outputs forest area polygons.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print GeoJSON output.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BI "-index " n
+Export only one polygon by 0-based index.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_obj2roadnet (1)

@@ -1,0 +1,28 @@
+.TH tga2paa 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+tga2paa \- convert TGA textures to PAA/PAC
+.SH SYNOPSIS
+.B tga2paa
+.RI [ flags ]
+.I input.tga
+.SH DESCRIPTION
+.B tga2paa
+converts TGA files to PAA/PAC and validates power-of-two dimensions.
+.SH OPTIONS
+.TP
+.BI "-o " path
+Output PAA/PAC path.
+.TP
+.BI "-format " fmt
+Compression format:
+.B auto
+(default),
+.BR dxt1 ,
+.BR dxt3 ,
+.BR dxt5 .
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR paa2tga (1),
+.BR paa2img (1)

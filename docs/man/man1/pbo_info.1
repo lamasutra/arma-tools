@@ -1,0 +1,34 @@
+.TH pbo_info 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+pbo_info \- inspect PBO metadata and emit JSON reports
+.SH SYNOPSIS
+.B pbo_info
+.RI [ flags ]
+.RI [ input.pbo ]
+.RI [ output_dir ]
+.SH DESCRIPTION
+.B pbo_info
+parses a PBO and outputs metadata, extensions, checksum, and file list.
+Input can be file, stdin (
+.B -
+), or omitted (stdin).
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print JSON output.
+.TP
+.B
+--json
+Write one JSON document to stdout instead of output files.
+.TP
+.BR -h , " --help"
+Show help.
+.SH OUTPUT
+Default output files are
+.B pbo.json
+and
+.B files.txt
+in the selected output directory.
+.SH SEE ALSO
+.BR pbo_extract (1)

@@ -1,0 +1,79 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "linux-debug",
+            "displayName": "Linux Debug",
+            "binaryDir": "${sourceDir}/build/debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTING": "ON"
+            }
+        },
+        {
+            "name": "linux-release",
+            "displayName": "Linux Release",
+            "binaryDir": "${sourceDir}/build/release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TESTING": "OFF"
+            }
+        },
+        {
+            "name": "linux-package",
+            "displayName": "Linux Package",
+            "binaryDir": "${sourceDir}/build/package",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TESTING": "OFF",
+                "BUILD_GUI": "ON"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "windows-package",
+            "displayName": "Windows Package",
+            "binaryDir": "${sourceDir}/build/package",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TESTING": "OFF",
+                "BUILD_GUI": "ON"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "linux-debug",
+            "configurePreset": "linux-debug"
+        },
+        {
+            "name": "linux-release",
+            "configurePreset": "linux-release"
+        },
+        {
+            "name": "linux-package",
+            "configurePreset": "linux-package"
+        },
+        {
+            "name": "windows-package",
+            "configurePreset": "windows-package"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "linux-debug",
+            "configurePreset": "linux-debug",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

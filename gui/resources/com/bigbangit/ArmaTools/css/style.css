@@ -1,0 +1,59 @@
+/* Log level filter icon toggles */
+.log-filter-toggle {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+  border-radius: 4px;
+}
+.log-filter-debug { color: #9aa0a6; }
+.log-filter-info { color: #4ea3ff; }
+.log-filter-warning { color: #ffb74d; }
+.log-filter-error { color: #ff6b6b; }
+.log-filter-debug:checked,
+.log-filter-info:checked,
+.log-filter-warning:checked,
+.log-filter-error:checked {
+  background-color: alpha(currentColor, 0.18);
+  border-radius: 4px;
+}
+.log-filter-debug:not(:checked),
+.log-filter-info:not(:checked),
+.log-filter-warning:not(:checked),
+.log-filter-error:not(:checked) {
+  opacity: 0.45;
+}
+
+/* P3D preview icon toggles */
+.p3d-toggle-icon {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+  border-radius: 4px;
+}
+.p3d-toggle-icon:checked {
+  background-color: alpha(currentColor, 0.18);
+}
+
+/* Compact switches (PBO mode toggles) */
+switch.compact-switch {
+  min-width: 30px;
+  min-height: 18px;
+  padding: 1px;
+  border-radius: 6px;
+}
+switch.compact-switch > slider,
+switch.compact-switch slider {
+  min-width: 12px !important;
+  min-height: 12px !important;
+  margin: 1px !important;
+  border-radius: 999px !important;
+}
+
+/* Audio split handles */
+paned.audio-split > separator {
+  min-height: 6px;
+  background-color: alpha(@borders, 0.6);
+}
+paned.audio-split > separator:hover {
+  background-color: @accent_color;
+}

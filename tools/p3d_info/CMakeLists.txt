@@ -1,0 +1,4 @@
+add_executable(p3d_info main.cpp)
+target_link_libraries(p3d_info PRIVATE armatools::p3d nlohmann_json::nlohmann_json)
+armatools_set_warnings(p3d_info)
+install(TARGETS p3d_info RUNTIME DESTINATION bin)

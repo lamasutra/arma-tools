@@ -1,0 +1,30 @@
+.TH p3d_info 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+p3d_info \- extract structured metadata from P3D files
+.SH SYNOPSIS
+.B p3d_info
+.RI [ flags ]
+.RI [ input.p3d ]
+.SH DESCRIPTION
+.B p3d_info
+parses ODOL and MLOD model files and outputs JSON metadata.
+Input can be a file, stdin (
+.B -
+), or omitted (stdin).
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print JSON output.
+.TP
+.B
+--json
+Write JSON to stdout instead of files.
+.TP
+.BR -h , " --help"
+Show help.
+.SH OUTPUT
+When writing files, output is stored in
+.BR <input>_p3d_info/p3d.json .
+.SH SEE ALSO
+.BR p3d_odol2mlod (1)

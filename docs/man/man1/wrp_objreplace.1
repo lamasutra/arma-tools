@@ -1,0 +1,33 @@
+.TH wrp_objreplace 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_objreplace \- apply replacement rules to WRP objects for TB import
+.SH SYNOPSIS
+.B wrp_objreplace
+.RI [ flags ]
+.I replacements.txt input.wrp output_dir
+.SH DESCRIPTION
+.B wrp_objreplace
+rewrites object model names using replacement rules and writes Terrain Builder import outputs.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print JSON stats.
+.TP
+.B
+--keep-roads
+Keep road objects (default skips roads).
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BI "-roads " file
+Road type mapping TSV.
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp2project (1)

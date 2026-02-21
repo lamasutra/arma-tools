@@ -1,0 +1,40 @@
+.TH wrp_info 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_info \- parse OFP/Resistance WRP files and export metadata
+.SH SYNOPSIS
+.B wrp_info
+.RI [ flags ]
+.I input.wrp
+.RI [ output_dir ]
+.SH DESCRIPTION
+.B wrp_info
+extracts world/object metadata and writes JSON, JSONL, text, and road outputs.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print JSON output.
+.TP
+.B
+--json
+Write world JSON to stdout instead of files.
+.TP
+.B
+--strict
+Fail on unexpected input data.
+.TP
+.B
+--no-objects
+Skip object extraction.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_dump (1),
+.BR wrp2project (1)

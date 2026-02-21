@@ -1,0 +1,30 @@
+.TH wrp_satmask 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+wrp_satmask \- generate an RGB surface-mask GeoTIFF from WRP data
+.SH SYNOPSIS
+.B wrp_satmask
+.RI [ flags ]
+.I input.wrp output.tif
+.SH DESCRIPTION
+.B wrp_satmask
+renders per-cell dominant material categories into an RGB GeoTIFF and writes materials metadata JSON.
+.SH OPTIONS
+.TP
+.B
+--pretty
+Pretty-print materials JSON.
+.TP
+.BI "-offset-x " n
+X coordinate offset (default 200000).
+.TP
+.BI "-offset-z " n
+Z coordinate offset (default 0).
+.TP
+.BI "-materials " path
+Output path for
+.BR materials.json .
+.TP
+.BR -h , " --help"
+Show help.
+.SH SEE ALSO
+.BR wrp_heightmap (1)

@@ -1,0 +1,64 @@
+.TH a3db 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+a3db \- build and query an Arma PBO SQLite index
+.SH SYNOPSIS
+.B a3db
+.RI [ flags ]
+.RI [ output.db ]
+.SH DESCRIPTION
+.B a3db
+scans game PBO archives and stores indexed metadata in a SQLite database for fast lookup.
+.SH OPTIONS
+.TP
+.BI "-config " path
+Load game directories from a JSON config file.
+.TP
+.BI "-arma3 " dir
+Set Arma 3 directory.
+.TP
+.BI "-workshop " dir
+Set Steam Workshop directory.
+.TP
+.BI "-ofp " dir
+Set OFP / Arma: Cold War Assault directory.
+.TP
+.BI "-arma1 " dir
+Set Arma: Armed Assault directory.
+.TP
+.BI "-arma2 " dir
+Set Arma 2 directory.
+.TP
+.BI "-db " path
+Set database file path.
+.TP
+.B
+-ondemand
+Skip eager P3D/PAA/audio parsing.
+.TP
+.BI "-find " pattern
+Search indexed files by glob pattern.
+.TP
+.B
+-info
+Show database statistics.
+.TP
+.B
+-update
+Run incremental update for changed PBOs.
+.TP
+.B
+--pretty
+Pretty-print JSON output for
+.BR -find .
+.TP
+.BR -h , " --help"
+Show help.
+.SH MODES
+Build mode is default. Additional modes are enabled with
+.BR -update ,
+.BR -find ,
+or
+.BR -info .
+.SH SEE ALSO
+.BR pbo_info (1),
+.BR pbo_extract (1)

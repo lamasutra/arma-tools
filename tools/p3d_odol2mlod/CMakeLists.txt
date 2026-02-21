@@ -1,0 +1,5 @@
+add_executable(p3d_odol2mlod main.cpp)
+target_link_libraries(p3d_odol2mlod PRIVATE armatools::lzss armatools::lzo)
+target_compile_features(p3d_odol2mlod PRIVATE cxx_std_20)
+armatools_set_warnings(p3d_odol2mlod)
+install(TARGETS p3d_odol2mlod RUNTIME DESTINATION bin)
