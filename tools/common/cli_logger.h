@@ -4,6 +4,8 @@
 #include <iostream>
 #include <utility>
 
+#include "console_unicode.h"
+
 namespace armatools::cli {
 
 enum class VerbosityLevel : int { Quiet = 0, Verbose = 1, Debug = 2 };
@@ -38,11 +40,22 @@ constexpr const char* level_emoji(VerbosityLevel level) {
     return "🔈";
 }
 
+inline bool supports_utf() {
+    static const bool value = []() {
+        auto caps = consoleu::detect_capabilities();
+        return caps.has_native_unicode_console || caps.utf8_configured;
+    }();
+    return value;
+}
+
 template <typename... Args>
 void log(VerbosityLevel min_level, Args&&... args) {
     if (current_level < min_level) return;
     auto& stream = std::cerr;
-    stream << '[' << level_emoji(min_level) << level_name(min_level) << "] ";
+    if (supports_utf())
+        stream << '[' << level_emoji(min_level) << "] ";
+    else
+        stream << '[' << level_name(min_level) << "] ";
     if constexpr (sizeof...(Args) > 0) {
         ((stream << std::forward<Args>(args) << ' '), ...);
     }
