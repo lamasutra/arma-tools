@@ -26,7 +26,7 @@ private:
     std::shared_ptr<armatools::pboindex::DB> db_;
 
     // Left panel: info
-    Gtk::Box info_box_{Gtk::Orientation::VERTICAL, 8};
+    Gtk::Box info_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Box path_box_{Gtk::Orientation::HORIZONTAL, 4};
     Gtk::Entry path_entry_;
     Gtk::Button browse_button_{"Browse..."};
@@ -67,6 +67,7 @@ private:
     std::uintmax_t current_file_size_ = 0;
 
     // PBO mode UI
+    Gtk::Box switch_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Switch pbo_switch_;
     Gtk::Label pbo_label_{"PBO"};
     Gtk::Button search_button_{"Search"};

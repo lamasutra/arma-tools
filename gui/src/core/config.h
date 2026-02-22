@@ -47,21 +47,26 @@ struct Config {
     std::vector<std::string> recent_wrps;
     std::string last_browse_dir;
     std::string last_active_tab;
-    std::string panel_layout;  // Serialized PanelSession GVariant string
 
     Wrp2ProjectDefaults wrp2project_defaults;
     AssetBrowserDefaults asset_browser_defaults;
     ObjReplaceDefaults obj_replace_defaults;
 };
 
+struct LayoutConfig {
+    std::string panels;  // Serialized PanelSession GVariant string
+};
+
 // Returns the path to the config JSON file.
 std::string config_path();
 
-// Load config from disk. Returns defaults if file doesn't exist.
+// Load configs from disk. Returns defaults if file doesn't exist.
 Config load_config();
+LayoutConfig load_layout_config();
 
-// Save config to disk.
+// Save configs to disk.
 void save_config(const Config& cfg);
+void save_layout_config(const LayoutConfig& cfg);
 
 // Resolve a tool binary path: config override -> next to exe -> $PATH.
 std::string resolve_tool_path(const Config& cfg, const std::string& tool_name);

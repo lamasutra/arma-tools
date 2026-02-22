@@ -80,6 +80,7 @@ private:
     std::shared_ptr<armatools::pboindex::Index> index_;
 
     // PBO mode UI
+    Gtk::Box switch_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Switch pbo_switch_;
     Gtk::Label pbo_label_{"PBO"};
     Gtk::Button search_button_{"Search"};

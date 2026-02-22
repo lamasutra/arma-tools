@@ -1,3 +1,25 @@
+/* Smaller headerbar */
+headerbar {
+  min-height: 16px;
+  padding: 2px 6px;
+}
+
+/* Tighter header buttons */
+headerbar button {
+  min-height: 12px;
+  min-width: 12px;
+  padding: 2px 2px;
+}
+
+/* Title tweaks (you used .title class on the label) */
+headerbar .title {
+  font-size: 0.75em;
+  padding: 0;
+}
+
+/* Optional: square-ish inner corners */
+window, headerbar, decoration, .background { border-radius: 0px; }
+
 /* Log level filter icon toggles */
 .log-filter-toggle {
   min-width: 24px;
@@ -35,7 +57,7 @@
 }
 
 /* Compact switches (PBO mode toggles) */
-switch.compact-switch {
+/* switch.compact-switch {
   min-width: 30px;
   min-height: 18px;
   padding: 1px;
@@ -43,17 +65,18 @@ switch.compact-switch {
 }
 switch.compact-switch > slider,
 switch.compact-switch slider {
-  min-width: 12px !important;
-  min-height: 12px !important;
-  margin: 1px !important;
-  border-radius: 999px !important;
-}
+  min-width: 12px;
+  min-height: 12px;
+  margin: 1px;
+  border-radius: 999px;
+} */
 
 /* Audio split handles */
 paned.audio-split > separator {
   min-height: 6px;
   background-color: alpha(@borders, 0.6);
 }
+
 paned.audio-split > separator:hover {
-  background-color: @accent_color;
+  background-color: @borders;
 }

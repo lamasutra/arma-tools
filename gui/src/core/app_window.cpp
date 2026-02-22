@@ -179,6 +179,7 @@ void AppWindow::update_status(const std::string& text) {
 // ---------------------------------------------------------------------------
 void AppWindow::reload_config() {
     cfg_ = load_config();
+    layout_cfg_ = load_layout_config();
     app_log(LogLevel::Info, "Configuration reloaded from " + config_path());
     if (pbo_index_service_) pbo_index_service_->set_db_path(cfg_.a3db_path);
 
@@ -294,7 +295,7 @@ void AppWindow::save_layout() {
     GVariant* variant = panel_session_to_variant(session);
     if (variant) {
         gchar* variant_str = g_variant_print(variant, TRUE);
-        cfg_.panel_layout = std::string(variant_str);
+        layout_cfg_.panels = std::string(variant_str);
         g_free(variant_str);
         g_variant_unref(variant);
         save_config(cfg_);
@@ -304,14 +305,14 @@ void AppWindow::save_layout() {
 }
 
 void AppWindow::restore_layout() {
-    if (cfg_.panel_layout.empty()) {
+    if (layout_cfg_.panels.empty()) {
         apply_default_layout();
         return;
     }
 
     // Parse the GVariant string
     GError* error = nullptr;
-    GVariant* variant = g_variant_parse(nullptr, cfg_.panel_layout.c_str(),
+    GVariant* variant = g_variant_parse(nullptr, layout_cfg_.panels.c_str(),
                                          nullptr, nullptr, &error);
     if (!variant) {
         app_log(LogLevel::Warning, std::string("Failed to parse saved layout: ") +
@@ -427,8 +428,8 @@ void AppWindow::on_reset_layout() {
     }
 
     // Clear saved layout
-    cfg_.panel_layout.clear();
-    save_config(cfg_);
+    layout_cfg_.panels.clear();
+    save_layout_config(layout_cfg_);
 
     // Re-apply default layout (creates fresh PanelWidgets)
     apply_default_layout();
@@ -469,6 +470,7 @@ void AppWindow::detach_all_panels() {
 
 AppWindow::AppWindow(GtkApplication* app) {
     cfg_ = load_config();
+    layout_cfg_ = load_layout_config();
     pbo_index_service_ = std::make_shared<PboIndexService>();
 
     // Create the workbench — manages multiple workspace windows for tear-off
@@ -501,12 +503,13 @@ AppWindow::AppWindow(GtkApplication* app) {
 
     // Add a View menu button to the header bar
     auto* menu = g_menu_new();
-    auto* dock_section = g_menu_new();
-    g_menu_append(dock_section, "Toggle Start Panel", "win.reveal-start");
-    g_menu_append(dock_section, "Toggle End Panel", "win.reveal-end");
-    g_menu_append(dock_section, "Toggle Top Panel", "win.reveal-top");
-    g_menu_append(dock_section, "Toggle Bottom Panel", "win.reveal-bottom");
-    g_menu_append_section(menu, "Dock Areas", G_MENU_MODEL(dock_section));
+    // disabled areas
+    // auto* dock_section = g_menu_new();
+    // g_menu_append(dock_section, "Toggle Start Panel", "win.reveal-start");
+    // g_menu_append(dock_section, "Toggle End Panel", "win.reveal-end");
+    // g_menu_append(dock_section, "Toggle Top Panel", "win.reveal-top");
+    // g_menu_append(dock_section, "Toggle Bottom Panel", "win.reveal-bottom");
+    // g_menu_append_section(menu, "Dock Areas", G_MENU_MODEL(dock_section));
 
     auto* layout_section = g_menu_new();
     g_menu_append(layout_section, "Reset Layout", "win.reset-layout");
@@ -517,7 +520,7 @@ AppWindow::AppWindow(GtkApplication* app) {
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_button);
     g_object_unref(menu);
-    g_object_unref(dock_section);
+    // g_object_unref(dock_section);
     g_object_unref(layout_section);
 
     // Set up GActions on the window
@@ -601,14 +604,13 @@ AppWindow::AppWindow(GtkApplication* app) {
     init_tabs_lazy();
 
     // Restore layout or apply default
-    if (!cfg_.panel_layout.empty()) {
+    if (!layout_cfg_.panels.empty()) {
         // First create all panels (unparented) so we can look them up by id
         auto create_pw = [this](Gtk::Widget& w, const char* id, const char* title, const char* icon) {
             auto* pw = create_dockable_panel({id, title, icon, &w});
             panels_[id] = pw;
         };
 
-        create_pw(tab_about_,          "about",          "About",          "help-about-symbolic");
         create_pw(tab_asset_browser_,  "asset-browser",  "Asset Browser",  "system-file-manager-symbolic");
         create_pw(tab_pbo_,            "pbo-browser",    "PBO Browser",    "package-x-generic-symbolic");
         create_pw(tab_p3d_info_,       "p3d-info",       "P3D Info",       "emblem-system-symbolic");
@@ -623,7 +625,8 @@ AppWindow::AppWindow(GtkApplication* app) {
         create_pw(tab_wrp_project_,    "wrp-project",    "WRP Project",    "folder-new-symbolic");
         create_pw(tab_config_,         "config",         "Configuration",  "preferences-system-symbolic");
         create_pw(log_panel_,          "log",            "Log",            "utilities-terminal-symbolic");
-
+        // create_pw(tab_about_,          "about",          "About",          "help-about-symbolic");
+        panels_["about"] = create_simple_panel({"about", "About", "help-about-symbolic", &tab_about_});
         restore_layout();
     } else {
         apply_default_layout();

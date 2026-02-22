@@ -26,6 +26,7 @@ private:
     // Left panel: file list
     Gtk::Box left_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Box path_box_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Box switch_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Switch pbo_switch_;
     Gtk::Label pbo_label_{"PBO"};
     Gtk::Entry path_entry_;

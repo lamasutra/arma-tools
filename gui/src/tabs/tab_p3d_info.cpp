@@ -26,8 +26,11 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     // PBO mode switch
     pbo_label_.set_margin_end(2);
     path_box_.append(pbo_label_);
-    pbo_switch_.add_css_class("compact-switch");
-    path_box_.append(pbo_switch_);
+
+    path_box_.append(switch_box_);
+    switch_box_.set_valign(Gtk::Align::CENTER);
+    switch_box_.set_vexpand(false);
+    switch_box_.append(pbo_switch_);
 
     path_entry_.set_hexpand(true);
     path_entry_.set_placeholder_text("P3D file path...");

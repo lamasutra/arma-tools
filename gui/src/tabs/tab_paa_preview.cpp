@@ -17,13 +17,15 @@
 TabPaaPreview::TabPaaPreview() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     // Left panel: path + info
     info_box_.set_margin(8);
-    info_box_.set_size_request(150, -1);
+    info_box_.set_size_request(600, -1);
 
     // PBO mode switch
     pbo_label_.set_margin_end(2);
     path_box_.append(pbo_label_);
-    pbo_switch_.add_css_class("compact-switch");
-    path_box_.append(pbo_switch_);
+    path_box_.append(switch_box_);
+    switch_box_.set_valign(Gtk::Align::CENTER);
+    switch_box_.set_vexpand(false);
+    switch_box_.append(pbo_switch_);
 
     path_entry_.set_hexpand(true);
     path_entry_.set_placeholder_text("PAA/PAC file path...");
@@ -69,7 +71,7 @@ TabPaaPreview::TabPaaPreview() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     info_box_.append(info_label_);
 
     set_start_child(info_box_);
-    set_position(280);
+    set_position(600);
 
     // Right panel: DrawingArea with zoom/pan
     draw_area_.set_hexpand(true);

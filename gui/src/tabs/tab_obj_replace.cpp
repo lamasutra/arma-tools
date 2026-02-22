@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -19,6 +20,17 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+bool is_model_matched(const std::string& new_model) {
+    auto lower = new_model;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower != "unmatched";
+}
+
+bool is_model_multi_match(const std::string& new_model) {
+    return new_model.find(';') != std::string::npos;
+}
 
 struct TextureExtractStats {
     int existing = 0;
@@ -88,25 +100,132 @@ TextureExtractStats extract_textures_to_drive(
 // -- ObjReplEntry --
 
 bool ObjReplEntry::is_matched() const {
-    auto lower = new_model;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lower != "unmatched";
+    return is_model_matched(new_model);
 }
 
 bool ObjReplEntry::is_multi_match() const {
-    return new_model.find(';') != std::string::npos;
+    return is_model_multi_match(new_model);
+}
+
+// -- ObjReplRow --
+
+ObjReplRow::ObjReplRow(uint64_t id, uint32_t display_index,
+                       std::string old_model, std::string new_model, int count)
+    : Glib::ObjectBase("ObjReplRow"),
+      Glib::Object(),
+      id_(id),
+      display_index_(display_index),
+      old_model_(std::move(old_model)),
+      new_model_(std::move(new_model)),
+      count_(count) {}
+
+ObjReplRow::Ptr ObjReplRow::create(uint64_t id, uint32_t display_index,
+                                   std::string old_model, std::string new_model, int count) {
+    return Glib::make_refptr_for_instance<ObjReplRow>(
+        new ObjReplRow(id, display_index, std::move(old_model), std::move(new_model), count));
+}
+
+bool ObjReplRow::is_matched() const {
+    return is_model_matched(new_model_);
+}
+
+bool ObjReplRow::is_multi_match() const {
+    return is_model_multi_match(new_model_);
 }
 
 // -- Helpers --
 
-// Get entry index from a model position (resolves through sort/filter).
-size_t TabObjReplace::entry_index_at(guint position) const {
-    auto item = sort_model_->get_object(position);
-    auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item);
-    if (!str_obj) return entries_.size(); // invalid
-    return static_cast<size_t>(std::stoul(str_obj->get_string()));
+namespace {
+
+using RowPtr = Glib::RefPtr<ObjReplRow>;
+using RowTextGetter = std::function<std::string(const ObjReplRow&)>;
+using RowCompare = std::function<int(const ObjReplRow&, const ObjReplRow&)>;
+
+RowPtr row_from_list_item(const Glib::RefPtr<Gtk::ListItem>& item) {
+    if (!item) return {};
+    return std::dynamic_pointer_cast<ObjReplRow>(item->get_item());
 }
+
+RowPtr row_from_gitem(gconstpointer item) {
+    if (!item) return {};
+    auto obj = Glib::wrap(G_OBJECT(const_cast<gpointer>(item)), true);
+    return std::dynamic_pointer_cast<ObjReplRow>(obj);
+}
+
+Glib::RefPtr<Gtk::ColumnViewColumn> add_text_column(
+    Gtk::ColumnView& view,
+    const std::string& title,
+    const RowTextGetter& getter,
+    const RowCompare& sorter,
+    Gtk::Align align,
+    bool ellipsize,
+    bool expand,
+    int fixed_width,
+    const char* css_class = nullptr) {
+    auto factory = Gtk::SignalListItemFactory::create();
+    factory->signal_setup().connect([align, ellipsize, css_class](
+                                        const Glib::RefPtr<Gtk::ListItem>& item) {
+        auto* label = Gtk::make_managed<Gtk::Label>();
+        label->set_halign(align);
+        if (ellipsize)
+            label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
+        if (css_class)
+            label->add_css_class(css_class);
+        item->set_child(*label);
+    });
+    factory->signal_bind().connect([getter](const Glib::RefPtr<Gtk::ListItem>& item) {
+        auto row = row_from_list_item(item);
+        if (!row) return;
+        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
+        if (label) label->set_text(getter(*row));
+    });
+
+    auto col = Gtk::ColumnViewColumn::create(title, factory);
+    if (fixed_width > 0)
+        col->set_fixed_width(fixed_width);
+    col->set_resizable(true);
+    if (expand)
+        col->set_expand(true);
+
+    if (sorter) {
+        auto cmp_ptr = new RowCompare(sorter);
+        auto* sorter_c = gtk_custom_sorter_new(
+            [](gconstpointer a, gconstpointer b, gpointer user_data) -> int {
+                auto* cmp_cb = static_cast<RowCompare*>(user_data);
+                auto row_a = row_from_gitem(a);
+                auto row_b = row_from_gitem(b);
+                if (!row_a || !row_b) return 0;
+                return (*cmp_cb)(*row_a, *row_b);
+            },
+            cmp_ptr,
+            [](gpointer data) { delete static_cast<RowCompare*>(data); });
+        col->set_sorter(Glib::wrap(GTK_SORTER(sorter_c)));
+    }
+
+    view.append_column(col);
+    return col;
+}
+
+Glib::RefPtr<Gtk::ColumnViewColumn> add_int_column(
+    Gtk::ColumnView& view,
+    const std::string& title,
+    const std::function<int(const ObjReplRow&)>& getter,
+    const RowCompare& sorter,
+    Gtk::Align align,
+    int fixed_width) {
+    return add_text_column(
+        view, title,
+        [getter](const ObjReplRow& row) {
+            auto value = getter(row);
+            return value > 0 ? std::to_string(value) : "";
+        },
+        sorter, align, false, false, fixed_width);
+}
+
+// Helper lambdas moved below for use in constructor
+// auto dialog_navigate_impl = [](const std::string& path) {};
+
+} // namespace
 
 // -- TabObjReplace --
 
@@ -142,18 +261,17 @@ TabObjReplace::TabObjReplace() : Gtk::Box(Gtk::Orientation::VERTICAL) {
     filter_row_.append(save_as_button_);
     toolbar_.append(filter_row_);
 
-    append(toolbar_);
+    // append(toolbar_);
 
     // -- ColumnView setup --
-    table_model_ = Gio::ListStore<Gtk::StringObject>::create();
+    table_model_ = Gio::ListStore<ObjReplRow>::create();
 
     // Filter (using C API — GtkCustomFilter not wrapped in gtkmm 4.10)
     table_filter_c_ = gtk_custom_filter_new(
         [](gpointer item, gpointer user_data) -> gboolean {
             auto* self = static_cast<TabObjReplace*>(user_data);
-            auto* str_obj = GTK_STRING_OBJECT(item);
-            auto idx = static_cast<size_t>(std::stoul(gtk_string_object_get_string(str_obj)));
-            if (idx >= self->entries_.size()) return FALSE;
+            auto row = row_from_gitem(item);
+            if (!row) return FALSE;
 
             auto filter_text = std::string(self->filter_entry_.get_text());
             if (filter_text.empty()) return TRUE;
@@ -161,10 +279,10 @@ TabObjReplace::TabObjReplace() : Gtk::Box(Gtk::Orientation::VERTICAL) {
             std::transform(filter_text.begin(), filter_text.end(), filter_text.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-            auto old_lower = self->entries_[idx].old_model;
+            auto old_lower = row->old_model();
             std::transform(old_lower.begin(), old_lower.end(), old_lower.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            auto new_lower = self->entries_[idx].new_model;
+            auto new_lower = row->new_model();
             std::transform(new_lower.begin(), new_lower.end(), new_lower.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
@@ -176,186 +294,51 @@ TabObjReplace::TabObjReplace() : Gtk::Box(Gtk::Orientation::VERTICAL) {
     filter_model_ = Gtk::FilterListModel::create(
         table_model_, Glib::wrap(GTK_FILTER(table_filter_c_)));
 
-    // Columns: Row index (#)
-    auto factory_idx = Gtk::SignalListItemFactory::create();
-    factory_idx->signal_setup().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto* label = Gtk::make_managed<Gtk::Label>();
-        label->set_halign(Gtk::Align::END);
-        label->add_css_class("dim-label");
-        item->set_child(*label);
-    });
-    factory_idx->signal_bind().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item->get_item());
-        if (!str_obj) return;
-        auto idx = std::stoul(str_obj->get_string());
-        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
-        if (label) label->set_text(std::to_string(idx + 1));
-    });
-
-    auto* sorter_idx_c = gtk_custom_sorter_new(
-        [](gconstpointer a, gconstpointer b, gpointer) -> int {
-            auto ia = std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(a))));
-            auto ib = std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(b))));
-            return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+    add_text_column(
+        table_view_, "#",
+        [](const ObjReplRow& row) { return std::to_string(row.display_index()); },
+        [](const ObjReplRow& a, const ObjReplRow& b) {
+            return (a.display_index() < b.display_index())
+                       ? -1
+                       : (a.display_index() > b.display_index()) ? 1 : 0;
         },
-        nullptr, nullptr);
+        Gtk::Align::END, false, false, 60, "dim-label");
 
-    auto col_idx = Gtk::ColumnViewColumn::create("#", factory_idx);
-    col_idx->set_fixed_width(60);
-    col_idx->set_resizable(true);
-    col_idx->set_sorter(Glib::wrap(GTK_SORTER(sorter_idx_c)));
-    table_view_.append_column(col_idx);
-
-    // Columns: Status
-    auto factory_st = Gtk::SignalListItemFactory::create();
-    factory_st->signal_setup().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto* label = Gtk::make_managed<Gtk::Label>();
-        label->set_halign(Gtk::Align::CENTER);
-        item->set_child(*label);
-    });
-    factory_st->signal_bind().connect([this](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item->get_item());
-        if (!str_obj) return;
-        auto idx = static_cast<size_t>(std::stoul(str_obj->get_string()));
-        if (idx >= entries_.size()) return;
-        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
-        if (label) {
-            if (entries_[idx].is_multi_match())
-                label->set_text("?");
-            else if (entries_[idx].is_matched())
-                label->set_text("+");
-            else
-                label->set_text("-");
-        }
-    });
-
-    auto* sorter_st_c = gtk_custom_sorter_new(
-        [](gconstpointer a, gconstpointer b, gpointer user_data) -> int {
-            auto* self = static_cast<TabObjReplace*>(user_data);
-            auto ia = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(a)))));
-            auto ib = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(b)))));
-            if (ia >= self->entries_.size() || ib >= self->entries_.size()) return 0;
-            return static_cast<int>(self->entries_[ia].is_matched()) -
-                   static_cast<int>(self->entries_[ib].is_matched());
+    add_text_column(
+        table_view_, "St",
+        [](const ObjReplRow& row) {
+            if (row.is_multi_match()) return std::string("?");
+            if (row.is_matched()) return std::string("+");
+            return std::string("-");
         },
-        this, nullptr);
-
-    auto col_st = Gtk::ColumnViewColumn::create("St", factory_st);
-    col_st->set_fixed_width(50);
-    col_st->set_resizable(true);
-    col_st->set_sorter(Glib::wrap(GTK_SORTER(sorter_st_c)));
-    table_view_.append_column(col_st);
-
-    // Columns: Old Model
-    auto factory_old = Gtk::SignalListItemFactory::create();
-    factory_old->signal_setup().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto* label = Gtk::make_managed<Gtk::Label>();
-        label->set_halign(Gtk::Align::START);
-        label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
-        item->set_child(*label);
-    });
-    factory_old->signal_bind().connect([this](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item->get_item());
-        if (!str_obj) return;
-        auto idx = static_cast<size_t>(std::stoul(str_obj->get_string()));
-        if (idx >= entries_.size()) return;
-        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
-        if (label) label->set_text(entries_[idx].old_model);
-    });
-
-    auto* sorter_old_c = gtk_custom_sorter_new(
-        [](gconstpointer a, gconstpointer b, gpointer user_data) -> int {
-            auto* self = static_cast<TabObjReplace*>(user_data);
-            auto ia = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(a)))));
-            auto ib = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(b)))));
-            if (ia >= self->entries_.size() || ib >= self->entries_.size()) return 0;
-            return self->entries_[ia].old_model.compare(self->entries_[ib].old_model);
+        [](const ObjReplRow& a, const ObjReplRow& b) {
+            return static_cast<int>(a.is_matched()) - static_cast<int>(b.is_matched());
         },
-        this, nullptr);
+        Gtk::Align::CENTER, false, false, 50);
 
-    auto col_old = Gtk::ColumnViewColumn::create("Old Model", factory_old);
-    col_old->set_expand(true);
-    col_old->set_resizable(true);
-    col_old->set_sorter(Glib::wrap(GTK_SORTER(sorter_old_c)));
-    table_view_.append_column(col_old);
-
-    // Columns: New Model
-    auto factory_new = Gtk::SignalListItemFactory::create();
-    factory_new->signal_setup().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto* label = Gtk::make_managed<Gtk::Label>();
-        label->set_halign(Gtk::Align::START);
-        label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
-        item->set_child(*label);
-    });
-    factory_new->signal_bind().connect([this](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item->get_item());
-        if (!str_obj) return;
-        auto idx = static_cast<size_t>(std::stoul(str_obj->get_string()));
-        if (idx >= entries_.size()) return;
-        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
-        if (label) label->set_text(entries_[idx].new_model);
-    });
-
-    auto* sorter_new_c = gtk_custom_sorter_new(
-        [](gconstpointer a, gconstpointer b, gpointer user_data) -> int {
-            auto* self = static_cast<TabObjReplace*>(user_data);
-            auto ia = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(a)))));
-            auto ib = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(b)))));
-            if (ia >= self->entries_.size() || ib >= self->entries_.size()) return 0;
-            return self->entries_[ia].new_model.compare(self->entries_[ib].new_model);
+    add_text_column(
+        table_view_, "Old Model",
+        [](const ObjReplRow& row) { return row.old_model(); },
+        [](const ObjReplRow& a, const ObjReplRow& b) {
+            return a.old_model().compare(b.old_model());
         },
-        this, nullptr);
+        Gtk::Align::START, true, true, 0);
 
-    auto col_new = Gtk::ColumnViewColumn::create("New Model", factory_new);
-    col_new->set_expand(true);
-    col_new->set_resizable(true);
-    col_new->set_sorter(Glib::wrap(GTK_SORTER(sorter_new_c)));
-    table_view_.append_column(col_new);
-
-    // Columns: Count
-    auto factory_cnt = Gtk::SignalListItemFactory::create();
-    factory_cnt->signal_setup().connect([](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto* label = Gtk::make_managed<Gtk::Label>();
-        label->set_halign(Gtk::Align::END);
-        item->set_child(*label);
-    });
-    factory_cnt->signal_bind().connect([this](const Glib::RefPtr<Gtk::ListItem>& item) {
-        auto str_obj = std::dynamic_pointer_cast<Gtk::StringObject>(item->get_item());
-        if (!str_obj) return;
-        auto idx = static_cast<size_t>(std::stoul(str_obj->get_string()));
-        if (idx >= entries_.size()) return;
-        auto* label = dynamic_cast<Gtk::Label*>(item->get_child());
-        if (label) {
-            auto c = entries_[idx].count;
-            label->set_text(c > 0 ? std::to_string(c) : "");
-        }
-    });
-
-    auto* sorter_cnt_c = gtk_custom_sorter_new(
-        [](gconstpointer a, gconstpointer b, gpointer user_data) -> int {
-            auto* self = static_cast<TabObjReplace*>(user_data);
-            auto ia = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(a)))));
-            auto ib = static_cast<size_t>(std::stoul(gtk_string_object_get_string(
-                GTK_STRING_OBJECT(const_cast<gpointer>(b)))));
-            if (ia >= self->entries_.size() || ib >= self->entries_.size()) return 0;
-            return self->entries_[ia].count - self->entries_[ib].count;
+    add_text_column(
+        table_view_, "New Model",
+        [](const ObjReplRow& row) { return row.new_model(); },
+        [](const ObjReplRow& a, const ObjReplRow& b) {
+            return a.new_model().compare(b.new_model());
         },
-        this, nullptr);
+        Gtk::Align::START, true, true, 0);
 
-    auto col_cnt = Gtk::ColumnViewColumn::create("Count", factory_cnt);
-    col_cnt->set_fixed_width(80);
-    col_cnt->set_resizable(true);
-    col_cnt->set_sorter(Glib::wrap(GTK_SORTER(sorter_cnt_c)));
-    table_view_.append_column(col_cnt);
+    add_int_column(
+        table_view_, "Count",
+        [](const ObjReplRow& row) { return row.count(); },
+        [](const ObjReplRow& a, const ObjReplRow& b) {
+            return a.count() - b.count();
+        },
+        Gtk::Align::END, 80);
 
     // Sort + selection model
     sort_model_ = Gtk::SortListModel::create(filter_model_, table_view_.get_sorter());
@@ -372,7 +355,15 @@ TabObjReplace::TabObjReplace() : Gtk::Box(Gtk::Orientation::VERTICAL) {
     table_scroll_.set_propagate_natural_width(false);
     table_box_.append(table_scroll_);
 
-    main_paned_.set_start_child(table_box_);
+    toolbar_and_table_paned_.set_start_child(toolbar_);
+    toolbar_and_table_paned_.set_resize_start_child(true);
+    toolbar_and_table_paned_.set_shrink_start_child(false);
+    toolbar_and_table_paned_.set_end_child(table_box_);
+    toolbar_and_table_paned_.set_resize_end_child(false);
+    toolbar_and_table_paned_.set_shrink_end_child(false);
+    toolbar_.set_size_request(400, 200);
+    table_box_.set_size_request(800, 200);
+    main_paned_.set_start_child(toolbar_and_table_paned_);
     main_paned_.set_resize_start_child(true);
     main_paned_.set_shrink_start_child(false);
 
@@ -505,6 +496,31 @@ void TabObjReplace::set_config(Config* cfg) {
                     + std::to_string(snap.prefix_count) + " prefixes)");
         }
     });
+}
+
+ObjReplEntry* TabObjReplace::entry_from_id(uint64_t id) {
+    auto it = entry_index_by_id_.find(id);
+    if (it == entry_index_by_id_.end()) return nullptr;
+    if (it->second >= entries_.size()) return nullptr;
+    return &entries_[it->second];
+}
+
+const ObjReplEntry* TabObjReplace::entry_from_id(uint64_t id) const {
+    auto it = entry_index_by_id_.find(id);
+    if (it == entry_index_by_id_.end()) return nullptr;
+    if (it->second >= entries_.size()) return nullptr;
+    return &entries_[it->second];
+}
+
+uint64_t TabObjReplace::next_entry_id() {
+    return next_entry_id_++;
+}
+
+void TabObjReplace::rebuild_entry_index() {
+    entry_index_by_id_.clear();
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        entry_index_by_id_[entries_[i].id] = i;
+    }
 }
 
 // -- Unsaved changes confirmation --
@@ -663,6 +679,8 @@ void TabObjReplace::load_replacement_file(const std::string& path) {
     }
 
     entries_.clear();
+    entry_index_by_id_.clear();
+    next_entry_id_ = 1;
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty()) continue;
@@ -672,6 +690,7 @@ void TabObjReplace::load_replacement_file(const std::string& path) {
         if (tab == std::string::npos) continue;
 
         ObjReplEntry entry;
+        entry.id = next_entry_id();
         entry.old_model = line.substr(0, tab);
         entry.new_model = line.substr(tab + 1);
 
@@ -821,6 +840,7 @@ void TabObjReplace::load_wrp_file(const std::string& path) {
                     updated++;
                 } else {
                     ObjReplEntry entry;
+                    entry.id = next_entry_id();
                     entry.old_model = model;
                     entry.new_model = "unmatched";
                     entry.count = count;
@@ -937,7 +957,7 @@ void TabObjReplace::on_auto_match() {
 
     // Collect strictly unmatched entries (skip matched and multi-match)
     struct AutoMatchWork {
-        size_t idx;
+        uint64_t id;
         std::string old_path; // normalized old model path
         std::string filename; // just the filename for searching
     };
@@ -947,7 +967,7 @@ void TabObjReplace::on_auto_match() {
         auto normalized = armatools::armapath::to_slash_lower(entries_[i].old_model);
         auto filename = fs::path(normalized).filename().string();
         if (!filename.empty())
-            work.push_back({i, std::move(normalized), std::move(filename)});
+            work.push_back({entries_[i].id, std::move(normalized), std::move(filename)});
     }
 
     if (work.empty()) {
@@ -967,7 +987,7 @@ void TabObjReplace::on_auto_match() {
         // Run all DB queries on the worker thread.
         // Each match is: entry_index -> semicolon-joined candidate paths.
         // Single match: stored directly. Multiple matches: joined with ";".
-        std::vector<std::pair<size_t, std::string>> matches;
+        std::vector<std::pair<uint64_t, std::string>> matches;
         int single_count = 0, multi_count = 0;
         auto last_update = std::chrono::steady_clock::now();
 
@@ -1029,14 +1049,15 @@ void TabObjReplace::on_auto_match() {
             if (candidates.size() == 1) single_count++;
             else multi_count++;
 
-            matches.emplace_back(w.idx, std::move(joined));
+            matches.emplace_back(w.id, std::move(joined));
         }
 
         Glib::signal_idle().connect_once(
             [this, matches = std::move(matches), single_count, multi_count]() {
-                for (const auto& [idx, new_model] : matches) {
-                    if (idx < entries_.size() && !entries_[idx].is_matched()) {
-                        entries_[idx].new_model = new_model;
+                for (const auto& [id, new_model] : matches) {
+                    auto* entry = entry_from_id(id);
+                    if (entry && !entry->is_matched()) {
+                        entry->new_model = new_model;
                     }
                 }
 
@@ -1064,8 +1085,15 @@ void TabObjReplace::on_auto_match() {
 
 void TabObjReplace::rebuild_model() {
     table_model_->remove_all();
+    rebuild_entry_index();
     for (size_t i = 0; i < entries_.size(); ++i) {
-        table_model_->append(Gtk::StringObject::create(std::to_string(i)));
+        const auto& entry = entries_[i];
+        table_model_->append(ObjReplRow::create(
+            entry.id,
+            static_cast<uint32_t>(i + 1),
+            entry.old_model,
+            entry.new_model,
+            entry.count));
     }
 }
 
@@ -1102,18 +1130,17 @@ void TabObjReplace::on_selection_changed() {
     auto pos = table_selection_->get_selected();
     if (pos == GTK_INVALID_LIST_POSITION) return;
 
-    auto idx = entry_index_at(pos);
-    if (idx >= entries_.size()) return;
-
-    const auto& e = entries_[idx];
-    show_preview(e.old_model, e.new_model);
+    auto item = sort_model_->get_object(pos);
+    auto row = std::dynamic_pointer_cast<ObjReplRow>(item);
+    if (!row) return;
+    show_preview(row->old_model(), row->new_model());
 }
 
 void TabObjReplace::on_table_activate(guint position) {
-    auto idx = entry_index_at(position);
-    if (idx < entries_.size()) {
-        show_edit_dialog(idx);
-    }
+    auto item = sort_model_->get_object(position);
+    auto row = std::dynamic_pointer_cast<ObjReplRow>(item);
+    if (!row) return;
+    show_edit_dialog(row->id());
 }
 
 // -- Preview --
@@ -1122,7 +1149,7 @@ void TabObjReplace::show_preview(const std::string& old_model,
                                   const std::string& new_model) {
     load_p3d_into_panel(left_model_panel_, left_label_, old_model);
 
-    if (new_model.empty() || !ObjReplEntry{old_model, new_model}.is_matched()) {
+    if (new_model.empty() || !is_model_matched(new_model)) {
         right_model_panel_.clear();
         right_label_.set_text("(unmatched)");
     } else {
@@ -1332,9 +1359,10 @@ void TabObjReplace::sync_camera_right_to_left() {
 
 // -- Edit dialog (comprehensive browser with 3D preview) --
 
-void TabObjReplace::show_edit_dialog(size_t entry_index) {
-    if (entry_index >= entries_.size()) return;
-    const auto& entry = entries_[entry_index];
+void TabObjReplace::show_edit_dialog(uint64_t row_id) {
+    const auto* entry = entry_from_id(row_id);
+    if (!entry) return;
+    const auto entry_snapshot = *entry;
 
     auto* parent_window = dynamic_cast<Gtk::Window*>(get_root());
     if (!parent_window) return;
@@ -1356,7 +1384,7 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
     auto state = std::make_shared<DialogState>();
 
     auto* dialog = new Gtk::Window();
-    dialog->set_title("Edit Replacement: " + entry.old_model);
+    dialog->set_title("Edit Replacement: " + entry_snapshot.old_model);
     dialog->set_transient_for(*parent_window);
     dialog->set_modal(true);
     dialog->set_default_size(1200, 800);
@@ -1385,7 +1413,7 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
     old_panel->set_hexpand(true);
     left_box->append(*old_panel);
 
-    auto* old_path_label = Gtk::make_managed<Gtk::Label>(entry.old_model);
+    auto* old_path_label = Gtk::make_managed<Gtk::Label>(entry_snapshot.old_model);
     old_path_label->set_halign(Gtk::Align::START);
     old_path_label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
     old_path_label->set_selectable(true);
@@ -1483,7 +1511,7 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
     new_preview_box->append(*new_panel);
 
     auto* new_path_label = Gtk::make_managed<Gtk::Label>(
-        entry.is_matched() ? entry.new_model : "(unmatched)");
+        entry_snapshot.is_matched() ? entry_snapshot.new_model : "(unmatched)");
     new_path_label->set_halign(Gtk::Align::START);
     new_path_label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
     new_path_label->set_selectable(true);
@@ -1886,9 +1914,10 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
     cancel_btn->signal_clicked().connect(close_dialog);
 
     unmatched_btn->signal_clicked().connect(
-        [this, entry_index, close_dialog]() {
-            if (entry_index < entries_.size()) {
-                entries_[entry_index].new_model = "unmatched";
+        [this, row_id, close_dialog]() {
+            auto* target_entry = entry_from_id(row_id);
+            if (target_entry) {
+                target_entry->new_model = "unmatched";
                 dirty_ = true;
                 refresh_all();
                 // Also update the main preview
@@ -1898,9 +1927,10 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
         });
 
     apply_btn->signal_clicked().connect(
-        [this, entry_index, state, close_dialog]() {
-            if (entry_index < entries_.size() && !state->selected_p3d_path.empty()) {
-                entries_[entry_index].new_model = state->selected_p3d_path;
+        [this, row_id, state, close_dialog]() {
+            auto* target_entry = entry_from_id(row_id);
+            if (target_entry && !state->selected_p3d_path.empty()) {
+                target_entry->new_model = state->selected_p3d_path;
                 dirty_ = true;
                 refresh_all();
                 on_selection_changed();
@@ -1986,13 +2016,13 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
     };
 
     // Load old model preview (async)
-    async_load_panel(old_panel, old_path_label, entry.old_model);
+    async_load_panel(old_panel, old_path_label, entry_snapshot.old_model);
 
-    if (entry.is_multi_match()) {
+    if (entry_snapshot.is_multi_match()) {
         // Multi-match: parse candidates from ";"-separated new_model
         std::vector<std::string> candidates;
         {
-            std::istringstream ss(entry.new_model);
+            std::istringstream ss(entry_snapshot.new_model);
             std::string token;
             while (std::getline(ss, token, ';')) {
                 if (!token.empty())
@@ -2083,14 +2113,14 @@ void TabObjReplace::show_edit_dialog(size_t entry_index) {
             match_combo->set_active_id("0");
             apply_btn->set_sensitive(true);
         }
-    } else if (entry.is_matched()) {
+    } else if (entry_snapshot.is_matched()) {
         // Single match: load preview and navigate to directory
-        auto normalized = armatools::armapath::to_slash_lower(entry.new_model);
+        auto normalized = armatools::armapath::to_slash_lower(entry_snapshot.new_model);
         state->selected_p3d_path = normalized;
         apply_btn->set_sensitive(true);
 
         // Load new model preview (async)
-        async_load_panel(new_panel, new_path_label, entry.new_model);
+        async_load_panel(new_panel, new_path_label, entry_snapshot.new_model);
 
         // Navigate browser to the directory of the current new_model
         auto slash_pos = normalized.rfind('/');

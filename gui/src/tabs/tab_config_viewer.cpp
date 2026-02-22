@@ -14,16 +14,17 @@
 namespace fs = std::filesystem;
 
 TabConfigViewer::TabConfigViewer() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
-    set_margin(8);
-
     // ---- Left panel ----
-    left_box_.set_margin(4);
+    left_box_.set_margin(8);
 
     // PBO mode switch
     pbo_label_.set_margin_end(2);
     path_box_.append(pbo_label_);
     pbo_switch_.add_css_class("compact-switch");
-    path_box_.append(pbo_switch_);
+    path_box_.append(switch_box_);
+    switch_box_.set_valign(Gtk::Align::CENTER);
+    switch_box_.set_vexpand(false);
+    switch_box_.append(pbo_switch_);
 
     // Path row
     path_entry_.set_hexpand(true);

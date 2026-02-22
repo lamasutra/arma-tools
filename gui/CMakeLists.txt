@@ -23,7 +23,7 @@ add_custom_command(
         --sourcedir=${CMAKE_CURRENT_SOURCE_DIR}/resources
     DEPENDS
         ${GUI_GRESOURCE_XML}
-        ${CMAKE_CURRENT_SOURCE_DIR}/resources/com/bigbangit/ArmaTools/css/style.css
+        ${CMAKE_CURRENT_SOURCE_DIR}/resources/css/style.css
     VERBATIM
 )
 
@@ -50,6 +50,8 @@ target_include_directories(arma-tools PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/services
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tabs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/tools/common
+    ${CMAKE_SOURCE_DIR}/libs/console_unicode
 )
 
 # Suppress warnings in miniaudio (third-party header-only lib)
@@ -75,6 +77,7 @@ target_link_libraries(arma-tools PRIVATE
     miniaudio
     PkgConfig::VORBISFILE
     armatools_version
+    consoleu
 )
 
 if(WRP2PROJECT_WITH_TV4L)

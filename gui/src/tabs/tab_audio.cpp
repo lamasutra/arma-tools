@@ -22,8 +22,10 @@ TabAudio::TabAudio() : Gtk::Box(Gtk::Orientation::VERTICAL, 4) {
     // --- Path row ---
     pbo_label_.set_margin_end(2);
     path_box_.append(pbo_label_);
-    pbo_switch_.add_css_class("compact-switch");
-    path_box_.append(pbo_switch_);
+    path_box_.append(switch_box_);
+    switch_box_.set_valign(Gtk::Align::CENTER);
+    switch_box_.set_vexpand(false);
+    switch_box_.append(pbo_switch_);
     path_entry_.set_hexpand(true);
     path_entry_.set_placeholder_text("Audio file (.ogg, .wss, .wav)...");
     path_box_.append(path_entry_);

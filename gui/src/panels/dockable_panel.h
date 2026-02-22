@@ -30,3 +30,18 @@ inline PanelWidget* create_dockable_panel(const DockablePanelInfo& info) {
 
     return pw;
 }
+
+inline PanelWidget* create_simple_panel(const DockablePanelInfo& info) {
+    auto* pw = PANEL_WIDGET(panel_widget_new());
+    panel_widget_set_id(pw, info.id);
+    panel_widget_set_title(pw, info.title);
+    panel_widget_set_icon_name(pw, info.icon_name);
+    panel_widget_set_reorderable(pw, FALSE);
+    panel_widget_set_can_maximize(pw, FALSE);
+    panel_widget_set_kind(pw, PANEL_WIDGET_KIND_UTILITY);
+
+    // Bridge gtkmm widget to C GtkWidget* for libpanel
+    panel_widget_set_child(pw, GTK_WIDGET(info.content->gobj()));
+
+    return pw;
+}

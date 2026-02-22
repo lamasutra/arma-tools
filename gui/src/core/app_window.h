@@ -47,6 +47,7 @@ public:
 
 private:
     Config cfg_;
+    LayoutConfig layout_cfg_;
     std::shared_ptr<PboIndexService> pbo_index_service_;
 
     // The libpanel workbench manages multiple workspace windows (tear-off)

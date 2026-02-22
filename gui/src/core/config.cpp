@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -68,6 +69,20 @@ std::string config_path() {
     if (home) {
         auto dir = fs::path(home) / ".config" / "arma-tools";
         return (dir / "config.json").string();
+    }
+    return beside.string();
+}
+
+std::string layout_config_path() {
+    // Try next to executable first
+    auto beside = exe_dir() / "layout_config.json";
+    if (fs::exists(beside)) return beside.string();
+
+    // Fallback to ~/.config/arma-tools/layout_config.json
+    const char* home = std::getenv("HOME");
+    if (home) {
+        auto dir = fs::path(home) / ".config" / "arma-tools";
+        return (dir / "layout_config.json").string();
     }
     return beside.string();
 }
@@ -153,14 +168,40 @@ Config load_config() {
         if (j.contains("recent_wrps")) j.at("recent_wrps").get_to(cfg.recent_wrps);
         if (j.contains("last_browse_dir")) j.at("last_browse_dir").get_to(cfg.last_browse_dir);
         if (j.contains("last_active_tab")) j.at("last_active_tab").get_to(cfg.last_active_tab);
-        if (j.contains("panel_layout")) j.at("panel_layout").get_to(cfg.panel_layout);
         if (j.contains("wrp2project_defaults")) j.at("wrp2project_defaults").get_to(cfg.wrp2project_defaults);
         if (j.contains("asset_browser_defaults")) j.at("asset_browser_defaults").get_to(cfg.asset_browser_defaults);
         if (j.contains("obj_replace_defaults")) j.at("obj_replace_defaults").get_to(cfg.obj_replace_defaults);
     } catch (const json::exception& e) {
-        std::cerr << "Config parse error: " << e.what() << "\n";
+        armatools::cli::log_error("Config parse error: " + std::string(e.what()));
     }
     return cfg;
+}
+
+LayoutConfig load_layout_config() {
+    LayoutConfig cfg;
+    auto path = config_path();
+    std::ifstream f(path);
+    if (!f.is_open()) return cfg;
+
+    try {
+        json j = json::parse(f);
+        if (j.contains("panels")) j.at("panels").get_to(cfg.panels);
+    } catch (const json::exception& e) {
+        armatools::cli::log_error("Layout config parse error: " + std::string(e.what()));
+    }
+    return cfg;
+}
+
+void save_layout_config(const LayoutConfig& cfg) {
+    json j;
+    j["panels"] = cfg.panels;
+
+    auto path = config_path();
+    fs::create_directories(fs::path(path).parent_path());
+    std::ofstream f(path);
+    if (f.is_open()) {
+        f << j.dump(2) << "\n";
+    }
 }
 
 void save_config(const Config& cfg) {
@@ -180,7 +221,6 @@ void save_config(const Config& cfg) {
     j["recent_wrps"] = cfg.recent_wrps;
     j["last_browse_dir"] = cfg.last_browse_dir;
     j["last_active_tab"] = cfg.last_active_tab;
-    j["panel_layout"] = cfg.panel_layout;
     j["wrp2project_defaults"] = cfg.wrp2project_defaults;
     j["asset_browser_defaults"] = cfg.asset_browser_defaults;
     j["obj_replace_defaults"] = cfg.obj_replace_defaults;

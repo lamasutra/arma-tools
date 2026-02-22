@@ -7,26 +7,62 @@
 #include <gtkmm.h>
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace armatools::pboindex {
-class Index;
-class DB;
+  class Index;
+  class DB;
 }
 
 struct ObjReplEntry {
+    uint64_t id = 0;
     std::string old_model;
     std::string new_model;  // "unmatched" if not mapped; "a;b;c" for multi-match
     int count = 0;          // instance count from WRP (0 if no WRP loaded)
 
     bool is_matched() const;
     bool is_multi_match() const; // true if new_model contains ";"
+};
+
+class ObjReplRow : public Glib::Object {
+public:
+    using Ptr = Glib::RefPtr<ObjReplRow>;
+
+    static Ptr create(uint64_t id, uint32_t display_index,
+                      std::string old_model, std::string new_model, int count);
+
+    uint64_t id() const { return id_; }
+    uint32_t display_index() const { return display_index_; }
+    const std::string& old_model() const { return old_model_; }
+    const std::string& new_model() const { return new_model_; }
+    int count() const { return count_; }
+
+    void set_old_model(std::string value) { old_model_ = std::move(value); }
+    void set_new_model(std::string value) { new_model_ = std::move(value); }
+    void set_count(int value) { count_ = value; }
+    void set_display_index(uint32_t value) { display_index_ = value; }
+
+    bool is_matched() const;
+    bool is_multi_match() const;
+
+protected:
+    ObjReplRow(uint64_t id, uint32_t display_index,
+               std::string old_model, std::string new_model, int count);
+
+private:
+    uint64_t id_ = 0;
+    uint32_t display_index_ = 0;
+    std::string old_model_;
+    std::string new_model_;
+    int count_ = 0;
 };
 
 class TabObjReplace : public Gtk::Box {
@@ -70,12 +106,13 @@ private:
 
     // Main content: table + preview
     Gtk::Paned main_paned_{Gtk::Orientation::VERTICAL};
+    Gtk::Paned toolbar_and_table_paned_{Gtk::Orientation::HORIZONTAL};
 
     // Table (ColumnView)
     Gtk::Box table_box_{Gtk::Orientation::VERTICAL};
     Gtk::ScrolledWindow table_scroll_;
     Gtk::ColumnView table_view_;
-    Glib::RefPtr<Gio::ListStore<Gtk::StringObject>> table_model_;
+    Glib::RefPtr<Gio::ListStore<ObjReplRow>> table_model_;
     GtkCustomFilter* table_filter_c_ = nullptr;  // C API (no gtkmm wrapper in 4.10)
     Glib::RefPtr<Gtk::FilterListModel> filter_model_;
     Glib::RefPtr<Gtk::SortListModel> sort_model_;
@@ -104,6 +141,8 @@ private:
 
     // Data
     std::vector<ObjReplEntry> entries_;
+    std::unordered_map<uint64_t, size_t> entry_index_by_id_;
+    uint64_t next_entry_id_ = 1;
     bool dirty_ = false;
     std::string current_file_;
 
@@ -155,8 +194,11 @@ private:
                                    std::string drive_root);
 
     // Edit dialog
-    void show_edit_dialog(size_t entry_index);
+    void show_edit_dialog(uint64_t row_id);
 
     // Helpers
-    size_t entry_index_at(guint position) const;
+    ObjReplEntry* entry_from_id(uint64_t id);
+    const ObjReplEntry* entry_from_id(uint64_t id) const;
+    uint64_t next_entry_id();
+    void rebuild_entry_index();
 };

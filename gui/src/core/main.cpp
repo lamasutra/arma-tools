@@ -14,6 +14,9 @@
 #endif
 
 #include <memory>
+#include "cli_logger.h"
+
+extern "C" GResource* arma_tools_get_resource(void);
 
 #ifdef _WIN32
 namespace {
@@ -58,30 +61,21 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     setup_gtk_runtime_env();
     setup_stderr_log();
+#else
+    gtk_init();
 #endif
     Glib::add_exception_handler([]() {
         try {
             throw;
         } catch (const std::exception& e) {
-            std::cerr << "[gui] Unhandled exception in GTK callback: "
-                      << e.what() << '\n';
+            armatools::cli::log_error("[gui] Unhandled exception in GTK callback: " + std::string(e.what()));
         } catch (...) {
-            std::cerr << "[gui] Unhandled non-std exception in GTK callback\n";
+            armatools::cli::log_error("[gui] Unhandled non-std exception in GTK callback");
         }
     });
 
     adw_init();
     panel_init();
-
-    // Global app stylesheet from GResource.
-    try {
-        auto css = Gtk::CssProvider::create();
-        css->load_from_resource("/com/bigbangit/ArmaTools/css/style.css");
-        Gtk::StyleContext::add_provider_for_display(
-            Gdk::Display::get_default(), css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    } catch (const std::exception& e) {
-        std::cerr << "[gui] Failed to load style resource: " << e.what() << '\n';
-    }
 
     auto app = Gtk::Application::create("com.armatools.gui");
 
@@ -89,7 +83,28 @@ int main(int argc, char* argv[]) {
 
     app->signal_activate().connect([&]() {
         if (!window) {
-            window = std::make_unique<AppWindow>(app->gobj());
+            // Global app stylesheet from GResource.
+            try {
+                g_resources_register(arma_tools_get_resource());
+                auto css = Gtk::CssProvider::create();
+                css->load_from_resource("/com/bigbangit/ArmaTools/css/style.css");
+                auto display = Gdk::Display::get_default();
+                if (display) {
+                    Gtk::StyleContext::add_provider_for_display(
+                        display, css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+                } else {
+                    armatools::cli::log_error("[gui] Warning: No default display found, cannot apply CSS");
+                }
+            } catch (const std::exception& e) {
+                armatools::cli::log_error("[gui] Failed to load style resource: " + std::string(e.what()));
+            }
+            try {
+                armatools::cli::log_debug("[gui] Creating AppWindow...");
+                window = std::make_unique<AppWindow>(app->gobj());
+                armatools::cli::log_debug("[gui] AppWindow created successfully");
+            } catch (const std::exception& e) {
+                armatools::cli::log_error("[gui] Exception in AppWindow: " + std::string(e.what()));
+            }
         }
         window->present();
     });
@@ -97,9 +112,9 @@ int main(int argc, char* argv[]) {
     try {
         return app->run(argc, argv);
     } catch (const std::exception& e) {
-        std::cerr << "[gui] Fatal exception in main loop: " << e.what() << '\n';
+        armatools::cli::log_error("[gui] Fatal exception in main loop: " + std::string(e.what()));
     } catch (...) {
-        std::cerr << "[gui] Fatal non-std exception in main loop\n";
+        armatools::cli::log_error("[gui] Fatal non-std exception in main loop");
     }
     return 1;
 }

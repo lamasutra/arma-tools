@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BUILD_TESTING "Build unit tests" ON)
-option(BUILD_GUI "Build GTK4 GUI application" OFF)
+option(BUILD_GUI "Build GTK4 GUI application" ON)
 
 include(cmake/CompilerWarnings.cmake)
 include(FetchContent)
