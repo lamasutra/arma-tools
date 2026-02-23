@@ -16,6 +16,9 @@
 #include "tab_obj_replace.h"
 #include "tab_wrp_info.h"
 #include "tab_wrp_project.h"
+#include "pbo_index_service.h"
+#include "p3d_model_loader.h"
+#include "lod_textures_loader.h"
 
 #include <libpanel.h>
 #include <gtkmm.h>
@@ -24,7 +27,11 @@
 #include <memory>
 #include <string>
 
-class PboIndexService;
+struct Services {
+    std::shared_ptr<PboIndexService> pbo_index_service;
+    std::shared_ptr<P3dModelLoaderService> p3d_model_loader_service;
+    std::shared_ptr<LodTexturesLoaderService> lod_textures_loader_service;
+};
 
 // AppWindow owns the PanelDocumentWorkspace (a GtkWindow) and all tab widgets.
 // It is NOT a Gtk::Window subclass — the actual window is the workspace.
@@ -48,7 +55,7 @@ public:
 private:
     Config cfg_;
     LayoutConfig layout_cfg_;
-    std::shared_ptr<PboIndexService> pbo_index_service_;
+    Services services_;
 
     // The libpanel workbench manages multiple workspace windows (tear-off)
     PanelWorkbench* workbench_ = nullptr;

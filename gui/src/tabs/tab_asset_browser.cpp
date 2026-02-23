@@ -20,73 +20,6 @@
 
 namespace fs = std::filesystem;
 
-namespace {
-
-struct TextureExtractStats {
-    int existing = 0;
-    int extracted = 0;
-    int missing = 0;
-    int failed = 0;
-};
-
-TextureExtractStats extract_textures_to_drive(
-    armatools::pboindex::DB& db,
-    const std::string& drive_root,
-    const std::set<std::string>& textures) {
-
-    TextureExtractStats stats{};
-    for (const auto& tex : textures) {
-        if (tex.empty() || armatools::armapath::is_procedural_texture(tex)) continue;
-
-        const auto normalized = armatools::armapath::to_os(tex);
-        const auto dest = fs::path(drive_root) / normalized;
-        std::error_code ec;
-        if (fs::exists(dest, ec)) {
-            stats.existing++;
-            continue;
-        }
-
-        const std::string pattern = "*" + normalized.filename().string();
-        std::vector<armatools::pboindex::FindResult> results;
-        try {
-            results = db.find_files(pattern);
-        } catch (...) {
-            stats.missing++;
-            continue;
-        }
-        if (results.empty()) {
-            stats.missing++;
-            continue;
-        }
-
-        auto data = extract_from_pbo(results[0].pbo_path, results[0].file_path);
-        if (data.empty()) {
-            stats.failed++;
-            continue;
-        }
-
-        fs::create_directories(dest.parent_path(), ec);
-        if (ec) {
-            stats.failed++;
-            continue;
-        }
-        std::ofstream out(dest, std::ios::binary);
-        if (!out.is_open()) {
-            stats.failed++;
-            continue;
-        }
-        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-        if (!out.good()) {
-            stats.failed++;
-            continue;
-        }
-        stats.extracted++;
-    }
-    return stats;
-}
-
-} // namespace
-
 // ---------------------------------------------------------------------------
 // Icon selection by file extension
 // ---------------------------------------------------------------------------
@@ -148,8 +81,8 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     list_scroll_.set_child(dir_list_);
     left_box_.append(list_scroll_);
 
-    progress_label_.set_halign(Gtk::Align::START);
-    left_box_.append(progress_label_);
+    status_label_.set_halign(Gtk::Align::START);
+    left_box_.append(status_label_);
 
     set_start_child(left_box_);
     set_position(400);
@@ -266,14 +199,11 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     right_box_.append(audio_panel_);
 
     // Extract row (no Play button — controls are in audio panel now)
-    auto_extract_textures_check_.set_tooltip_text("Extract missing model textures to drive root before preview");
     extract_button_.set_tooltip_text("Extract selected file from PBO to disk");
     extract_drive_button_.set_tooltip_text("Extract file to drive root preserving path structure");
-    extract_box_.append(auto_extract_textures_check_);
     extract_box_.append(extract_button_);
     extract_box_.append(extract_drive_button_);
     right_box_.append(extract_box_);
-    right_box_.append(status_label_);
 
     set_end_child(right_box_);
 
@@ -287,11 +217,6 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     dir_list_.signal_row_activated().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_row_activated));
     extract_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_extract));
     extract_drive_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_extract_to_drive));
-    auto_extract_textures_check_.signal_toggled().connect([this]() {
-        if (!cfg_) return;
-        cfg_->asset_browser_defaults.auto_extract_textures = auto_extract_textures_check_.get_active();
-        save_config(*cfg_);
-    });
 }
 
 TabAssetBrowser::~TabAssetBrowser() {
@@ -299,12 +224,21 @@ TabAssetBrowser::~TabAssetBrowser() {
     audio_stop_all();
     ++nav_generation_; // cancel any pending navigate
     if (nav_thread_.joinable()) nav_thread_.join();
-    if (auto_extract_thread_.joinable()) auto_extract_thread_.join();
 }
 
 void TabAssetBrowser::set_pbo_index_service(const std::shared_ptr<PboIndexService>& service) {
     if (pbo_index_service_) pbo_index_service_->unsubscribe(this);
     pbo_index_service_ = service;
+}
+
+void TabAssetBrowser::set_model_loader_service(
+    const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_panel_.set_model_loader_service(service);
+}
+
+void TabAssetBrowser::set_texture_loader_service(
+    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    model_panel_.set_texture_loader_service(service);
 }
 
 void TabAssetBrowser::set_config(Config* cfg) {
@@ -313,9 +247,6 @@ void TabAssetBrowser::set_config(Config* cfg) {
     index_.reset();
     model_panel_.set_config(cfg_);
     model_panel_.set_pboindex(nullptr, nullptr);
-    if (cfg_) {
-        auto_extract_textures_check_.set_active(cfg_->asset_browser_defaults.auto_extract_textures);
-    }
     if (!pbo_index_service_) return;
     pbo_index_service_->subscribe(this, [this](const PboIndexService::Snapshot& snap) {
         if (!cfg_ || cfg_->a3db_path != snap.db_path) return;
@@ -328,7 +259,6 @@ void TabAssetBrowser::set_config(Config* cfg) {
             model_panel_.set_pboindex(db_.get(), index_.get());
             refresh_source_combo();
             breadcrumb_label_.set_text("/");
-            progress_label_.set_text("");
             status_label_.set_text("Asset DB ready. Use Search or select source to browse.");
             return;
         }
@@ -416,7 +346,7 @@ void TabAssetBrowser::on_build_db() {
     }
     build_button_.set_sensitive(false);
     update_button_.set_sensitive(false);
-    progress_label_.set_text("Building database...");
+    status_label_.set_text("Building database...");
 
     auto db_path = cfg_->a3db_path;
     auto arma3_dir = cfg_->arma3_dir;
@@ -456,7 +386,7 @@ void TabAssetBrowser::on_build_db() {
                         msg += " " + fs::path(p.pbo_path).filename().string();
                     }
                     Glib::signal_idle().connect_once([this, msg]() {
-                        progress_label_.set_text(msg);
+                        status_label_.set_text(msg);
                     });
                 },
                 game_dirs);
@@ -464,7 +394,7 @@ void TabAssetBrowser::on_build_db() {
             Glib::signal_idle().connect_once([this, result]() {
                 auto msg = "Build complete: " + std::to_string(result.pbo_count) + " PBOs, " +
                     std::to_string(result.file_count) + " files";
-                progress_label_.set_text(msg);
+                status_label_.set_text(msg);
                 app_log(LogLevel::Info, msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
@@ -473,7 +403,7 @@ void TabAssetBrowser::on_build_db() {
         } catch (const std::exception& e) {
             auto msg = std::string(e.what());
             Glib::signal_idle().connect_once([this, msg]() {
-                progress_label_.set_text("Build error: " + msg);
+                status_label_.set_text("Build error: " + msg);
                 app_log(LogLevel::Error, "Asset DB build error: " + msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
@@ -502,7 +432,7 @@ void TabAssetBrowser::on_update_db() {
     }
     build_button_.set_sensitive(false);
     update_button_.set_sensitive(false);
-    progress_label_.set_text("Updating database...");
+    status_label_.set_text("Updating database...");
 
     auto db_path = cfg_->a3db_path;
     auto arma3_dir = cfg_->arma3_dir;
@@ -539,7 +469,7 @@ void TabAssetBrowser::on_update_db() {
                     auto msg = p.phase + ": " + std::to_string(p.pbo_index) +
                                "/" + std::to_string(p.pbo_total);
                     Glib::signal_idle().connect_once([this, msg]() {
-                        progress_label_.set_text(msg);
+                        status_label_.set_text(msg);
                     });
                 },
                 game_dirs);
@@ -548,7 +478,7 @@ void TabAssetBrowser::on_update_db() {
                 auto msg = "Update complete: +" + std::to_string(result.added) +
                     " -" + std::to_string(result.removed) +
                     " ~" + std::to_string(result.updated);
-                progress_label_.set_text(msg);
+                status_label_.set_text(msg);
                 app_log(LogLevel::Info, msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
@@ -566,12 +496,12 @@ void TabAssetBrowser::on_update_db() {
                 fs::remove(db_path + "-shm", ec);
                 Glib::signal_idle().connect_once([this, msg]() {
                     app_log(LogLevel::Warning, "Outdated DB schema, rebuilding: " + msg);
-                    progress_label_.set_text("Schema outdated, rebuilding...");
+                    status_label_.set_text("Schema outdated, rebuilding...");
                     on_build_db();
                 });
             } else {
                 Glib::signal_idle().connect_once([this, msg]() {
-                    progress_label_.set_text("Update error: " + msg);
+                    status_label_.set_text("Update error: " + msg);
                     app_log(LogLevel::Error, "Asset DB update error: " + msg);
                     build_button_.set_sensitive(true);
                     update_button_.set_sensitive(true);
@@ -635,7 +565,7 @@ void TabAssetBrowser::on_search() {
     if (pattern.empty()) return;
 
     unsigned gen = ++nav_generation_;
-    progress_label_.set_text("Searching...");
+    status_label_.set_text("Searching...");
     search_button_.set_sensitive(false);
 
     if (nav_thread_.joinable()) nav_thread_.detach();
@@ -653,7 +583,7 @@ void TabAssetBrowser::on_search() {
                         (source.empty() ? "" : " [" + source + "]") +
                         ": " + std::to_string(results.size()) + " results");
                     show_search_results(results);
-                    progress_label_.set_text("");
+                    status_label_.set_text("");
                     search_button_.set_sensitive(true);
                 });
         } catch (const std::exception& e) {
@@ -662,7 +592,6 @@ void TabAssetBrowser::on_search() {
                 if (gen != nav_generation_.load()) return;
                 app_log(LogLevel::Error, "Search error: " + msg);
                 status_label_.set_text("Search error: " + msg);
-                progress_label_.set_text("");
                 search_button_.set_sensitive(true);
             });
         }
@@ -689,7 +618,7 @@ void TabAssetBrowser::navigate(const std::string& path) {
 
     // Source-filtered queries can be slow — run in background thread.
     unsigned gen = ++nav_generation_;
-    progress_label_.set_text("Loading...");
+    status_label_.set_text("Loading...");
 
     // Clear the list immediately so user sees feedback.
     dir_list_.set_visible(false);
@@ -709,7 +638,7 @@ void TabAssetBrowser::navigate(const std::string& path) {
             Glib::signal_idle().connect_once([this, entries = std::move(entries), gen]() {
                 if (gen != nav_generation_.load()) return; // stale
                 populate_list(entries);
-                progress_label_.set_text("");
+                status_label_.set_text("");
             });
         } catch (const std::exception& e) {
             auto msg = std::string(e.what());
@@ -717,7 +646,6 @@ void TabAssetBrowser::navigate(const std::string& path) {
                 if (gen != nav_generation_.load()) return;
                 app_log(LogLevel::Error, "Navigate error: " + msg);
                 status_label_.set_text("Navigate error: " + msg);
-                progress_label_.set_text("");
             });
         }
     });
@@ -844,7 +772,6 @@ void TabAssetBrowser::on_row_activated(Gtk::ListBoxRow* row) {
 }
 
 void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file) {
-    current_preview_file_ = armatools::armapath::to_slash_lower(file.prefix + "/" + file.file_path);
     std::ostringstream info;
     info << "PBO: " << file.pbo_path << "\n"
          << "Prefix: " << file.prefix << "\n"
@@ -887,119 +814,9 @@ static std::vector<uint8_t> extract_from_pbo_file(
 }
 
 void TabAssetBrowser::preview_p3d(const armatools::pboindex::FindResult& file) {
-    try {
-        auto data = extract_from_pbo_file(file);
-        if (data.empty()) {
-            info_view_.get_buffer()->set_text("Could not extract file from PBO.");
-            return;
-        }
-
-        std::string str(data.begin(), data.end());
-        std::istringstream stream(str);
-        auto model = armatools::p3d::read(stream);
-
-        std::ostringstream out;
-        out << "Format: " << model.format << " v" << model.version << "\n"
-            << "LODs: " << model.lods.size() << "\n\n";
-
-        if (model.model_info) {
-            auto& mi = *model.model_info;
-            out << "Bounding sphere: " << mi.bounding_sphere << "\n"
-                << "Mass: " << mi.mass << "\n";
-        }
-
-        auto size_result = armatools::p3d::calculate_size(model);
-        if (size_result.info) {
-            auto& si = *size_result.info;
-            out << "Dimensions: " << std::fixed << std::setprecision(2)
-                << si.dimensions[0] << " x " << si.dimensions[1]
-                << " x " << si.dimensions[2] << " m\n";
-        }
-
-        // Collect textures
-        std::set<std::string> textures;
-        for (const auto& lod : model.lods) {
-            for (const auto& t : lod.textures) textures.insert(t);
-        }
-        if (!textures.empty()) {
-            out << "\nTextures (" << textures.size() << "):\n";
-            for (const auto& t : textures) out << "  " << t << "\n";
-        }
-
-        if (auto_extract_textures_check_.get_active()) {
-            if (!cfg_ || cfg_->drive_root.empty()) {
-                out << "\nAuto-extract: skipped (drive_root not configured)\n";
-                status_label_.set_text("Auto-extract skipped: drive_root not configured.");
-            } else if (!db_) {
-                out << "\nAuto-extract: skipped (A3DB not loaded)\n";
-                status_label_.set_text("Auto-extract skipped: A3DB not loaded.");
-            } else {
-                out << "\nAuto-extract: running in background...\n";
-                status_label_.set_text("Auto-extracting textures...");
-
-                if (!auto_extract_busy_.load()) {
-                    if (auto_extract_thread_.joinable()) auto_extract_thread_.join();
-                    auto_extract_busy_ = true;
-                    const auto drive_root = cfg_->drive_root;
-                    const auto textures_copy = textures;
-                    const auto preview_key = current_preview_file_;
-                    const unsigned gen = ++auto_extract_generation_;
-                    std::shared_ptr<armatools::p3d::LOD> lod0;
-                    if (!model.lods.empty()) {
-                        lod0 = std::make_shared<armatools::p3d::LOD>(model.lods[0]);
-                    }
-
-                    auto* db = db_.get();
-                    auto_extract_thread_ = std::thread([this, db, drive_root, textures_copy,
-                                                        preview_key, gen, lod0]() {
-                        const auto stats = extract_textures_to_drive(*db, drive_root, textures_copy);
-                        Glib::signal_idle().connect_once([this, stats, preview_key, gen, lod0]() {
-                            auto_extract_busy_ = false;
-                            if (gen != auto_extract_generation_.load()) return;
-                            if (current_preview_file_ != preview_key) return;
-
-                            std::ostringstream summary;
-                            summary << "Auto-extract: " << stats.extracted << " extracted, "
-                                    << stats.existing << " existing, "
-                                    << stats.missing << " missing, "
-                                    << stats.failed << " failed.";
-                            status_label_.set_text(summary.str());
-                            auto buffer = info_view_.get_buffer();
-                            buffer->insert(buffer->end(), "\n" + summary.str() + "\n");
-
-                            if (lod0) {
-                                model_panel_.show_lod(*lod0, preview_key);
-                                model_panel_.gl_view().queue_render();
-                            }
-                        });
-                    });
-                } else {
-                    out << "Auto-extract: already running for another preview.\n";
-                    status_label_.set_text("Auto-extract already running...");
-                }
-            }
-        }
-
-        // LOD summary
-        out << "\nLOD details:\n";
-        for (const auto& lod : model.lods) {
-            out << "  " << lod.resolution_name
-                << " - " << lod.vertex_count << " verts, "
-                << lod.face_count << " faces\n";
-        }
-
-        info_view_.get_buffer()->set_text(out.str());
-
-        // 3D preview: show first visual LOD
-        if (!model.lods.empty()) {
-            model_panel_.clear();
-            model_panel_.show_lod(model.lods[0], file.prefix + "/" + file.file_path);
-            model_panel_.set_visible(true);
-        }
-
-    } catch (const std::exception& e) {
-        info_view_.get_buffer()->set_text(std::string("P3D error: ") + e.what());
-    }
+    model_panel_.load_p3d(file.prefix + "/" + file.file_path);
+    model_panel_.set_visible(true);
+    info_scroll_.set_visible(false);
 }
 
 void TabAssetBrowser::preview_paa(const armatools::pboindex::FindResult& file) {

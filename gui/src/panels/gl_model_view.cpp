@@ -38,7 +38,8 @@ out vec4 FragColor;
 void main() {
     vec3 n = normalize(vNormal);
     float diff = max(dot(n, uLightDir), 0.0);
-    float light = 0.3 + 0.7 * diff;
+    float back_fill = max(dot(n, -uLightDir), 0.0);
+    float light = min(1.0, 0.55 + 0.55 * diff + 0.20 * back_fill);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
     FragColor = vec4(baseColor.rgb * light, baseColor.a);
     if (FragColor.a < 0.01) discard;
@@ -82,7 +83,8 @@ out vec4 FragColor;
 void main() {
     vec3 n = normalize(vNormal);
     float diff = max(dot(n, uLightDir), 0.0);
-    float light = 0.3 + 0.7 * diff;
+    float back_fill = max(dot(n, -uLightDir), 0.0);
+    float light = min(1.0, 0.55 + 0.55 * diff + 0.20 * back_fill);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
     FragColor = vec4(baseColor.rgb * light, baseColor.a);
     if (FragColor.a < 0.01) discard;

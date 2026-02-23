@@ -17,16 +17,21 @@
 
 std::vector<uint8_t> extract_from_pbo(const std::string& pbo_path,
                                        const std::string& entry_name) {
+    auto normalize_ci = [](std::string s) {
+        std::replace(s.begin(), s.end(), '\\', '/');
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+
     std::ifstream f(pbo_path, std::ios::binary);
     if (!f.is_open()) return {};
 
     auto pbo = armatools::pbo::read(f);
+    auto target = normalize_ci(entry_name);
 
     for (const auto& entry : pbo.entries) {
-        auto name = entry.filename;
-        std::replace(name.begin(), name.end(), '\\', '/');
-        auto target = entry_name;
-        std::replace(target.begin(), target.end(), '\\', '/');
+        auto name = normalize_ci(entry.filename);
 
         if (name == target) {
             f.seekg(static_cast<std::streamoff>(entry.data_offset));

@@ -2,6 +2,7 @@
 #include "dockable_panel.h"
 #include "panel_wrapper.h"
 #include "pbo_index_service.h"
+#include "cli_logger.h"
 
 #include <adwaita.h>
 #include <nlohmann/json.hpp>
@@ -180,8 +181,12 @@ void AppWindow::update_status(const std::string& text) {
 void AppWindow::reload_config() {
     cfg_ = load_config();
     layout_cfg_ = load_layout_config();
-    app_log(LogLevel::Info, "Configuration reloaded from " + config_path());
-    if (pbo_index_service_) pbo_index_service_->set_db_path(cfg_.a3db_path);
+    armatools::cli::log_verbose("Configuration reloaded from {}", config_path());
+    // if (services_.pbo_index_service)
+    //     services_.pbo_index_service->set_db_path(cfg_.a3db_path);
+    // } else {
+    //     services_.pbo_index_service = std::make_shared<PboIndexService>();
+    // }
 
     if (tab_config_inited_) tab_config_.set_config(&cfg_);
     if (tab_asset_browser_inited_) tab_asset_browser_.set_config(&cfg_);
@@ -471,7 +476,9 @@ void AppWindow::detach_all_panels() {
 AppWindow::AppWindow(GtkApplication* app) {
     cfg_ = load_config();
     layout_cfg_ = load_layout_config();
-    pbo_index_service_ = std::make_shared<PboIndexService>();
+    services_.pbo_index_service = std::make_shared<PboIndexService>();
+    services_.p3d_model_loader_service.reset();
+    services_.lod_textures_loader_service.reset();
 
     // Create the workbench — manages multiple workspace windows for tear-off
     workbench_ = panel_workbench_new();
@@ -585,18 +592,42 @@ AppWindow::AppWindow(GtkApplication* app) {
     app_log(LogLevel::Info, "Application started");
     app_log(LogLevel::Info, "Configuration loaded from " + config_path());
 
-    tab_asset_browser_.set_pbo_index_service(pbo_index_service_);
-    tab_pbo_.set_pbo_index_service(pbo_index_service_);
-    tab_audio_.set_pbo_index_service(pbo_index_service_);
-    tab_config_viewer_.set_pbo_index_service(pbo_index_service_);
-    tab_obj_replace_.set_pbo_index_service(pbo_index_service_);
-    tab_wrp_info_.set_pbo_index_service(pbo_index_service_);
-    tab_p3d_info_.set_pbo_index_service(pbo_index_service_);
-    tab_paa_preview_.set_pbo_index_service(pbo_index_service_);
+    tab_asset_browser_.set_pbo_index_service(services_.pbo_index_service);
+    tab_pbo_.set_pbo_index_service(services_.pbo_index_service);
+    tab_audio_.set_pbo_index_service(services_.pbo_index_service);
+    tab_config_viewer_.set_pbo_index_service(services_.pbo_index_service);
+    tab_obj_replace_.set_pbo_index_service(services_.pbo_index_service);
+    tab_wrp_info_.set_pbo_index_service(services_.pbo_index_service);
+    tab_p3d_info_.set_pbo_index_service(services_.pbo_index_service);
+    tab_paa_preview_.set_pbo_index_service(services_.pbo_index_service);
+
+    auto rebuild_model_services =
+        [this](const std::shared_ptr<armatools::pboindex::DB>& db,
+               const std::shared_ptr<armatools::pboindex::Index>& index) {
+            const std::string db_path = cfg_.a3db_path;
+            services_.p3d_model_loader_service =
+                std::make_shared<P3dModelLoaderService>(&cfg_, db, index);
+            services_.lod_textures_loader_service =
+                std::make_shared<LodTexturesLoaderService>(db_path, &cfg_, db, index);
+
+            tab_asset_browser_.set_model_loader_service(services_.p3d_model_loader_service);
+            tab_asset_browser_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_p3d_info_.set_model_loader_service(services_.p3d_model_loader_service);
+            tab_p3d_info_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_wrp_info_.set_model_loader_service(services_.p3d_model_loader_service);
+            tab_wrp_info_.set_texture_loader_service(services_.lod_textures_loader_service);
+        };
+
+    rebuild_model_services(nullptr, nullptr);
+    services_.pbo_index_service->subscribe(this, [this, rebuild_model_services](
+                                                     const PboIndexService::Snapshot& snap) {
+        rebuild_model_services(snap.db, snap.index);
+    });
 
     // Delay initial A3DB open slightly so first paint stays responsive.
     Glib::signal_timeout().connect_once([this]() {
-        if (pbo_index_service_) pbo_index_service_->set_db_path(cfg_.a3db_path);
+        if (services_.pbo_index_service)
+            services_.pbo_index_service->set_db_path(cfg_.a3db_path);
     }, 900);
 
     // Config save callback
@@ -656,6 +687,8 @@ AppWindow::AppWindow(GtkApplication* app) {
 }
 
 AppWindow::~AppWindow() {
+    if (services_.pbo_index_service)
+        services_.pbo_index_service->unsubscribe(this);
     // Everything was already detached in close-request handler.
     // Just clear the map — the PanelWidgets are owned by GTK.
     panels_.clear();

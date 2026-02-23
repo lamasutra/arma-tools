@@ -22,6 +22,8 @@ public:
     ~TabAssetBrowser() override;
     void set_config(Config* cfg);
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
+    void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
 
 private:
     Config* cfg_ = nullptr;
@@ -57,17 +59,12 @@ private:
     bool source_combo_updating_ = false;
     std::thread nav_thread_;
     std::atomic<unsigned> nav_generation_{0};
-    std::thread auto_extract_thread_;
-    std::atomic<bool> auto_extract_busy_{false};
-    std::atomic<unsigned> auto_extract_generation_{0};
-    std::string current_preview_file_;
     Gtk::Box search_box_{Gtk::Orientation::HORIZONTAL, 4};
     Gtk::Entry search_entry_;
     Gtk::Button search_button_{"Search"};
     Gtk::Label breadcrumb_label_{"/"};
     Gtk::ScrolledWindow list_scroll_;
     Gtk::ListBox dir_list_;
-    Gtk::Label progress_label_;
 
     // Right panel
     Gtk::Box right_box_{Gtk::Orientation::VERTICAL, 8};
@@ -96,7 +93,6 @@ private:
 
     // Extract row
     Gtk::Box extract_box_{Gtk::Orientation::HORIZONTAL, 4};
-    Gtk::CheckButton auto_extract_textures_check_{"Auto-extract textures"};
     Gtk::Button extract_button_{"Extract File"};
     Gtk::Button extract_drive_button_{"Extract to Drive"};
     Gtk::Label status_label_;

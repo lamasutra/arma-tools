@@ -24,6 +24,8 @@ public:
     ~TabWrpInfo() override;
     void set_config(Config* cfg);
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
+    void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
 
 private:
     Config* cfg_ = nullptr;
@@ -50,7 +52,7 @@ private:
     Gtk::TextView info_view_;
 
     // Page 2: Objects
-    Gtk::Paned objects_paned_{Gtk::Orientation::VERTICAL};
+    Gtk::Paned objects_paned_{Gtk::Orientation::HORIZONTAL};
     Gtk::Box class_top_box_{Gtk::Orientation::VERTICAL};
     Gtk::Label class_status_label_;
     Gtk::ScrolledWindow class_scroll_;

@@ -2,12 +2,16 @@
 
 #include <gtkmm.h>
 #include "gl_model_view.h"
+#include "p3d_model_loader.h"
+#include "lod_textures_loader.h"
 
 #include <armatools/p3d.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
+#include <functional>
 
 struct Config;
 
@@ -25,7 +29,14 @@ public:
     void set_config(Config* cfg);
     void set_pboindex(armatools::pboindex::DB* db,
                       armatools::pboindex::Index* index);
+    void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_info_line(const std::string& text);
+    void set_model_data(const std::shared_ptr<armatools::p3d::P3DFile>& model,
+                        const std::string& model_path);
+    void set_on_lod_changed(std::function<void(const armatools::p3d::LOD&, int)> cb);
 
+    void load_p3d(const std::string& model_path);
     // Loading (call per model/LOD).
     // Safe to call even if the GL view is not yet realized (e.g. widget hidden);
     // the LOD data is stored and applied once the GL context is ready.
@@ -43,17 +54,27 @@ private:
     Config* cfg_ = nullptr;
     armatools::pboindex::DB* db_ = nullptr;
     armatools::pboindex::Index* index_ = nullptr;
+    std::shared_ptr<armatools::p3d::P3DFile> p3d_file_;
+    std::shared_ptr<P3dModelLoaderService> model_loader_shared_;
+    std::shared_ptr<LodTexturesLoaderService> texture_loader_shared_;
 
-    // Toolbar
-    Gtk::Box toolbar_{Gtk::Orientation::HORIZONTAL, 4};
+    // Toolbars
+    Gtk::Box toolbar_row_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Box toolbar_left_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Box toolbar_right_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Label info_line_label_;
     Gtk::ToggleButton wireframe_btn_;
     Gtk::ToggleButton texture_btn_;
     Gtk::ToggleButton grid_btn_;
     Gtk::Button reset_cam_btn_;
     Gtk::Button screenshot_btn_;
     Gtk::MenuButton bg_color_btn_;
+    Gtk::MenuButton lods_btn_;
     Gtk::Popover bg_color_popover_;
+    Gtk::Popover lod_popover_;
     Gtk::Box bg_color_box_{Gtk::Orientation::VERTICAL, 2};
+    Gtk::ScrolledWindow lod_scroll_;
+    Gtk::ListBox lod_list_;
 
     // GL view
     GLModelView gl_view_;
@@ -70,11 +91,15 @@ private:
     sigc::connection realize_connection_;
 
     std::string current_model_path_;
+    int current_lod_index_ = -1;
+    std::function<void(const armatools::p3d::LOD&, int)> on_lod_changed_;
 
     void apply_lod(const armatools::p3d::LOD& lod, const std::string& model_path);
     void on_gl_realized();
     void load_textures_for_lod(const armatools::p3d::LOD& lod,
                                const std::string& model_path);
+    void on_lod_selected(Gtk::ListBoxRow* row);
     void setup_bg_color_popover();
     void on_screenshot();
+    void setup_lods_menu();
 };

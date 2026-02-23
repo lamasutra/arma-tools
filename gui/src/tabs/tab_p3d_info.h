@@ -7,10 +7,8 @@
 #include <armatools/pboindex.h>
 
 #include <string>
-#include <unordered_set>
 #include <memory>
 #include <vector>
-#include <thread>
 
 struct Config;
 
@@ -25,6 +23,8 @@ public:
 
     void set_config(Config* cfg);
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
+    void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
 
 private:
     Config* cfg_ = nullptr;
@@ -35,14 +35,6 @@ private:
     Gtk::Box path_box_{Gtk::Orientation::HORIZONTAL, 4};
     Gtk::Entry path_entry_;
     Gtk::Button browse_button_{"Browse..."};
-    Gtk::Label model_info_label_;
-    Gtk::Label lod_header_;
-    Gtk::ScrolledWindow lod_scroll_;
-    Gtk::ListBox lod_list_;
-
-    // Toolbar (tab-specific controls only)
-    Gtk::Box toolbar_{Gtk::Orientation::HORIZONTAL, 4};
-    Gtk::CheckButton auto_extract_check_{"Auto-extract"};
 
     // Right panel: model view
     ModelViewPanel model_panel_;
@@ -51,10 +43,6 @@ private:
     Gtk::Label texture_header_;
     Gtk::ScrolledWindow texture_scroll_;
     Gtk::Box texture_list_{Gtk::Orientation::VERTICAL, 2};
-    Gtk::Box extract_row_{Gtk::Orientation::HORIZONTAL, 4};
-    Gtk::Button extract_button_;
-    Gtk::Spinner extract_spinner_;
-    Gtk::Label extract_status_;
 
     // Floating texture preview
     std::unique_ptr<Gtk::Window> texture_preview_window_;
@@ -68,12 +56,6 @@ private:
     struct ModelData;
     std::shared_ptr<ModelData> model_;
     std::string model_path_;
-
-    // Missing textures for current LOD
-    std::vector<std::string> missing_textures_;
-
-    // Extraction thread
-    std::thread extract_thread_;
 
     // PboIndex
     std::shared_ptr<armatools::pboindex::DB> db_;
@@ -91,11 +73,9 @@ private:
 
     void on_browse();
     void load_file(const std::string& path);
-    void on_lod_selected(Gtk::ListBoxRow* row);
+    void on_model_lod_changed(const armatools::p3d::LOD& lod, int idx);
     void update_texture_list(const armatools::p3d::LOD& lod);
     void on_texture_clicked(const std::string& texture_path);
-    void extract_missing_textures();
-    bool resolve_texture_on_disk(const std::string& texture) const;
 
     void on_pbo_mode_changed();
     void on_search();

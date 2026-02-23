@@ -13,9 +13,10 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <unordered_set>
 
 struct TabP3dInfo::ModelData {
-    armatools::p3d::P3DFile p3d;
+    std::shared_ptr<armatools::p3d::P3DFile> p3d;
 };
 
 TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
@@ -49,25 +50,6 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     search_scroll_.set_visible(false);
     left_box_.append(search_scroll_);
 
-    // Toolbar (tab-specific: auto-extract only)
-    toolbar_.set_margin_top(4);
-    toolbar_.append(auto_extract_check_);
-    left_box_.append(toolbar_);
-
-    model_info_label_.set_halign(Gtk::Align::START);
-    model_info_label_.set_wrap(true);
-    model_info_label_.set_margin_top(4);
-    left_box_.append(model_info_label_);
-
-    lod_header_.set_halign(Gtk::Align::START);
-    lod_header_.set_markup("<b>LODs</b>");
-    lod_header_.set_margin_top(4);
-    left_box_.append(lod_header_);
-
-    lod_scroll_.set_child(lod_list_);
-    lod_scroll_.set_size_request(-1, 120);
-    left_box_.append(lod_scroll_);
-
     // Texture header (in left panel, below LOD list)
     texture_header_.set_halign(Gtk::Align::START);
     texture_header_.set_markup("<b>Textures</b>");
@@ -81,17 +63,6 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     texture_scroll_.set_propagate_natural_height(true);
     texture_scroll_.set_visible(false);
     left_box_.append(texture_scroll_);
-
-    // Extract row: button + spinner + status
-    extract_button_.set_visible(false);
-    extract_spinner_.set_visible(false);
-    extract_spinner_.set_spinning(false);
-    extract_status_.set_halign(Gtk::Align::START);
-    extract_status_.set_visible(false);
-    extract_row_.append(extract_button_);
-    extract_row_.append(extract_spinner_);
-    extract_row_.append(extract_status_);
-    left_box_.append(extract_row_);
 
     // Detail text
     detail_view_.set_editable(false);
@@ -107,6 +78,9 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     // Right panel: model view takes full space
     set_end_child(model_panel_);
+    model_panel_.set_on_lod_changed([this](const armatools::p3d::LOD& lod, int idx) {
+        on_model_lod_changed(lod, idx);
+    });
 
     // Signals
     browse_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabP3dInfo::on_browse));
@@ -114,15 +88,12 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         if (pbo_mode_) on_search();
         else load_file(path_entry_.get_text());
     });
-    lod_list_.signal_row_selected().connect(sigc::mem_fun(*this, &TabP3dInfo::on_lod_selected));
     pbo_switch_.property_active().signal_changed().connect(
         sigc::mem_fun(*this, &TabP3dInfo::on_pbo_mode_changed));
     search_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabP3dInfo::on_search));
     search_results_.signal_row_selected().connect(
         sigc::mem_fun(*this, &TabP3dInfo::on_search_result_selected));
 
-    extract_button_.signal_clicked().connect(
-        sigc::mem_fun(*this, &TabP3dInfo::extract_missing_textures));
 }
 
 TabP3dInfo::~TabP3dInfo() {
@@ -131,13 +102,21 @@ TabP3dInfo::~TabP3dInfo() {
         texture_preview_window_->close();
         texture_preview_window_.reset();
     }
-    if (extract_thread_.joinable())
-        extract_thread_.join();
 }
 
 void TabP3dInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& service) {
     if (pbo_index_service_) pbo_index_service_->unsubscribe(this);
     pbo_index_service_ = service;
+}
+
+void TabP3dInfo::set_model_loader_service(
+    const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_panel_.set_model_loader_service(service);
+}
+
+void TabP3dInfo::set_texture_loader_service(
+    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    model_panel_.set_texture_loader_service(service);
 }
 
 void TabP3dInfo::set_config(Config* cfg) {
@@ -183,19 +162,15 @@ void TabP3dInfo::load_file(const std::string& path) {
     if (path.empty()) return;
 
     // Clear
-    while (auto* row = lod_list_.get_row_at_index(0))
-        lod_list_.remove(*row);
     detail_view_.get_buffer()->set_text("");
     model_.reset();
     model_path_.clear();
     model_panel_.clear();
-    missing_textures_.clear();
+    model_panel_.set_info_line("");
 
     // Hide texture UI
     texture_header_.set_visible(false);
     texture_scroll_.set_visible(false);
-    extract_button_.set_visible(false);
-    extract_status_.set_visible(false);
     if (texture_preview_window_) {
         texture_preview_window_->close();
         texture_preview_window_.reset();
@@ -204,67 +179,39 @@ void TabP3dInfo::load_file(const std::string& path) {
     try {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) {
-            model_info_label_.set_text("Error: Cannot open file");
+            model_panel_.set_info_line("Error: Cannot open file");
             return;
         }
 
         model_ = std::make_shared<ModelData>();
-        model_->p3d = armatools::p3d::read(f);
+        model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(f));
         model_path_ = path;
-        const auto& p = model_->p3d;
+        const auto& p = *model_->p3d;
 
         app_log(LogLevel::Info, "Loaded P3D: " + path);
 
-        // Model summary
+        // One-line model summary in ModelViewPanel toolbar
         std::ostringstream info;
-        info << "Format: " << p.format << " v" << p.version << "\n";
-        info << "LODs: " << p.lods.size() << "\n";
-
-        if (p.model_info) {
-            info << "Mass: " << p.model_info->mass << "\n";
-            info << "Armor: " << p.model_info->armor << "\n";
-            info << "Bounding sphere: " << p.model_info->bounding_sphere << "\n";
-        }
-
+        info << "Format: " << p.format << " v" << p.version
+             << " | LODs: " << p.lods.size();
         auto size_result = armatools::p3d::calculate_size(p);
         if (size_result.info) {
             auto& s = *size_result.info;
-            info << "Dimensions: " << s.dimensions[0] << " x "
-                 << s.dimensions[1] << " x " << s.dimensions[2] << " m\n";
+            info << " | Size: " << s.dimensions[0] << "x"
+                 << s.dimensions[1] << "x" << s.dimensions[2] << "m";
         }
+        model_panel_.set_info_line(info.str());
 
-        model_info_label_.set_text(info.str());
-
-        // Populate LOD list
-        for (const auto& lod : p.lods) {
-            auto text = lod.resolution_name + "  (V:" + std::to_string(lod.vertex_count)
-                      + " F:" + std::to_string(lod.face_count) + ")";
-            auto* label = Gtk::make_managed<Gtk::Label>(text);
-            label->set_halign(Gtk::Align::START);
-            lod_list_.append(*label);
-        }
-
-        // Auto-select first visual LOD
-        if (!p.lods.empty()) {
-            lod_list_.select_row(*lod_list_.get_row_at_index(0));
-        }
+        model_panel_.set_model_data(model_->p3d, model_path_);
 
     } catch (const std::exception& e) {
-        model_info_label_.set_text(std::string("Error: ") + e.what());
+        model_panel_.set_info_line(std::string("Error: ") + e.what());
         app_log(LogLevel::Error, "P3D load error: " + std::string(e.what()));
     }
 }
 
-void TabP3dInfo::on_lod_selected(Gtk::ListBoxRow* row) {
-    if (!row || !model_) return;
-    int idx = row->get_index();
-    if (idx < 0 || static_cast<size_t>(idx) >= model_->p3d.lods.size()) return;
-
-    const auto& lod = model_->p3d.lods[static_cast<size_t>(idx)];
-
-    // Update 3D view (geometry + textures in one call)
-    model_panel_.show_lod(lod, model_path_);
-
+void TabP3dInfo::on_model_lod_changed(const armatools::p3d::LOD& lod, int idx) {
+    if (!model_) return;
     // Update texture list UI
     update_texture_list(lod);
 
@@ -302,31 +249,19 @@ void TabP3dInfo::on_lod_selected(Gtk::ListBoxRow* row) {
            << ", " << lod.bounding_box_min[2] << "]\n";
     detail << "  max: [" << lod.bounding_box_max[0] << ", " << lod.bounding_box_max[1]
            << ", " << lod.bounding_box_max[2] << "]\n";
+    detail << "Index: " << idx << "\n";
 
     detail_view_.get_buffer()->set_text(detail.str());
-
-    // Auto-extract if enabled
-    if (auto_extract_check_.get_active() && !missing_textures_.empty()) {
-        extract_missing_textures();
-    }
-}
-
-bool TabP3dInfo::resolve_texture_on_disk(const std::string& texture) const {
-    return ::resolve_texture_on_disk(texture, model_path_,
-                                     cfg_ ? cfg_->drive_root : "");
 }
 
 void TabP3dInfo::update_texture_list(const armatools::p3d::LOD& lod) {
     // Clear existing texture rows
     while (auto* child = texture_list_.get_first_child())
         texture_list_.remove(*child);
-    missing_textures_.clear();
 
     if (lod.textures.empty()) {
         texture_header_.set_visible(false);
         texture_scroll_.set_visible(false);
-        extract_button_.set_visible(false);
-        extract_status_.set_visible(false);
         return;
     }
 
@@ -350,15 +285,8 @@ void TabP3dInfo::update_texture_list(const armatools::p3d::LOD& lod) {
             label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
             row->append(*label);
         } else {
-            bool found = resolve_texture_on_disk(tex);
-
             auto* icon = Gtk::make_managed<Gtk::Image>();
-            if (found) {
-                icon->set_from_icon_name("object-select-symbolic");
-            } else {
-                icon->set_from_icon_name("dialog-warning-symbolic");
-                missing_textures_.push_back(tex);
-            }
+            icon->set_from_icon_name("image-x-generic-symbolic");
             row->append(*icon);
 
             auto* btn = Gtk::make_managed<Gtk::Button>(tex);
@@ -374,16 +302,6 @@ void TabP3dInfo::update_texture_list(const armatools::p3d::LOD& lod) {
 
         texture_list_.append(*row);
     }
-
-    // Show/hide extract button
-    if (!missing_textures_.empty()) {
-        extract_button_.set_label("Extract " + std::to_string(missing_textures_.size())
-                                  + " Missing Textures");
-        extract_button_.set_visible(true);
-    } else {
-        extract_button_.set_visible(false);
-    }
-    extract_status_.set_visible(false);
 }
 
 void TabP3dInfo::on_texture_clicked(const std::string& texture_path) {
@@ -391,6 +309,7 @@ void TabP3dInfo::on_texture_clicked(const std::string& texture_path) {
         return;
 
     namespace fs = std::filesystem;
+    const auto normalized = armatools::armapath::to_slash_lower(texture_path);
 
     // Helper: show decoded image in the floating preview window
     auto show_preview = [&](const armatools::paa::Image& img) {
@@ -421,8 +340,17 @@ void TabP3dInfo::on_texture_clicked(const std::string& texture_path) {
         texture_preview_window_->present();
     };
 
-    // Try loading from disk first (drive_root or relative to model)
-    auto on_disk = armatools::armapath::to_os(texture_path);
+    auto try_decode_data = [&](const std::vector<uint8_t>& data) -> bool {
+        if (data.empty()) return false;
+        try {
+            std::string str(data.begin(), data.end());
+            std::istringstream stream(str);
+            auto [img, hdr] = armatools::paa::decode(stream);
+            if (img.width <= 0 || img.height <= 0) return false;
+            show_preview(img);
+            return true;
+        } catch (...) { return false; }
+    };
 
     auto try_decode_file = [&](const fs::path& path) -> bool {
         std::error_code ec;
@@ -437,41 +365,36 @@ void TabP3dInfo::on_texture_clicked(const std::string& texture_path) {
         } catch (...) { return false; }
     };
 
+    // 1) Resolve via index first
+    if (index_) {
+        armatools::pboindex::ResolveResult rr;
+        if (index_->resolve(normalized, rr)) {
+            if (try_decode_data(extract_from_pbo(rr.pbo_path, rr.entry_name))) return;
+        }
+    }
+
+    // 2) Fallback via DB file search
+    if (db_) {
+        auto filename = fs::path(normalized).filename().string();
+        auto results = db_->find_files("*" + filename);
+        for (const auto& r : results) {
+            auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+            if (full == normalized || full.ends_with("/" + normalized)) {
+                if (try_decode_data(extract_from_pbo(r.pbo_path, r.file_path))) return;
+            }
+        }
+    }
+
+    // 3) Last fallback: disk
     if (cfg_ && !cfg_->drive_root.empty()) {
+        auto on_disk = armatools::armapath::to_os(texture_path);
         auto base_dir = fs::path(model_path_).parent_path();
         if (try_decode_file(base_dir / on_disk)) return;
         if (try_decode_file(base_dir / on_disk.filename())) return;
         if (try_decode_file(fs::path(cfg_->drive_root) / on_disk)) return;
     }
 
-    // Resolve via pboindex
-    if (!index_) {
-        app_log(LogLevel::Warning, "No index available to resolve texture: " + texture_path);
-        return;
-    }
-
-    auto normalized = armatools::armapath::to_slash_lower(texture_path);
-    armatools::pboindex::ResolveResult rr;
-    if (!index_->resolve(normalized, rr)) {
-        app_log(LogLevel::Warning, "Could not resolve texture: " + texture_path);
-        return;
-    }
-
-    auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
-    if (data.empty()) {
-        app_log(LogLevel::Warning, "Could not extract texture: " + texture_path);
-        return;
-    }
-
-    try {
-        std::string str(data.begin(), data.end());
-        std::istringstream stream(str);
-        auto [img, hdr] = armatools::paa::decode(stream);
-        if (img.width <= 0 || img.height <= 0) return;
-        show_preview(img);
-    } catch (const std::exception& e) {
-        app_log(LogLevel::Error, std::string("Texture decode error: ") + e.what());
-    }
+    app_log(LogLevel::Warning, "Could not load texture preview: " + texture_path);
 }
 
 void TabP3dInfo::on_pbo_mode_changed() {
@@ -521,22 +444,18 @@ void TabP3dInfo::on_search_result_selected(Gtk::ListBoxRow* row) {
 void TabP3dInfo::load_from_pbo(const armatools::pboindex::FindResult& r) {
     auto data = extract_from_pbo(r.pbo_path, r.file_path);
     if (data.empty()) {
-        model_info_label_.set_text("Error: Could not extract from PBO");
+        model_panel_.set_info_line("Error: Could not extract from PBO");
         return;
     }
 
     // Clear
-    while (auto* row = lod_list_.get_row_at_index(0))
-        lod_list_.remove(*row);
     detail_view_.get_buffer()->set_text("");
     model_.reset();
     model_path_.clear();
     model_panel_.clear();
-    missing_textures_.clear();
+    model_panel_.set_info_line("");
     texture_header_.set_visible(false);
     texture_scroll_.set_visible(false);
-    extract_button_.set_visible(false);
-    extract_status_.set_visible(false);
     if (texture_preview_window_) {
         texture_preview_window_->close();
         texture_preview_window_.reset();
@@ -546,172 +465,29 @@ void TabP3dInfo::load_from_pbo(const armatools::pboindex::FindResult& r) {
         std::string str(data.begin(), data.end());
         std::istringstream stream(str);
         model_ = std::make_shared<ModelData>();
-        model_->p3d = armatools::p3d::read(stream);
+        model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(stream));
         model_path_ = r.prefix + "/" + r.file_path;
 
-        const auto& p = model_->p3d;
+        const auto& p = *model_->p3d;
 
         std::ostringstream info;
-        info << "Format: " << p.format << " v" << p.version << "\n";
-        info << "LODs: " << p.lods.size() << "\n";
-
-        if (p.model_info) {
-            info << "Mass: " << p.model_info->mass << "\n";
-            info << "Armor: " << p.model_info->armor << "\n";
-            info << "Bounding sphere: " << p.model_info->bounding_sphere << "\n";
-        }
-
+        info << "Format: " << p.format << " v" << p.version
+             << " | LODs: " << p.lods.size();
         auto size_result = armatools::p3d::calculate_size(p);
         if (size_result.info) {
             auto& s = *size_result.info;
-            info << "Dimensions: " << s.dimensions[0] << " x "
-                 << s.dimensions[1] << " x " << s.dimensions[2] << " m\n";
+            info << " | Size: " << s.dimensions[0] << "x"
+                 << s.dimensions[1] << "x" << s.dimensions[2] << "m";
         }
+        model_panel_.set_info_line(info.str());
 
-        model_info_label_.set_text(info.str());
-
-        for (const auto& lod : p.lods) {
-            auto text = lod.resolution_name + "  (V:" + std::to_string(lod.vertex_count)
-                      + " F:" + std::to_string(lod.face_count) + ")";
-            auto* label = Gtk::make_managed<Gtk::Label>(text);
-            label->set_halign(Gtk::Align::START);
-            lod_list_.append(*label);
-        }
-
-        if (!p.lods.empty()) {
-            lod_list_.select_row(*lod_list_.get_row_at_index(0));
-        }
+        model_panel_.set_model_data(model_->p3d, model_path_);
 
         app_log(LogLevel::Info, "Loaded P3D from PBO: " + model_path_);
 
     } catch (const std::exception& e) {
-        model_info_label_.set_text(std::string("Error: ") + e.what());
+        model_panel_.set_info_line(std::string("Error: ") + e.what());
         app_log(LogLevel::Error, "P3D PBO load error: " + std::string(e.what()));
     }
 }
 
-void TabP3dInfo::extract_missing_textures() {
-    if (missing_textures_.empty()) return;
-    if (!db_) {
-        app_log(LogLevel::Error, "No A3DB configured -- cannot extract textures");
-        return;
-    }
-    if (!cfg_ || cfg_->drive_root.empty()) {
-        app_log(LogLevel::Error, "No Drive Root configured -- cannot extract textures");
-        return;
-    }
-
-    // Join any previous extraction thread
-    if (extract_thread_.joinable())
-        extract_thread_.join();
-
-    // Show spinner
-    extract_button_.set_sensitive(false);
-    extract_spinner_.set_visible(true);
-    extract_spinner_.set_spinning(true);
-    extract_status_.set_text("Extracting...");
-    extract_status_.set_visible(true);
-
-    auto textures = missing_textures_;
-    auto drive_root = cfg_->drive_root;
-
-    // Capture db_ as raw pointer (it lives on this object, and we join in destructor)
-    auto* db = db_.get();
-
-    app_log(LogLevel::Info, "Extracting " + std::to_string(textures.size())
-            + " missing textures...");
-
-    extract_thread_ = std::thread([this, db, textures, drive_root]() {
-        namespace fs = std::filesystem;
-        int extracted = 0, not_found = 0, failed = 0;
-
-        for (const auto& tex : textures) {
-            auto normalized = armatools::armapath::to_os(tex);
-            auto basename = normalized.filename().string();
-
-            // Search for this texture in the database
-            std::string pattern = "*" + basename;
-            std::vector<armatools::pboindex::FindResult> results;
-            try {
-                results = db->find_files(pattern);
-            } catch (...) {
-                not_found++;
-                continue;
-            }
-
-            if (results.empty()) {
-                Glib::signal_idle().connect_once([tex]() {
-                    app_log(LogLevel::Warning, "  not found in DB: " + tex);
-                });
-                not_found++;
-                continue;
-            }
-
-            // Extract from the first matching PBO
-            auto& r = results[0];
-            auto data = extract_from_pbo(r.pbo_path, r.file_path);
-            if (data.empty()) {
-                Glib::signal_idle().connect_once([tex]() {
-                    app_log(LogLevel::Warning, "  extract failed: " + tex);
-                });
-                failed++;
-                continue;
-            }
-
-            // Write to drive_root preserving path structure
-            auto dest = fs::path(drive_root) / normalized;
-            std::error_code ec;
-            fs::create_directories(dest.parent_path(), ec);
-            if (ec) {
-                failed++;
-                continue;
-            }
-
-            std::ofstream out(dest, std::ios::binary);
-            if (!out.is_open()) {
-                failed++;
-                continue;
-            }
-            out.write(reinterpret_cast<const char*>(data.data()),
-                      static_cast<std::streamsize>(data.size()));
-            out.close();
-
-            auto dest_str = dest.string();
-            Glib::signal_idle().connect_once([dest_str]() {
-                app_log(LogLevel::Info, "  extracted: " + dest_str);
-            });
-            extracted++;
-        }
-
-        // Report results on main thread and refresh
-        Glib::signal_idle().connect_once([this, extracted, not_found, failed]() {
-            app_log(LogLevel::Info, "Extract done: " + std::to_string(extracted)
-                    + " extracted, " + std::to_string(not_found) + " not found, "
-                    + std::to_string(failed) + " failed");
-
-            extract_spinner_.set_spinning(false);
-            extract_spinner_.set_visible(false);
-            extract_button_.set_sensitive(true);
-
-            if (extracted > 0) {
-                extract_status_.set_text(std::to_string(extracted) + " extracted");
-
-                // Reload textures and refresh the texture list for the current LOD
-                if (model_) {
-                    auto* row = lod_list_.get_selected_row();
-                    if (row) {
-                        int idx = row->get_index();
-                        if (idx >= 0 && static_cast<size_t>(idx) < model_->p3d.lods.size()) {
-                            const auto& lod = model_->p3d.lods[static_cast<size_t>(idx)];
-                            model_panel_.show_lod(lod, model_path_);
-                            update_texture_list(lod);
-                            model_panel_.gl_view().queue_render();
-                        }
-                    }
-                }
-            } else {
-                extract_status_.set_text("No textures extracted");
-            }
-        });
-    });
-}

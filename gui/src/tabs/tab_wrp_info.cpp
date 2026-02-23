@@ -120,6 +120,16 @@ void TabWrpInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& s
     pbo_index_service_ = service;
 }
 
+void TabWrpInfo::set_model_loader_service(
+    const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_panel_.set_model_loader_service(service);
+}
+
+void TabWrpInfo::set_texture_loader_service(
+    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    model_panel_.set_texture_loader_service(service);
+}
+
 void TabWrpInfo::set_config(Config* cfg) {
     cfg_ = cfg;
     if (cfg_ && !cfg_->worlds_dir.empty()) {
@@ -423,6 +433,8 @@ void TabWrpInfo::on_class_selected(Gtk::ListBoxRow* row) {
 }
 
 void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
+    model_panel_.load_p3d(model_path);
+    /*
     model_panel_.clear();
     if (model_path.empty()) return;
 
@@ -499,6 +511,7 @@ void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
     }
 
     app_log(LogLevel::Debug, "WrpInfo: model not found: " + model_path);
+    */
 }
 
 void TabWrpInfo::on_hm_export() {

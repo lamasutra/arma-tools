@@ -56,6 +56,12 @@ window, headerbar, decoration, .background { border-radius: 0px; }
   background-color: alpha(currentColor, 0.18);
 }
 
+/* P3D LOD selector popover */
+popover.p3d-lod-popover,
+popover.p3d-lod-popover > contents {
+  border-radius: 0;
+}
+
 /* Compact switches (PBO mode toggles) */
 /* switch.compact-switch {
   min-width: 30px;
