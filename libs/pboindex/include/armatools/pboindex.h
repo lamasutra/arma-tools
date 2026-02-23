@@ -191,7 +191,9 @@ public:
     DBStats stats() const;
 
     // ListDir returns immediate children of a virtual directory path.
-    std::vector<DirEntry> list_dir(const std::string& dir) const;
+    std::vector<DirEntry> list_dir(const std::string& dir,
+                                   size_t limit = 0,
+                                   size_t offset = 0) const;
 
     // AllFiles returns every file in the database.
     std::vector<FindResult> all_files() const;
@@ -199,7 +201,9 @@ public:
     // FindFiles searches for files matching a glob pattern.
     // If source is non-empty, only files from PBOs with that source are returned.
     std::vector<FindResult> find_files(const std::string& pattern,
-                                       const std::string& source = "") const;
+                                       const std::string& source = "",
+                                       size_t limit = 0,
+                                       size_t offset = 0) const;
 
     // ListPBOPaths returns all indexed PBO file paths sorted alphabetically.
     std::vector<std::string> list_pbo_paths() const;
@@ -221,7 +225,9 @@ public:
 
     // ListDirForSource returns directory entries filtered by PBO source.
     std::vector<DirEntry> list_dir_for_source(const std::string& dir,
-                                               const std::string& source) const;
+                                              const std::string& source,
+                                              size_t limit = 0,
+                                              size_t offset = 0) const;
 
 private:
     DB();

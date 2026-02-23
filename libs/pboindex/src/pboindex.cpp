@@ -1243,98 +1243,100 @@ DBStats DB::stats() const {
 // DB::list_dir — uses dirs table when available, otherwise fallback
 // ---------------------------------------------------------------------------
 
-std::vector<DirEntry> DB::list_dir(const std::string& dir) const {
+std::vector<DirEntry> DB::list_dir(const std::string& dir,
+                                   size_t limit,
+                                   size_t offset) const {
     std::vector<DirEntry> entries;
     bool has_dirs = table_exists(impl_->db, "dirs");
+    bool paged_in_sql = has_dirs;
+    const int64_t sql_limit = (limit > 0) ? static_cast<int64_t>(limit) : -1;
+    const int64_t sql_offset = static_cast<int64_t>(offset);
 
     if (has_dirs) {
         if (dir.empty()) {
-            // Root: subdirectories with no parent
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT name FROM dirs WHERE parent_id IS NULL ORDER BY name");
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* name = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    if (name)
-                        entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+            SqliteStmt stmt(impl_->db,
+                "SELECT kind, name, pbo_path, prefix, file_path, data_size FROM ("
+                "  SELECT 0 AS kind, d.name AS name,"
+                "         '' AS pbo_path, '' AS prefix, '' AS file_path, 0 AS data_size"
+                "  FROM dirs d WHERE d.parent_id IS NULL"
+                "  UNION ALL"
+                "  SELECT 1 AS kind, f.path AS name,"
+                "         p.path AS pbo_path, p.prefix AS prefix,"
+                "         f.path AS file_path, f.data_size AS data_size"
+                "  FROM files f JOIN pbos p ON f.pbo_id = p.id"
+                "  WHERE f.dir_id IS NULL"
+                ") ORDER BY kind, name"
+                " LIMIT ?1 OFFSET ?2");
+            stmt.bind_int64(1, sql_limit);
+            stmt.bind_int64(2, sql_offset);
+            while (stmt.step() == SQLITE_ROW) {
+                int kind = sqlite3_column_int(stmt.get(), 0);
+                const char* name = reinterpret_cast<const char*>(
+                    sqlite3_column_text(stmt.get(), 1));
+                if (!name) continue;
+                if (kind == 0) {
+                    entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+                    continue;
                 }
-            }
-            // Root: files with no directory
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT p.path, p.prefix, f.path, f.data_size"
-                    " FROM files f JOIN pbos p ON f.pbo_id = p.id"
-                    " WHERE f.dir_id IS NULL"
-                    " ORDER BY f.path");
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* pp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    const char* pfx = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 1));
-                    const char* fp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 2));
-                    int ds = sqlite3_column_int(stmt.get(), 3);
-                    if (!fp) continue;
-
-                    FindResult fr;
-                    fr.pbo_path = pp ? pp : "";
-                    fr.prefix = pfx ? pfx : "";
-                    fr.file_path = fp;
-                    fr.data_size = static_cast<uint32_t>(ds);
-                    entries.push_back(DirEntry{
-                        .name = file_basename_lower(fp),
-                        .is_dir = false,
-                        .files = {fr},
-                    });
-                }
+                const char* pp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 2));
+                const char* pfx = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 3));
+                const char* fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 4));
+                int ds = sqlite3_column_int(stmt.get(), 5);
+                if (!fp) continue;
+                FindResult fr;
+                fr.pbo_path = pp ? pp : "";
+                fr.prefix = pfx ? pfx : "";
+                fr.file_path = fp;
+                fr.data_size = static_cast<uint32_t>(ds);
+                entries.push_back(DirEntry{
+                    .name = file_basename_lower(fp),
+                    .is_dir = false,
+                    .files = {fr},
+                });
             }
         } else {
-            // Subdir: child directories
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT d.name FROM dirs d"
-                    " JOIN dirs p ON d.parent_id = p.id"
-                    " WHERE p.path = ?1"
-                    " ORDER BY d.name");
-                stmt.bind_text(1, dir);
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* name = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    if (name)
-                        entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+            SqliteStmt stmt(impl_->db,
+                "SELECT kind, name, pbo_path, prefix, file_path, data_size FROM ("
+                "  SELECT 0 AS kind, d.name AS name,"
+                "         '' AS pbo_path, '' AS prefix, '' AS file_path, 0 AS data_size"
+                "  FROM dirs d JOIN dirs p ON d.parent_id = p.id"
+                "  WHERE p.path = ?1"
+                "  UNION ALL"
+                "  SELECT 1 AS kind, f.path AS name,"
+                "         p.path AS pbo_path, p.prefix AS prefix,"
+                "         f.path AS file_path, f.data_size AS data_size"
+                "  FROM files f JOIN pbos p ON f.pbo_id = p.id"
+                "  JOIN dirs d ON f.dir_id = d.id"
+                "  WHERE d.path = ?1"
+                ") ORDER BY kind, name"
+                " LIMIT ?2 OFFSET ?3");
+            stmt.bind_text(1, dir);
+            stmt.bind_int64(2, sql_limit);
+            stmt.bind_int64(3, sql_offset);
+            while (stmt.step() == SQLITE_ROW) {
+                int kind = sqlite3_column_int(stmt.get(), 0);
+                const char* name = reinterpret_cast<const char*>(
+                    sqlite3_column_text(stmt.get(), 1));
+                if (!name) continue;
+                if (kind == 0) {
+                    entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+                    continue;
                 }
-            }
-            // Subdir: files in this directory
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT p.path, p.prefix, f.path, f.data_size"
-                    " FROM files f JOIN pbos p ON f.pbo_id = p.id"
-                    " JOIN dirs d ON f.dir_id = d.id"
-                    " WHERE d.path = ?1"
-                    " ORDER BY f.path");
-                stmt.bind_text(1, dir);
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* pp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    const char* pfx = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 1));
-                    const char* fp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 2));
-                    int ds = sqlite3_column_int(stmt.get(), 3);
-                    if (!fp) continue;
-
-                    FindResult fr;
-                    fr.pbo_path = pp ? pp : "";
-                    fr.prefix = pfx ? pfx : "";
-                    fr.file_path = fp;
-                    fr.data_size = static_cast<uint32_t>(ds);
-                    entries.push_back(DirEntry{
-                        .name = file_basename_lower(fp),
-                        .is_dir = false,
-                        .files = {fr},
-                    });
-                }
+                const char* pp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 2));
+                const char* pfx = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 3));
+                const char* fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 4));
+                int ds = sqlite3_column_int(stmt.get(), 5);
+                if (!fp) continue;
+                FindResult fr;
+                fr.pbo_path = pp ? pp : "";
+                fr.prefix = pfx ? pfx : "";
+                fr.file_path = fp;
+                fr.data_size = static_cast<uint32_t>(ds);
+                entries.push_back(DirEntry{
+                    .name = file_basename_lower(fp),
+                    .is_dir = false,
+                    .files = {fr},
+                });
             }
         }
     } else {
@@ -1415,6 +1417,18 @@ std::vector<DirEntry> DB::list_dir(const std::string& dir) const {
         if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir; // dirs first
         return a.name < b.name;
     });
+    if (!paged_in_sql) {
+        if (offset < entries.size()) {
+            if (limit > 0 && (offset + limit) < entries.size()) {
+                entries = std::vector<DirEntry>(entries.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                entries.begin() + static_cast<std::ptrdiff_t>(offset + limit));
+            } else if (offset > 0) {
+                entries = std::vector<DirEntry>(entries.begin() + static_cast<std::ptrdiff_t>(offset), entries.end());
+            }
+        } else if (limit > 0 || offset > 0) {
+            entries.clear();
+        }
+    }
 
     return entries;
 }
@@ -1450,7 +1464,9 @@ std::vector<FindResult> DB::all_files() const {
 // ---------------------------------------------------------------------------
 
 std::vector<FindResult> DB::find_files(const std::string& pattern,
-                                        const std::string& source) const {
+                                       const std::string& source,
+                                       size_t limit,
+                                       size_t offset) const {
     // Convert glob pattern: * -> %, ? -> _
     std::string like_pattern = armapath::to_slash_lower(pattern);
     for (auto& c : like_pattern) {
@@ -1460,13 +1476,19 @@ std::vector<FindResult> DB::find_files(const std::string& pattern,
 
     std::vector<FindResult> results;
 
+    const int64_t sql_limit = (limit > 0) ? static_cast<int64_t>(limit) : -1;
+    const int64_t sql_offset = static_cast<int64_t>(offset);
+
     if (source.empty() || !table_has_column(impl_->db, "pbos", "source")) {
         SqliteStmt stmt(impl_->db,
             "SELECT p.path, p.prefix, f.path, f.data_size"
             " FROM files f JOIN pbos p ON f.pbo_id = p.id"
             " WHERE LOWER(REPLACE(f.path, '\\', '/')) LIKE ?1"
-            " ORDER BY f.path");
+            " ORDER BY f.path"
+            " LIMIT ?2 OFFSET ?3");
         stmt.bind_text(1, like_pattern);
+        stmt.bind_int64(2, sql_limit);
+        stmt.bind_int64(3, sql_offset);
 
         while (stmt.step() == SQLITE_ROW) {
             FindResult fr;
@@ -1486,9 +1508,12 @@ std::vector<FindResult> DB::find_files(const std::string& pattern,
             " FROM files f JOIN pbos p ON f.pbo_id = p.id"
             " WHERE LOWER(REPLACE(f.path, '\\', '/')) LIKE ?1"
             "   AND p.source = ?2"
-            " ORDER BY f.path");
+            " ORDER BY f.path"
+            " LIMIT ?3 OFFSET ?4");
         stmt.bind_text(1, like_pattern);
         stmt.bind_text(2, source);
+        stmt.bind_int64(3, sql_limit);
+        stmt.bind_int64(4, sql_offset);
 
         while (stmt.step() == SQLITE_ROW) {
             FindResult fr;
@@ -1959,139 +1984,129 @@ std::vector<std::string> DB::query_sources() const {
 // ---------------------------------------------------------------------------
 
 std::vector<DirEntry> DB::list_dir_for_source(const std::string& dir,
-                                               const std::string& source) const {
+                                              const std::string& source,
+                                              size_t limit,
+                                              size_t offset) const {
     std::vector<DirEntry> entries;
     bool has_dirs = table_exists(impl_->db, "dirs");
     bool has_source_col = table_has_column(impl_->db, "pbos", "source");
+    const int64_t sql_limit = (limit > 0) ? static_cast<int64_t>(limit) : -1;
+    const int64_t sql_offset = static_cast<int64_t>(offset);
 
-    if (!has_source_col) return list_dir(dir);
+    if (!has_source_col) return list_dir(dir, limit, offset);
 
     if (has_dirs) {
         if (dir.empty()) {
-            // Root: find distinct root path components (first segment of dirs.path)
-            // for dirs that contain files from this source.
-            // This avoids the expensive correlated LIKE subquery.
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT DISTINCT"
-                    "  CASE WHEN INSTR(d.path, '/') > 0"
-                    "    THEN SUBSTR(d.path, 1, INSTR(d.path, '/') - 1)"
-                    "    ELSE d.path END AS root_name"
-                    " FROM files f"
-                    " JOIN pbos p ON f.pbo_id = p.id"
-                    " JOIN dirs d ON f.dir_id = d.id"
-                    " WHERE p.source = ?1"
-                    " ORDER BY root_name");
-                stmt.bind_text(1, source);
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* name = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    if (name)
-                        entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+            SqliteStmt stmt(impl_->db,
+                "SELECT kind, name, pbo_path, prefix, file_path, data_size FROM ("
+                "  SELECT 0 AS kind, root_name AS name,"
+                "         '' AS pbo_path, '' AS prefix, '' AS file_path, 0 AS data_size"
+                "  FROM ("
+                "    SELECT DISTINCT"
+                "      CASE WHEN INSTR(d.path, '/') > 0"
+                "        THEN SUBSTR(d.path, 1, INSTR(d.path, '/') - 1)"
+                "        ELSE d.path END AS root_name"
+                "    FROM files f"
+                "    JOIN pbos p ON f.pbo_id = p.id"
+                "    JOIN dirs d ON f.dir_id = d.id"
+                "    WHERE p.source = ?1"
+                "  )"
+                "  UNION ALL"
+                "  SELECT 1 AS kind, f.path AS name,"
+                "         p.path AS pbo_path, p.prefix AS prefix,"
+                "         f.path AS file_path, f.data_size AS data_size"
+                "  FROM files f JOIN pbos p ON f.pbo_id = p.id"
+                "  WHERE f.dir_id IS NULL AND p.source = ?1"
+                ") ORDER BY kind, name"
+                " LIMIT ?2 OFFSET ?3");
+            stmt.bind_text(1, source);
+            stmt.bind_int64(2, sql_limit);
+            stmt.bind_int64(3, sql_offset);
+            while (stmt.step() == SQLITE_ROW) {
+                int kind = sqlite3_column_int(stmt.get(), 0);
+                const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 1));
+                if (!name) continue;
+                if (kind == 0) {
+                    entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+                    continue;
                 }
-            }
-            // Root: files with no directory from this source
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT p.path, p.prefix, f.path, f.data_size"
-                    " FROM files f JOIN pbos p ON f.pbo_id = p.id"
-                    " WHERE f.dir_id IS NULL AND p.source = ?1"
-                    " ORDER BY f.path");
-                stmt.bind_text(1, source);
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* pp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    const char* pfx = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 1));
-                    const char* fp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 2));
-                    int ds = sqlite3_column_int(stmt.get(), 3);
-                    if (!fp) continue;
-
-                    FindResult fr;
-                    fr.pbo_path = pp ? pp : "";
-                    fr.prefix = pfx ? pfx : "";
-                    fr.file_path = fp;
-                    fr.data_size = static_cast<uint32_t>(ds);
-                    entries.push_back(DirEntry{
-                        .name = file_basename_lower(fp),
-                        .is_dir = false,
-                        .files = {fr},
-                    });
-                }
+                const char* pp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 2));
+                const char* pfx = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 3));
+                const char* fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 4));
+                int ds = sqlite3_column_int(stmt.get(), 5);
+                if (!fp) continue;
+                FindResult fr;
+                fr.pbo_path = pp ? pp : "";
+                fr.prefix = pfx ? pfx : "";
+                fr.file_path = fp;
+                fr.data_size = static_cast<uint32_t>(ds);
+                entries.push_back(DirEntry{
+                    .name = file_basename_lower(fp),
+                    .is_dir = false,
+                    .files = {fr},
+                });
             }
         } else {
-            // Subdir: child directories that contain files from this source.
-            // Extract the next path component after dir/ from dirs that have
-            // source-matching files and whose path starts with dir/.
-            {
-                auto prefix = dir + "/";
-                SqliteStmt stmt(impl_->db,
-                    "SELECT DISTINCT child_name FROM ("
-                    "  SELECT"
-                    "    CASE WHEN INSTR(SUBSTR(d.path, LENGTH(?1) + 2), '/') > 0"
-                    "      THEN SUBSTR(d.path, LENGTH(?1) + 2,"
-                    "           INSTR(SUBSTR(d.path, LENGTH(?1) + 2), '/') - 1)"
-                    "      ELSE SUBSTR(d.path, LENGTH(?1) + 2) END AS child_name"
-                    "  FROM files f"
-                    "  JOIN pbos p ON f.pbo_id = p.id"
-                    "  JOIN dirs d ON f.dir_id = d.id"
-                    "  WHERE p.source = ?2"
-                    "    AND d.path LIKE ?3"
-                    ") WHERE child_name != ''"
-                    " ORDER BY child_name");
-                stmt.bind_text(1, dir);
-                stmt.bind_text(2, source);
-                stmt.bind_text(3, prefix + "%");
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* name = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    if (name && name[0] != '\0')
-                        entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+            auto prefix = dir + "/";
+            SqliteStmt stmt(impl_->db,
+                "SELECT kind, name, pbo_path, prefix, file_path, data_size FROM ("
+                "  SELECT 0 AS kind, child_name AS name,"
+                "         '' AS pbo_path, '' AS prefix, '' AS file_path, 0 AS data_size"
+                "  FROM ("
+                "    SELECT DISTINCT"
+                "      CASE WHEN INSTR(SUBSTR(d.path, LENGTH(?1) + 2), '/') > 0"
+                "        THEN SUBSTR(d.path, LENGTH(?1) + 2,"
+                "             INSTR(SUBSTR(d.path, LENGTH(?1) + 2), '/') - 1)"
+                "        ELSE SUBSTR(d.path, LENGTH(?1) + 2) END AS child_name"
+                "    FROM files f"
+                "    JOIN pbos p ON f.pbo_id = p.id"
+                "    JOIN dirs d ON f.dir_id = d.id"
+                "    WHERE p.source = ?2"
+                "      AND d.path LIKE ?3"
+                "  ) WHERE child_name != ''"
+                "  UNION ALL"
+                "  SELECT 1 AS kind, f.path AS name,"
+                "         p.path AS pbo_path, p.prefix AS prefix,"
+                "         f.path AS file_path, f.data_size AS data_size"
+                "  FROM files f JOIN pbos p ON f.pbo_id = p.id"
+                "  JOIN dirs d ON f.dir_id = d.id"
+                "  WHERE d.path = ?1 AND p.source = ?2"
+                ") ORDER BY kind, name"
+                " LIMIT ?4 OFFSET ?5");
+            stmt.bind_text(1, dir);
+            stmt.bind_text(2, source);
+            stmt.bind_text(3, prefix + "%");
+            stmt.bind_int64(4, sql_limit);
+            stmt.bind_int64(5, sql_offset);
+            while (stmt.step() == SQLITE_ROW) {
+                int kind = sqlite3_column_int(stmt.get(), 0);
+                const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 1));
+                if (!name) continue;
+                if (kind == 0) {
+                    entries.push_back(DirEntry{.name = name, .is_dir = true, .files = {}});
+                    continue;
                 }
-            }
-            // Subdir: files in this directory from this source
-            {
-                SqliteStmt stmt(impl_->db,
-                    "SELECT p.path, p.prefix, f.path, f.data_size"
-                    " FROM files f JOIN pbos p ON f.pbo_id = p.id"
-                    " JOIN dirs d ON f.dir_id = d.id"
-                    " WHERE d.path = ?1 AND p.source = ?2"
-                    " ORDER BY f.path");
-                stmt.bind_text(1, dir);
-                stmt.bind_text(2, source);
-                while (stmt.step() == SQLITE_ROW) {
-                    const char* pp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 0));
-                    const char* pfx = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 1));
-                    const char* fp = reinterpret_cast<const char*>(
-                        sqlite3_column_text(stmt.get(), 2));
-                    int ds = sqlite3_column_int(stmt.get(), 3);
-                    if (!fp) continue;
-
-                    FindResult fr;
-                    fr.pbo_path = pp ? pp : "";
-                    fr.prefix = pfx ? pfx : "";
-                    fr.file_path = fp;
-                    fr.data_size = static_cast<uint32_t>(ds);
-                    entries.push_back(DirEntry{
-                        .name = file_basename_lower(fp),
-                        .is_dir = false,
-                        .files = {fr},
-                    });
-                }
+                const char* pp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 2));
+                const char* pfx = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 3));
+                const char* fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 4));
+                int ds = sqlite3_column_int(stmt.get(), 5);
+                if (!fp) continue;
+                FindResult fr;
+                fr.pbo_path = pp ? pp : "";
+                fr.prefix = pfx ? pfx : "";
+                fr.file_path = fp;
+                fr.data_size = static_cast<uint32_t>(ds);
+                entries.push_back(DirEntry{
+                    .name = file_basename_lower(fp),
+                    .is_dir = false,
+                    .files = {fr},
+                });
             }
         }
     } else {
         // No dirs table: fall back to unfiltered list_dir
-        return list_dir(dir);
+        return list_dir(dir, limit, offset);
     }
-
-    std::sort(entries.begin(), entries.end(), [](const DirEntry& a, const DirEntry& b) {
-        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
-        return a.name < b.name;
-    });
 
     return entries;
 }

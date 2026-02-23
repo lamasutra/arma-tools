@@ -8,6 +8,7 @@
 #include <armatools/ogg.h>
 #include <armatools/p3d.h>
 #include <armatools/paa.h>
+#include <armatools/rvmat.h>
 #include <armatools/wss.h>
 
 #include <algorithm>
@@ -31,7 +32,7 @@ std::string TabAssetBrowser::icon_for_extension(const std::string& ext) {
     if (lower == ".paa" || lower == ".pac")        return "image-x-generic-symbolic";
     if (lower == ".ogg" || lower == ".wss" ||
         lower == ".wav")                           return "audio-x-generic-symbolic";
-    if (lower == ".bin" || lower == ".cpp" ||
+    if (lower == ".bin" || lower == ".rvmat" || lower == ".cpp" ||
         lower == ".hpp")                           return "text-x-generic-symbolic";
     if (lower == ".sqf" || lower == ".sqs")        return "text-x-script-symbolic";
     if (lower == ".wrp")                           return "x-office-address-book-symbolic";
@@ -79,6 +80,10 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     list_scroll_.set_vexpand(true);
     list_scroll_.set_child(dir_list_);
+    if (auto adj = list_scroll_.get_vadjustment()) {
+        scroll_value_conn_ = adj->signal_value_changed().connect(
+            sigc::mem_fun(*this, &TabAssetBrowser::try_load_next_page));
+    }
     left_box_.append(list_scroll_);
 
     status_label_.set_halign(Gtk::Align::START);
@@ -221,6 +226,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
 TabAssetBrowser::~TabAssetBrowser() {
     if (pbo_index_service_) pbo_index_service_->unsubscribe(this);
+    if (scroll_value_conn_.connected()) scroll_value_conn_.disconnect();
     audio_stop_all();
     ++nav_generation_; // cancel any pending navigate
     if (nav_thread_.joinable()) nav_thread_.join();
@@ -565,26 +571,58 @@ void TabAssetBrowser::on_search() {
     if (pattern.empty()) return;
 
     unsigned gen = ++nav_generation_;
+    browse_is_search_ = true;
+    active_search_pattern_ = pattern;
+    has_more_results_ = true;
+    loading_more_results_ = false;
+    current_offset_ = 0;
     status_label_.set_text("Searching...");
     search_button_.set_sensitive(false);
+    load_next_search_page(gen, true);
+}
+
+void TabAssetBrowser::navigate(const std::string& path) {
+    if (!db_) return;
+
+    current_path_ = path;
+    browse_is_search_ = false;
+    has_more_results_ = true;
+    loading_more_results_ = false;
+    current_offset_ = 0;
+    breadcrumb_label_.set_text(path.empty() ? "/" : path);
+    status_label_.set_text("Loading...");
+    unsigned gen = ++nav_generation_;
+    load_next_directory_page(gen, true);
+}
+
+void TabAssetBrowser::load_next_search_page(unsigned gen, bool reset) {
+    if (!cfg_ || loading_more_results_ || !has_more_results_) return;
+    loading_more_results_ = true;
+    status_label_.set_text(reset ? "Searching..." : "Loading more...");
 
     if (nav_thread_.joinable()) nav_thread_.detach();
 
     auto db_path = cfg_->a3db_path;
     auto source = current_source_;
-    nav_thread_ = std::thread([this, db_path, pattern, source, gen]() {
+    auto pattern = active_search_pattern_;
+    auto offset = current_offset_;
+    nav_thread_ = std::thread([this, db_path, source, pattern, offset, gen, reset]() {
         try {
             auto db = armatools::pboindex::DB::open(db_path);
-            auto results = db.find_files(pattern, source);
+            auto results = db.find_files(pattern, source, kPageSize, offset);
             Glib::signal_idle().connect_once(
-                [this, pattern, source, results = std::move(results), gen]() {
+                [this, pattern, source, results = std::move(results), gen, reset]() mutable {
                     if (gen != nav_generation_.load()) return;
+                    has_more_results_ = results.size() == kPageSize;
+                    append_search_results_page(results, reset);
+                    current_offset_ += results.size();
+                    loading_more_results_ = false;
+                    status_label_.set_text(has_more_results_ ? "Scroll to load more..." : "");
+                    search_button_.set_sensitive(true);
                     app_log(LogLevel::Info, "Search '" + pattern + "'" +
                         (source.empty() ? "" : " [" + source + "]") +
-                        ": " + std::to_string(results.size()) + " results");
-                    show_search_results(results);
-                    status_label_.set_text("");
-                    search_button_.set_sensitive(true);
+                        ": loaded " + std::to_string(search_results_.size()) +
+                        (has_more_results_ ? "+" : "") + " results");
                 });
         } catch (const std::exception& e) {
             auto msg = std::string(e.what());
@@ -592,53 +630,40 @@ void TabAssetBrowser::on_search() {
                 if (gen != nav_generation_.load()) return;
                 app_log(LogLevel::Error, "Search error: " + msg);
                 status_label_.set_text("Search error: " + msg);
+                loading_more_results_ = false;
                 search_button_.set_sensitive(true);
             });
         }
     });
 }
 
-void TabAssetBrowser::navigate(const std::string& path) {
-    if (!db_) return;
-
-    current_path_ = path;
-    breadcrumb_label_.set_text(path.empty() ? "/" : path);
-
-    // Unfiltered queries are fast — run synchronously.
-    if (current_source_.empty()) {
-        try {
-            auto entries = db_->list_dir(path);
-            populate_list(entries);
-        } catch (const std::exception& e) {
-            app_log(LogLevel::Error, std::string("Navigate error: ") + e.what());
-            status_label_.set_text(std::string("Navigate error: ") + e.what());
-        }
-        return;
-    }
-
-    // Source-filtered queries can be slow — run in background thread.
-    unsigned gen = ++nav_generation_;
-    status_label_.set_text("Loading...");
-
-    // Clear the list immediately so user sees feedback.
-    dir_list_.set_visible(false);
-    dir_list_.unselect_all();
-    while (auto* row = dir_list_.get_row_at_index(0))
-        dir_list_.remove(*row);
-    dir_list_.set_visible(true);
+void TabAssetBrowser::load_next_directory_page(unsigned gen, bool reset) {
+    if (!cfg_ || loading_more_results_ || !has_more_results_) return;
+    loading_more_results_ = true;
+    status_label_.set_text(reset ? "Loading..." : "Loading more...");
 
     if (nav_thread_.joinable()) nav_thread_.detach();
 
     auto db_path = cfg_->a3db_path;
     auto source = current_source_;
-    nav_thread_ = std::thread([this, db_path, path, source, gen]() {
+    auto path = current_path_;
+    auto offset = current_offset_;
+    nav_thread_ = std::thread([this, db_path, source, path, offset, gen, reset]() {
         try {
             auto db = armatools::pboindex::DB::open(db_path);
-            auto entries = db.list_dir_for_source(path, source);
-            Glib::signal_idle().connect_once([this, entries = std::move(entries), gen]() {
-                if (gen != nav_generation_.load()) return; // stale
-                populate_list(entries);
-                status_label_.set_text("");
+            std::vector<armatools::pboindex::DirEntry> entries;
+            if (source.empty()) {
+                entries = db.list_dir(path, kPageSize, offset);
+            } else {
+                entries = db.list_dir_for_source(path, source, kPageSize, offset);
+            }
+            Glib::signal_idle().connect_once([this, entries = std::move(entries), gen, reset]() mutable {
+                if (gen != nav_generation_.load()) return;
+                append_directory_page(entries, reset);
+                current_offset_ += entries.size();
+                has_more_results_ = entries.size() == kPageSize;
+                loading_more_results_ = false;
+                status_label_.set_text(has_more_results_ ? "Scroll to load more..." : "");
             });
         } catch (const std::exception& e) {
             auto msg = std::string(e.what());
@@ -646,33 +671,37 @@ void TabAssetBrowser::navigate(const std::string& path) {
                 if (gen != nav_generation_.load()) return;
                 app_log(LogLevel::Error, "Navigate error: " + msg);
                 status_label_.set_text("Navigate error: " + msg);
+                loading_more_results_ = false;
             });
         }
     });
 }
 
-void TabAssetBrowser::populate_list(
-    const std::vector<armatools::pboindex::DirEntry>& entries) {
-    // Hide list during bulk modification to avoid layout recalculation per row
-    dir_list_.set_visible(false);
-    search_results_.clear();
-    dir_list_.unselect_all();
-    while (auto* row = dir_list_.get_row_at_index(0))
-        dir_list_.remove(*row);
+void TabAssetBrowser::append_directory_page(
+    const std::vector<armatools::pboindex::DirEntry>& entries,
+    bool reset) {
+    if (reset) {
+        dir_list_.set_visible(false);
+        search_results_.clear();
+        current_entries_.clear();
+        dir_list_.unselect_all();
+        while (auto* row = dir_list_.get_row_at_index(0))
+            dir_list_.remove(*row);
 
-    // ".." entry if not at root
-    if (!current_path_.empty()) {
-        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
-        auto* icon = Gtk::make_managed<Gtk::Image>();
-        icon->set_from_icon_name("go-up-symbolic");
-        auto* label = Gtk::make_managed<Gtk::Label>("..");
-        label->set_halign(Gtk::Align::START);
-        box->append(*icon);
-        box->append(*label);
-        dir_list_.append(*box);
+        if (!current_path_.empty()) {
+            auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+            auto* icon = Gtk::make_managed<Gtk::Image>();
+            icon->set_from_icon_name("go-up-symbolic");
+            auto* label = Gtk::make_managed<Gtk::Label>("..");
+            label->set_halign(Gtk::Align::START);
+            box->append(*icon);
+            box->append(*label);
+            dir_list_.append(*box);
+        }
     }
 
     for (const auto& entry : entries) {
+        current_entries_.push_back(entry);
         auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
         auto* icon = Gtk::make_managed<Gtk::Image>();
         if (entry.is_dir) {
@@ -700,26 +729,52 @@ void TabAssetBrowser::populate_list(
     dir_list_.set_visible(true);
 }
 
-void TabAssetBrowser::show_search_results(
-    const std::vector<armatools::pboindex::FindResult>& results) {
-    // Cache results so we don't need to re-query on selection
-    search_results_ = results;
-
-    // Clear (unselect first to avoid auto-selection overhead during removal)
-    dir_list_.unselect_all();
-    while (auto* row = dir_list_.get_row_at_index(0))
-        dir_list_.remove(*row);
-
-    current_path_.clear();
-    breadcrumb_label_.set_text("Search results: " + std::to_string(results.size()) + " files");
+void TabAssetBrowser::append_search_results_page(
+    const std::vector<armatools::pboindex::FindResult>& results,
+    bool reset) {
+    if (reset) {
+        search_results_.clear();
+        current_entries_.clear();
+        dir_list_.unselect_all();
+        while (auto* row = dir_list_.get_row_at_index(0))
+            dir_list_.remove(*row);
+        current_path_.clear();
+    }
 
     for (const auto& r : results) {
+        search_results_.push_back(r);
         auto display = r.prefix + "/" + r.file_path;
         auto* label = Gtk::make_managed<Gtk::Label>(display);
         label->set_halign(Gtk::Align::START);
         label->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
         dir_list_.append(*label);
     }
+
+    breadcrumb_label_.set_text("Search results: " +
+                               std::to_string(search_results_.size()) +
+                               (has_more_results_ ? "+" : "") + " files");
+}
+
+void TabAssetBrowser::try_load_next_page() {
+    if (!has_more_results_ || loading_more_results_) return;
+    auto adj = list_scroll_.get_vadjustment();
+    if (!adj) return;
+    double bottom = adj->get_value() + adj->get_page_size();
+    if ((adj->get_upper() - bottom) > 120.0) return;
+
+    unsigned gen = nav_generation_.load();
+    if (browse_is_search_) load_next_search_page(gen, false);
+    else load_next_directory_page(gen, false);
+}
+
+void TabAssetBrowser::populate_list(
+    const std::vector<armatools::pboindex::DirEntry>& entries) {
+    append_directory_page(entries, true);
+}
+
+void TabAssetBrowser::show_search_results(
+    const std::vector<armatools::pboindex::FindResult>& results) {
+    append_search_results_page(results, true);
 }
 
 void TabAssetBrowser::on_row_activated(Gtk::ListBoxRow* row) {
@@ -750,24 +805,13 @@ void TabAssetBrowser::on_row_activated(Gtk::ListBoxRow* row) {
     }
 
     // Normal directory entry
-    try {
-        std::vector<armatools::pboindex::DirEntry> entries;
-        if (current_source_.empty()) {
-            entries = db_->list_dir(current_path_);
-        } else {
-            entries = db_->list_dir_for_source(current_path_, current_source_);
-        }
-        auto entry_idx = static_cast<size_t>(idx - offset);
-        if (entry_idx >= entries.size()) return;
-
-        const auto& entry = entries[entry_idx];
-        if (entry.is_dir) {
-            navigate(current_path_.empty() ? entry.name : current_path_ + "/" + entry.name);
-        } else if (!entry.files.empty()) {
-            show_file_info(entry.files[0]);
-        }
-    } catch (const std::exception& e) {
-        status_label_.set_text(std::string("Error: ") + e.what());
+    auto entry_idx = static_cast<size_t>(idx - offset);
+    if (entry_idx >= current_entries_.size()) return;
+    const auto& entry = current_entries_[entry_idx];
+    if (entry.is_dir) {
+        navigate(current_path_.empty() ? entry.name : current_path_ + "/" + entry.name);
+    } else if (!entry.files.empty()) {
+        show_file_info(entry.files[0]);
     }
 }
 
@@ -797,6 +841,8 @@ void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file
         preview_paa(file);
     } else if (ext == ".ogg" || ext == ".wss" || ext == ".wav") {
         preview_audio(file);
+    } else if (ext == ".rvmat") {
+        preview_rvmat(file);
     } else if (ext == ".bin") {
         preview_config(file);
     } else if (ext == ".jpg" || ext == ".jpeg") {
@@ -899,6 +945,60 @@ void TabAssetBrowser::preview_config(const armatools::pboindex::FindResult& file
     }
 }
 
+void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file) {
+    try {
+        auto data = extract_from_pbo_file(file);
+        if (data.empty()) {
+            info_view_.get_buffer()->set_text("Could not extract file from PBO.");
+            return;
+        }
+
+        std::string str(data.begin(), data.end());
+        std::istringstream stream(str, std::ios::binary);
+
+        armatools::config::Config cfg;
+        if (data.size() >= 4 && data[0] == 0x00 &&
+            data[1] == 'r' && data[2] == 'a' && data[3] == 'P') {
+            cfg = armatools::config::read(stream);
+        } else {
+            cfg = armatools::config::parse_text(stream);
+        }
+
+        auto mat = armatools::rvmat::parse(cfg);
+
+        auto fmt_rgba = [](const std::array<float, 4>& c) {
+            std::ostringstream s;
+            s << std::fixed << std::setprecision(3)
+              << c[0] << ", " << c[1] << ", " << c[2] << ", " << c[3];
+            return s.str();
+        };
+
+        std::ostringstream out;
+        out << "Type: RVMAT\n"
+            << "Pixel shader: " << (mat.pixel_shader.empty() ? "-" : mat.pixel_shader) << "\n"
+            << "Vertex shader: " << (mat.vertex_shader.empty() ? "-" : mat.vertex_shader) << "\n"
+            << "Surface: " << (mat.surface.empty() ? "-" : mat.surface) << "\n"
+            << "Specular power: " << mat.specular_power << "\n"
+            << "Ambient: " << fmt_rgba(mat.ambient) << "\n"
+            << "Diffuse: " << fmt_rgba(mat.diffuse) << "\n"
+            << "ForcedDiffuse: " << fmt_rgba(mat.forced_diffuse) << "\n"
+            << "Emissive: " << fmt_rgba(mat.emissive) << "\n"
+            << "Specular: " << fmt_rgba(mat.specular) << "\n"
+            << "Stages: " << mat.stages.size() << "\n";
+
+        for (const auto& st : mat.stages) {
+            out << "  Stage" << st.stage_number
+                << " texture: " << (st.texture_path.empty() ? "-" : st.texture_path) << "\n"
+                << "  Stage" << st.stage_number
+                << " uvSource: " << (st.uv_source.empty() ? "-" : st.uv_source) << "\n";
+        }
+
+        info_view_.get_buffer()->set_text(out.str());
+    } catch (const std::exception& e) {
+        info_view_.get_buffer()->set_text(std::string("RVMAT error: ") + e.what());
+    }
+}
+
 void TabAssetBrowser::preview_jpg(const armatools::pboindex::FindResult& file) {
     try {
         auto data = extract_from_pbo_file(file);
@@ -973,19 +1073,12 @@ bool TabAssetBrowser::get_selected_file(armatools::pboindex::FindResult& out) {
         return true;
     } else {
         int offset = current_path_.empty() ? 0 : 1;
-        try {
-            std::vector<armatools::pboindex::DirEntry> entries;
-            if (current_source_.empty()) {
-                entries = db_->list_dir(current_path_);
-            } else {
-                entries = db_->list_dir_for_source(current_path_, current_source_);
-            }
-            auto entry_idx = static_cast<size_t>(idx - offset);
-            if (entry_idx >= entries.size()) return false;
-            if (entries[entry_idx].is_dir || entries[entry_idx].files.empty()) return false;
-            out = entries[entry_idx].files[0];
-            return true;
-        } catch (...) { return false; }
+        auto entry_idx = static_cast<size_t>(idx - offset);
+        if (entry_idx >= current_entries_.size()) return false;
+        if (current_entries_[entry_idx].is_dir || current_entries_[entry_idx].files.empty())
+            return false;
+        out = current_entries_[entry_idx].files[0];
+        return true;
     }
 }
 

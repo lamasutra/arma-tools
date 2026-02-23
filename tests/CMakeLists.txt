@@ -13,3 +13,4 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/libs/lzss/test ${CMAKE_CURRENT_BINARY_DIR}/
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/lzo/test ${CMAKE_CURRENT_BINARY_DIR}/lzo_test)
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/pbo/test ${CMAKE_CURRENT_BINARY_DIR}/pbo_test)
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/heightpipe/test ${CMAKE_CURRENT_BINARY_DIR}/heightpipe_test)
+add_subdirectory(${CMAKE_SOURCE_DIR}/libs/rvmat/test ${CMAKE_CURRENT_BINARY_DIR}/rvmat_test)

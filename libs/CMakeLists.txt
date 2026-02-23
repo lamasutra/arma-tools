@@ -22,6 +22,7 @@ add_subdirectory(paa)
 add_subdirectory(wrp)
 add_subdirectory(p3d)
 add_subdirectory(console_unicode)
+add_subdirectory(rvmat)
 
 # Layer 3: depends on 0+1+2
 add_subdirectory(roadnet)

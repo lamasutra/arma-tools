@@ -143,14 +143,18 @@ static void do_update(Config cfg, bool on_demand) {
     }
 }
 
-static void do_find(const std::string& db_path, const std::string& pattern, bool pretty) {
+static void do_find(const std::string& db_path,
+                    const std::string& pattern,
+                    bool pretty,
+                    size_t limit,
+                    size_t offset) {
     if (db_path.empty()) {
         std::cerr << "Error: -db is required for -find.\n";
         return;
     }
 
     auto db = armatools::pboindex::DB::open(db_path);
-    auto results = db.find_files(pattern);
+    auto results = db.find_files(pattern, "", limit, offset);
 
     json arr = json::array();
     for (const auto& r : results) {
@@ -164,7 +168,9 @@ static void do_find(const std::string& db_path, const std::string& pattern, bool
 
     if (pretty) std::cout << std::setw(2) << arr << '\n';
     else std::cout << arr << '\n';
-    std::cerr << "Found " << results.size() << " matches\n";
+    std::cerr << "Found " << results.size() << " matches";
+    if (limit > 0) std::cerr << " (page limit=" << limit << ", offset=" << offset << ")";
+    std::cerr << "\n";
 }
 
 static void do_info(const std::string& db_path) {
@@ -217,6 +223,8 @@ static void print_usage() {
               << "  -db <path>        Database file path\n"
               << "  -ondemand         Skip eager P3D/PAA/audio parsing\n"
               << "  -find <pattern>   Find files matching glob pattern\n"
+              << "  -limit <n>        Max rows for -find (0 = no limit)\n"
+              << "  -offset <n>       Row offset for -find pagination\n"
               << "  -info             Show database statistics\n"
               << "  -update           Incremental update\n"
               << "  --pretty          Pretty-print JSON output (for -find)\n";
@@ -235,6 +243,8 @@ int main(int argc, char* argv[]) {
     bool info_flag = false;
     bool update_flag = false;
     bool pretty = false;
+    size_t find_limit = 0;
+    size_t find_offset = 0;
     std::vector<std::string> positional;
 
     for (int i = 1; i < argc; i++) {
@@ -250,6 +260,10 @@ int main(int argc, char* argv[]) {
         else if (std::strcmp(argv[i], "-info") == 0) info_flag = true;
         else if (std::strcmp(argv[i], "-update") == 0) update_flag = true;
         else if (std::strcmp(argv[i], "--pretty") == 0) pretty = true;
+        else if (std::strcmp(argv[i], "-limit") == 0 && i + 1 < argc)
+            find_limit = static_cast<size_t>(std::stoull(argv[++i]));
+        else if (std::strcmp(argv[i], "-offset") == 0 && i + 1 < argc)
+            find_offset = static_cast<size_t>(std::stoull(argv[++i]));
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage();
             return 0;
@@ -283,7 +297,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!find_pattern.empty()) {
-        do_find(cfg.db, find_pattern, pretty);
+        do_find(cfg.db, find_pattern, pretty, find_limit, find_offset);
     } else if (info_flag) {
         do_info(cfg.db);
     } else if (update_flag) {

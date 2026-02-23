@@ -5,6 +5,18 @@ p3d_info \- extract structured metadata from P3D files
 .B p3d_info
 .RI [ flags ]
 .RI [ input.p3d ]
+.br
+.B p3d_info
+.B --rvmat
+.I material.rvmat
+.RI [ --pretty ]
+.br
+.B p3d_info
+.B --materials
+.I model.p3d
+.RI [ --db\  a3.db ]
+.RI [ --drive-root\  path ]
+.RI [ --pretty ]
 .SH DESCRIPTION
 .B p3d_info
 parses ODOL and MLOD model files and outputs JSON metadata.
@@ -21,10 +33,32 @@ Pretty-print JSON output.
 --json
 Write JSON to stdout instead of files.
 .TP
+.B
+--rvmat \fIpath\fR
+Parse one RVMAT file and print material JSON to stdout.
+.TP
+.B
+--materials \fImodel.p3d\fR
+Parse a model and list all referenced RVMATs with resolved properties.
+.TP
+.B
+--db \fIpath\fR
+Use A3DB to resolve model/material paths inside PBOs.
+.TP
+.B
+--drive-root \fIpath\fR
+Use this disk root for case-insensitive virtual-path fallback (for example
+.BR P: ).
+.TP
 .BR -h , " --help"
 Show help.
 .SH OUTPUT
-When writing files, output is stored in
+In default P3D mode, when writing files, output is stored in
 .BR <input>_p3d_info/p3d.json .
+In
+.B --rvmat
+and
+.B --materials
+modes, JSON is always written to stdout.
 .SH SEE ALSO
 .BR p3d_odol2mlod (1)

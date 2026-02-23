@@ -66,6 +66,7 @@ target_link_libraries(arma-tools PRIVATE
     armatools::wrp
     armatools::pbo
     armatools::p3d
+    armatools::rvmat
     armatools::ogg
     armatools::wss
     armatools::tga

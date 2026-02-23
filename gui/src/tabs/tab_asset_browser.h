@@ -12,6 +12,7 @@
 #include <atomic>
 #include <gtkmm.h>
 #include <memory>
+#include <sigc++/connection.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +33,14 @@ private:
     std::shared_ptr<armatools::pboindex::Index> index_;
     std::string current_path_;
     std::vector<armatools::pboindex::FindResult> search_results_;
+    std::vector<armatools::pboindex::DirEntry> current_entries_;
+    std::string active_search_pattern_;
+    bool browse_is_search_ = false;
+    bool has_more_results_ = false;
+    bool loading_more_results_ = false;
+    size_t current_offset_ = 0;
+    static constexpr size_t kPageSize = 500;
+    sigc::connection scroll_value_conn_;
 
     // --- Audio state ---
     AudioEngine audio_engine_;
@@ -111,11 +120,19 @@ private:
     void navigate(const std::string& path);
     void populate_list(const std::vector<armatools::pboindex::DirEntry>& entries);
     void show_search_results(const std::vector<armatools::pboindex::FindResult>& results);
+    void append_search_results_page(const std::vector<armatools::pboindex::FindResult>& results,
+                                    bool reset);
+    void append_directory_page(const std::vector<armatools::pboindex::DirEntry>& entries,
+                               bool reset);
+    void load_next_search_page(unsigned gen, bool reset);
+    void load_next_directory_page(unsigned gen, bool reset);
+    void try_load_next_page();
     void show_file_info(const armatools::pboindex::FindResult& file);
     void preview_p3d(const armatools::pboindex::FindResult& file);
     void preview_paa(const armatools::pboindex::FindResult& file);
     void preview_audio(const armatools::pboindex::FindResult& file);
     void preview_config(const armatools::pboindex::FindResult& file);
+    void preview_rvmat(const armatools::pboindex::FindResult& file);
     void preview_jpg(const armatools::pboindex::FindResult& file);
     void preview_text(const armatools::pboindex::FindResult& file);
 
