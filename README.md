@@ -145,3 +145,9 @@ Defaults:
 ```bash
 make clean
 ```
+
+## GUI Material Preview
+
+RVMat and model material preview behavior is documented in:
+
+- `docs/gui-material-preview.md`

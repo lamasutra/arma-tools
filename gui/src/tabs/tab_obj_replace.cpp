@@ -463,6 +463,20 @@ void TabObjReplace::set_pbo_index_service(const std::shared_ptr<PboIndexService>
     pbo_index_service_ = service;
 }
 
+void TabObjReplace::set_model_loader_service(
+    const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_loader_shared_ = service;
+    left_model_panel_.set_model_loader_service(service);
+    right_model_panel_.set_model_loader_service(service);
+}
+
+void TabObjReplace::set_texture_loader_service(
+    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    texture_loader_shared_ = service;
+    left_model_panel_.set_texture_loader_service(service);
+    right_model_panel_.set_texture_loader_service(service);
+}
+
 void TabObjReplace::set_config(Config* cfg) {
     cfg_ = cfg;
     db_.reset();
@@ -470,8 +484,12 @@ void TabObjReplace::set_config(Config* cfg) {
 
     left_model_panel_.set_config(cfg_);
     left_model_panel_.set_pboindex(nullptr, nullptr);
+    left_model_panel_.set_model_loader_service(model_loader_shared_);
+    left_model_panel_.set_texture_loader_service(texture_loader_shared_);
     right_model_panel_.set_config(cfg_);
     right_model_panel_.set_pboindex(nullptr, nullptr);
+    right_model_panel_.set_model_loader_service(model_loader_shared_);
+    right_model_panel_.set_texture_loader_service(texture_loader_shared_);
 
     // Restore last-used paths
     if (cfg_) {
@@ -1241,6 +1259,11 @@ void TabObjReplace::load_p3d_into_panel(ModelViewPanel& panel, Gtk::Label& label
     label.set_text(model_path);
 
     if (model_path.empty()) return;
+    if (!model_loader_shared_) {
+        app_log(LogLevel::Warning, "ObjReplace: model loader service not configured");
+        label.set_text(model_path + " (model loader not configured)");
+        return;
+    }
 
     auto maybe_auto_extract = [this](const auto& p3d) {
         if (!auto_extract_textures_check_.get_active()) return;
@@ -1251,86 +1274,14 @@ void TabObjReplace::load_p3d_into_panel(ModelViewPanel& panel, Gtk::Label& label
         }
         enqueue_auto_extract_textures(textures);
     };
-
-    // Try pboindex resolve first (proper prefix-based resolution)
-    if (index_) {
-        armatools::pboindex::ResolveResult rr;
-        if (index_->resolve(model_path, rr)) {
-            app_log(LogLevel::Debug, "ObjReplace: resolved " + model_path
-                    + " -> " + rr.pbo_path + " : " + rr.entry_name);
-            auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
-            if (!data.empty()) {
-                try {
-                    std::string buf(reinterpret_cast<const char*>(data.data()), data.size());
-                    std::istringstream iss(buf, std::ios::binary);
-                    auto p3d = armatools::p3d::read(iss);
-                    if (!p3d.lods.empty()) {
-                        maybe_auto_extract(p3d);
-                        panel.show_lod(p3d.lods[0], model_path);
-                        return;
-                    }
-                } catch (const std::exception& e) {
-                    app_log(LogLevel::Warning, "P3D parse error (PBO): "
-                            + std::string(e.what()));
-                }
-            }
-        } else {
-            app_log(LogLevel::Debug, "ObjReplace: index could not resolve: " + model_path);
-        }
+    try {
+        auto p3d = model_loader_shared_->load_p3d(model_path);
+        maybe_auto_extract(p3d);
+        panel.load_p3d(model_path);
+    } catch (const std::exception& e) {
+        app_log(LogLevel::Warning, "ObjReplace preview load failed: " + std::string(e.what()));
+        label.set_text(model_path + " (not found)");
     }
-
-    // Fallback: try DB find_files with filename match
-    if (db_) {
-        auto normalized = armatools::armapath::to_slash_lower(model_path);
-        auto filename = fs::path(normalized).filename().string();
-        auto results = db_->find_files("*" + filename);
-        for (const auto& r : results) {
-            auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
-            if (full == normalized || full.ends_with("/" + normalized)) {
-                auto data = extract_from_pbo(r.pbo_path, r.file_path);
-                if (!data.empty()) {
-                    try {
-                        std::string buf(reinterpret_cast<const char*>(data.data()), data.size());
-                        std::istringstream iss(buf, std::ios::binary);
-                        auto p3d = armatools::p3d::read(iss);
-                        if (!p3d.lods.empty()) {
-                            maybe_auto_extract(p3d);
-                            panel.show_lod(p3d.lods[0], model_path);
-                            return;
-                        }
-                    } catch (const std::exception& e) {
-                        app_log(LogLevel::Warning, "P3D parse error (find_files): "
-                                + std::string(e.what()));
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback: disk via case-insensitive path resolution
-    if (cfg_ && !cfg_->drive_root.empty()) {
-        auto resolved = armatools::armapath::find_file_ci(
-            fs::path(cfg_->drive_root), model_path);
-        if (resolved) {
-            try {
-                std::ifstream f(resolved->string(), std::ios::binary);
-                if (f.is_open()) {
-                    auto p3d = armatools::p3d::read(f);
-                    if (!p3d.lods.empty()) {
-                        maybe_auto_extract(p3d);
-                        panel.show_lod(p3d.lods[0], model_path);
-                        return;
-                    }
-                }
-            } catch (const std::exception& e) {
-                app_log(LogLevel::Warning, "P3D parse error (disk): "
-                        + std::string(e.what()));
-            }
-        }
-    }
-
-    app_log(LogLevel::Debug, "ObjReplace: model not found: " + model_path);
-    label.set_text(model_path + " (not found)");
 }
 
 // -- Camera sync --
@@ -1409,6 +1360,8 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
     auto* old_panel = Gtk::make_managed<ModelViewPanel>();
     old_panel->set_config(cfg_);
     old_panel->set_pboindex(db_.get(), index_.get());
+    old_panel->set_model_loader_service(model_loader_shared_);
+    old_panel->set_texture_loader_service(texture_loader_shared_);
     old_panel->set_vexpand(true);
     old_panel->set_hexpand(true);
     left_box->append(*old_panel);
@@ -1506,6 +1459,8 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
     auto* new_panel = Gtk::make_managed<ModelViewPanel>();
     new_panel->set_config(cfg_);
     new_panel->set_pboindex(db_.get(), index_.get());
+    new_panel->set_model_loader_service(model_loader_shared_);
+    new_panel->set_texture_loader_service(texture_loader_shared_);
     new_panel->set_vexpand(true);
     new_panel->set_hexpand(true);
     new_preview_box->append(*new_panel);
@@ -1666,34 +1621,11 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
         state->selected_p3d_path = full_path;
         new_path_label->set_text(full_path);
         apply_btn->set_sensitive(true);
-        new_panel->clear();
-
         unsigned gen = ++state->preview_gen;
-        auto pbo_path = file.pbo_path;
-        auto file_path = file.file_path;
-        std::thread([state, gen, new_panel, pbo_path, file_path, full_path]() {
-            auto data = extract_from_pbo(pbo_path, file_path);
-            if (data.empty()) return;
-            try {
-                std::string buf(reinterpret_cast<const char*>(data.data()), data.size());
-                std::istringstream iss(buf, std::ios::binary);
-                auto p3d = armatools::p3d::read(iss);
-                if (!p3d.lods.empty()) {
-                    auto lod = std::make_shared<armatools::p3d::LOD>(std::move(p3d.lods[0]));
-                    Glib::signal_idle().connect_once(
-                        [state, gen, new_panel, lod, full_path]() {
-                            if (!state->alive || gen != state->preview_gen.load()) return;
-                            new_panel->show_lod(*lod, full_path);
-                        });
-                }
-            } catch (const std::exception& e) {
-                auto msg = std::string(e.what());
-                Glib::signal_idle().connect_once([state, gen, msg]() {
-                    if (!state->alive) return;
-                    app_log(LogLevel::Warning, "Edit dialog P3D parse error: " + msg);
-                });
-            }
-        }).detach();
+        Glib::signal_idle().connect_once([state, gen, new_panel, full_path]() {
+            if (!state->alive || gen != state->preview_gen.load()) return;
+            new_panel->load_p3d(full_path);
+        });
     };
 
     // Show search results in ListBox
@@ -1945,74 +1877,15 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
 
     // Helper: load a P3D model into a panel in a background thread.
     // Uses the Index for resolution (same logic as load_p3d_into_panel but async).
-    auto async_load_panel = [this, state](
+    auto async_load_panel = [state](
             ModelViewPanel* panel, Gtk::Label* label,
             const std::string& model_path) {
         if (model_path.empty()) return;
-
-        // Try index resolve
-        if (index_) {
-            armatools::pboindex::ResolveResult rr;
-            if (index_->resolve(model_path, rr)) {
-                auto pbo = rr.pbo_path;
-                auto entry_name = rr.entry_name;
-                std::thread([state, panel, label, pbo, entry_name, model_path]() {
-                    auto data = extract_from_pbo(pbo, entry_name);
-                    if (data.empty()) return;
-                    try {
-                        std::string buf(reinterpret_cast<const char*>(data.data()), data.size());
-                        std::istringstream iss(buf, std::ios::binary);
-                        auto p3d = armatools::p3d::read(iss);
-                        if (!p3d.lods.empty()) {
-                            auto lod = std::make_shared<armatools::p3d::LOD>(
-                                std::move(p3d.lods[0]));
-                            Glib::signal_idle().connect_once(
-                                [state, panel, lod, model_path]() {
-                                    if (!state->alive) return;
-                                    panel->show_lod(*lod, model_path);
-                                });
-                        }
-                    } catch (...) {}
-                }).detach();
-                return;
-            }
-        }
-
-        // Fallback: find_files with filename match
-        if (db_) {
-            auto normalized = armatools::armapath::to_slash_lower(model_path);
-            auto filename = fs::path(normalized).filename().string();
-            auto results = db_->find_files("*" + filename);
-            for (const auto& r : results) {
-                auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
-                if (full == normalized || full.ends_with("/" + normalized)) {
-                    auto pbo = r.pbo_path;
-                    auto fpath = r.file_path;
-                    std::thread([state, panel, label, pbo, fpath, model_path]() {
-                        auto data = extract_from_pbo(pbo, fpath);
-                        if (data.empty()) return;
-                        try {
-                            std::string buf(reinterpret_cast<const char*>(data.data()),
-                                            data.size());
-                            std::istringstream iss(buf, std::ios::binary);
-                            auto p3d = armatools::p3d::read(iss);
-                            if (!p3d.lods.empty()) {
-                                auto lod = std::make_shared<armatools::p3d::LOD>(
-                                    std::move(p3d.lods[0]));
-                                Glib::signal_idle().connect_once(
-                                    [state, panel, lod, model_path]() {
-                                        if (!state->alive) return;
-                                        panel->show_lod(*lod, model_path);
-                                    });
-                            }
-                        } catch (...) {}
-                    }).detach();
-                    return;
-                }
-            }
-        }
-
-        label->set_text(model_path + " (not found)");
+        Glib::signal_idle().connect_once([state, panel, label, model_path]() {
+            if (!state->alive) return;
+            panel->load_p3d(model_path);
+            label->set_text(model_path);
+        });
     };
 
     // Load old model preview (async)

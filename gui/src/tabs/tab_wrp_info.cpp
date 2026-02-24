@@ -3,28 +3,47 @@
 #include "pbo_util.h"
 
 #include <armatools/objcat.h>
+#include <armatools/paa.h>
 #include <armatools/p3d.h>
 #include <armatools/pboindex.h>
 #include <armatools/wrp.h>
 #include <armatools/armapath.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
 TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(scan_button_, "system-search-symbolic", "Scan/search WRP files");
+    make_icon_button(folder_button_, "document-open-symbolic", "Browse folder with WRP files");
+
     // Left panel: file scanner
     list_box_.set_margin(8);
     list_box_.set_size_request(180, -1);
 
+    source_combo_.set_tooltip_text("Filter by A3DB source");
+    source_combo_.append("", "All");
+    source_combo_.set_active_id("");
     filter_entry_.set_hexpand(true);
     filter_entry_.set_placeholder_text("Filter...");
+    filter_box_.append(source_label_);
+    filter_box_.append(source_combo_);
     filter_box_.append(filter_entry_);
     filter_box_.append(scan_button_);
     filter_box_.append(folder_button_);
@@ -53,6 +72,7 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     class_top_box_.append(class_status_label_);
 
     class_scroll_.set_vexpand(true);
+    class_list_.set_activate_on_single_click(false);
     class_scroll_.set_child(class_list_);
     class_top_box_.append(class_scroll_);
 
@@ -89,6 +109,29 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     right_notebook_.append_page(hm_box_, "Heightmap");
 
+    // Page 4: Terrain 3D
+    terrain3d_toolbar_.set_margin(4);
+    terrain3d_mode_combo_.append("elevation", "Elevation");
+    terrain3d_mode_combo_.append("surface", "Surface Mask");
+    terrain3d_mode_combo_.append("texture", "Texture Index");
+    terrain3d_mode_combo_.append("satellite", "Satellite");
+    terrain3d_mode_combo_.set_active_id("elevation");
+    terrain3d_wireframe_btn_.set_active(false);
+    terrain3d_objects_btn_.set_active(true);
+    terrain3d_status_label_.set_halign(Gtk::Align::START);
+    terrain3d_status_label_.set_hexpand(true);
+    terrain3d_status_label_.set_text("Load a WRP to preview terrain");
+    terrain3d_toolbar_.append(terrain3d_mode_label_);
+    terrain3d_toolbar_.append(terrain3d_mode_combo_);
+    terrain3d_toolbar_.append(terrain3d_wireframe_btn_);
+    terrain3d_toolbar_.append(terrain3d_objects_btn_);
+    terrain3d_toolbar_.append(terrain3d_status_label_);
+    terrain3d_box_.append(terrain3d_toolbar_);
+    terrain3d_view_.set_hexpand(true);
+    terrain3d_view_.set_vexpand(true);
+    terrain3d_box_.append(terrain3d_view_);
+    right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
+
     set_end_child(right_notebook_);
 
     // Set initial paned position for objects page after realization
@@ -101,18 +144,53 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     // Signals
     scan_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpInfo::on_scan));
     folder_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpInfo::on_folder_browse));
+    source_combo_.signal_changed().connect(sigc::mem_fun(*this, &TabWrpInfo::on_source_changed));
     filter_entry_.signal_changed().connect(sigc::mem_fun(*this, &TabWrpInfo::on_filter_changed));
     file_list_.signal_row_selected().connect(sigc::mem_fun(*this, &TabWrpInfo::on_file_selected));
     class_list_.signal_row_selected().connect(sigc::mem_fun(*this, &TabWrpInfo::on_class_selected));
+    class_list_.signal_row_activated().connect(sigc::mem_fun(*this, &TabWrpInfo::on_class_activated));
     hm_export_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpInfo::on_hm_export));
+    terrain3d_wireframe_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_wireframe(terrain3d_wireframe_btn_.get_active());
+    });
+    terrain3d_objects_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_show_objects(terrain3d_objects_btn_.get_active());
+        if (terrain3d_objects_btn_.get_active()) ensure_objects_loaded();
+    });
+    terrain3d_mode_combo_.signal_changed().connect([this]() {
+        auto id = std::string(terrain3d_mode_combo_.get_active_id());
+        if (id == "surface") terrain3d_view_.set_color_mode(1);
+        else if (id == "texture") terrain3d_view_.set_color_mode(2);
+        else if (id == "satellite") {
+            terrain3d_view_.set_color_mode(3);
+            ensure_satellite_palette_loaded();
+        }
+        else terrain3d_view_.set_color_mode(0);
+    });
+    terrain3d_view_.set_on_object_picked([this](size_t idx) {
+        if (!world_data_ || idx >= world_data_->objects.size()) return;
+        const auto& obj = world_data_->objects[idx];
+        std::ostringstream ss;
+        ss << "Object #" << idx << ": " << obj.model_name
+           << " @ [" << obj.position[0] << ", " << obj.position[1] << ", " << obj.position[2] << "]";
+        terrain3d_status_label_.set_text(ss.str());
+    });
+    right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
+        if (page_num == 1) ensure_objects_loaded();
+    });
 }
 
 TabWrpInfo::~TabWrpInfo() {
     if (pbo_index_service_) pbo_index_service_->unsubscribe(this);
     ++scan_generation_;
+    ++load_generation_;
     if (scan_thread_.joinable()) scan_thread_.join();
     loading_ = false;
     if (worker_.joinable()) worker_.join();
+    objects_loading_ = false;
+    if (objects_worker_.joinable()) objects_worker_.join();
+    satellite_loading_ = false;
+    if (satellite_worker_.joinable()) satellite_worker_.join();
 }
 
 void TabWrpInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& service) {
@@ -128,6 +206,10 @@ void TabWrpInfo::set_model_loader_service(
 void TabWrpInfo::set_texture_loader_service(
     const std::shared_ptr<LodTexturesLoaderService>& service) {
     model_panel_.set_texture_loader_service(service);
+}
+
+void TabWrpInfo::set_on_open_p3d_info(std::function<void(const std::string&)> cb) {
+    on_open_p3d_info_ = std::move(cb);
 }
 
 void TabWrpInfo::set_config(Config* cfg) {
@@ -149,6 +231,7 @@ void TabWrpInfo::set_config(Config* cfg) {
         db_ = snap.db;
         index_ = snap.index;
         model_panel_.set_pboindex(db_.get(), index_.get());
+        refresh_source_combo();
         if (!snap.error.empty()) {
             app_log(LogLevel::Warning, "WrpInfo: Failed to open PBO index: " + snap.error);
         } else if (db_ && index_) {
@@ -175,22 +258,46 @@ void TabWrpInfo::on_folder_browse() {
 }
 
 void TabWrpInfo::on_scan() {
-    if (scan_dir_.empty()) return;
+    if (!db_ && scan_dir_.empty()) return;
     const auto dir = scan_dir_;
+    const auto db = db_;
+    const auto source = current_source_;
     const unsigned gen = ++scan_generation_;
     class_status_label_.set_text("Scanning WRP files...");
     if (scan_thread_.joinable()) scan_thread_.join();
-    scan_thread_ = std::thread([this, dir, gen]() {
-        std::vector<std::string> files;
-        std::error_code ec;
-        for (auto& entry : fs::recursive_directory_iterator(
-                 dir, fs::directory_options::skip_permission_denied, ec)) {
-            if (!entry.is_regular_file()) continue;
-            auto ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext == ".wrp") files.push_back(entry.path().string());
+    scan_thread_ = std::thread([this, dir, db, source, gen]() {
+        std::vector<WrpFileEntry> files;
+        if (db) {
+            auto results = db->find_files("*.wrp", source);
+            files.reserve(results.size());
+            for (const auto& r : results) {
+                WrpFileEntry e;
+                e.from_pbo = true;
+                e.pbo_path = r.pbo_path;
+                e.entry_name = r.file_path;
+                e.full_path = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+                e.display = fs::path(r.file_path).filename().string();
+                if (e.display.empty()) e.display = fs::path(e.full_path).filename().string();
+                e.source = source;
+                files.push_back(std::move(e));
+            }
+        } else {
+            std::error_code ec;
+            for (auto& entry : fs::recursive_directory_iterator(
+                     dir, fs::directory_options::skip_permission_denied, ec)) {
+                if (!entry.is_regular_file()) continue;
+                auto ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".wrp") continue;
+                WrpFileEntry e;
+                e.from_pbo = false;
+                e.full_path = entry.path().string();
+                e.display = entry.path().filename().string();
+                files.push_back(std::move(e));
+            }
         }
-        std::sort(files.begin(), files.end());
+        std::sort(files.begin(), files.end(),
+                  [](const auto& a, const auto& b) { return a.full_path < b.full_path; });
         Glib::signal_idle().connect_once([this, files = std::move(files), gen]() mutable {
             if (gen != scan_generation_.load()) return;
             wrp_files_ = std::move(files);
@@ -207,7 +314,11 @@ void TabWrpInfo::scan_wrp_files(const std::string& dir) {
             auto ext = entry.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".wrp") {
-                wrp_files_.push_back(entry.path().string());
+                WrpFileEntry e;
+                e.from_pbo = false;
+                e.full_path = entry.path().string();
+                e.display = entry.path().filename().string();
+                wrp_files_.push_back(std::move(e));
             }
         }
     }
@@ -219,10 +330,11 @@ void TabWrpInfo::on_filter_changed() {
 
     filtered_files_.clear();
     for (const auto& f : wrp_files_) {
+        const std::string haystack = f.full_path + " " + f.display;
         if (filter.empty()) {
             filtered_files_.push_back(f);
         } else {
-            auto lower = f;
+            auto lower = haystack;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (lower.find(filter) != std::string::npos) {
                 filtered_files_.push_back(f);
@@ -238,9 +350,11 @@ void TabWrpInfo::update_file_list() {
     }
 
     for (const auto& f : filtered_files_) {
-        auto* label = Gtk::make_managed<Gtk::Label>(fs::path(f).filename().string());
+        auto* label = Gtk::make_managed<Gtk::Label>(f.display);
         label->set_halign(Gtk::Align::START);
-        label->set_tooltip_text(f);
+        label->set_tooltip_text(f.from_pbo
+            ? (f.full_path + " [" + f.pbo_path + "]")
+            : f.full_path);
         file_list_.append(*label);
     }
 }
@@ -252,31 +366,60 @@ void TabWrpInfo::on_file_selected(Gtk::ListBoxRow* row) {
     load_wrp(filtered_files_[static_cast<size_t>(idx)]);
 }
 
-void TabWrpInfo::load_wrp(const std::string& path) {
+void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
     if (loading_) return;
     loading_ = true;
+    const unsigned gen = ++load_generation_;
+    objects_loaded_ = false;
+    objects_loading_ = false;
+    satellite_loaded_ = false;
+    satellite_loading_ = false;
+    satellite_palette_.clear();
 
-    info_view_.get_buffer()->set_text("Loading " + path + "...");
+    info_view_.get_buffer()->set_text("Loading " + entry.full_path + "...");
     hm_picture_.set_paintable({});
-    class_status_label_.set_text("Loading objects...");
+    class_status_label_.set_text("Objects deferred (open Objects tab to load)");
+    terrain3d_status_label_.set_text("Loading terrain...");
+    terrain3d_view_.clear_world();
+    terrain3d_view_.set_satellite_palette({});
 
     if (worker_.joinable()) worker_.join();
+    if (objects_worker_.joinable()) objects_worker_.join();
+    if (satellite_worker_.joinable()) satellite_worker_.join();
 
-    worker_ = std::thread([this, path]() {
+    worker_ = std::thread([this, entry, gen]() {
         std::string info_text;
         std::shared_ptr<armatools::wrp::WorldData> wd_ptr;
 
         try {
-            std::ifstream f(path, std::ios::binary);
-            if (!f.is_open()) {
-                info_text = "Error: Cannot open file";
+            std::unique_ptr<std::istream> in;
+            std::istringstream mem_stream;
+            std::ifstream file_stream;
+            if (entry.from_pbo) {
+                auto bytes = extract_from_pbo(entry.pbo_path, entry.entry_name);
+                if (!bytes.empty()) {
+                    std::string buf(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                    mem_stream = std::istringstream(std::move(buf), std::ios::binary);
+                    in = std::make_unique<std::istringstream>(std::move(mem_stream));
+                }
             } else {
+                file_stream = std::ifstream(entry.full_path, std::ios::binary);
+                if (file_stream.is_open()) in = std::make_unique<std::ifstream>(std::move(file_stream));
+            }
+
+            if (!in || !*in) {
+                info_text = entry.from_pbo ? "Error: Cannot extract WRP from PBO"
+                                           : "Error: Cannot open file";
+            } else {
+                // Fast path: load terrain first, defer objects for very large worlds.
                 armatools::wrp::Options opts;
-                // Load with objects (no_objects = false)
-                auto wd = armatools::wrp::read(f, opts);
+                opts.no_objects = true;
+                auto wd = armatools::wrp::read(*in, opts);
 
                 std::ostringstream ss;
-                ss << "File: " << path << "\n\n";
+                ss << "File: " << entry.full_path << "\n";
+                if (entry.from_pbo) ss << "PBO: " << entry.pbo_path << "\n";
+                ss << "\n";
                 ss << "Format: " << wd.format.signature << " v" << wd.format.version << "\n";
                 ss << "Grid: " << wd.grid.cells_x << " x " << wd.grid.cells_y
                    << " (cell size: " << wd.grid.cell_size << ")\n";
@@ -285,7 +428,7 @@ void TabWrpInfo::load_wrp(const std::string& path) {
                 ss << "Elevation: " << wd.bounds.min_elevation << " to " << wd.bounds.max_elevation << "\n\n";
                 ss << "Textures: " << wd.stats.texture_count << "\n";
                 ss << "Models: " << wd.stats.model_count << "\n";
-                ss << "Objects: " << wd.stats.object_count << "\n";
+                ss << "Objects: deferred (fast load mode)\n";
                 ss << "Peaks: " << wd.stats.peak_count << "\n";
                 ss << "Road nets: " << wd.stats.road_net_count << "\n";
 
@@ -315,7 +458,8 @@ void TabWrpInfo::load_wrp(const std::string& path) {
         }
 
         Glib::signal_idle().connect_once([this, info_text = std::move(info_text),
-                                          wd_ptr = std::move(wd_ptr), path]() {
+                                          wd_ptr = std::move(wd_ptr), entry, gen]() {
+            if (gen != load_generation_.load()) return;
             info_view_.get_buffer()->set_text(info_text);
 
             if (wd_ptr) {
@@ -328,15 +472,60 @@ void TabWrpInfo::load_wrp(const std::string& path) {
 
                 // Store world data for later use
                 world_data_ = std::make_unique<armatools::wrp::WorldData>(std::move(*wd_ptr));
-                loaded_wrp_path_ = path;
+                loaded_wrp_path_ = entry.from_pbo ? std::string() : entry.full_path;
+                loaded_wrp_entry_ = entry;
+                loaded_wrp_entry_valid_ = true;
 
-                // Populate class list
-                populate_class_list();
+                terrain3d_view_.set_world_data(*world_data_);
+                if (std::string(terrain3d_mode_combo_.get_active_id()) == "satellite")
+                    ensure_satellite_palette_loaded();
+                std::ostringstream terrain_status;
+                terrain_status << world_data_->grid.terrain_x << "x" << world_data_->grid.terrain_y
+                               << " cells, objects: deferred"
+                               << " (LMB orbit, MMB pan, wheel zoom)";
+                terrain3d_status_label_.set_text(terrain_status.str());
+                while (auto* row = class_list_.get_row_at_index(0))
+                    class_list_.remove(*row);
+                class_entries_.clear();
+                model_panel_.clear();
+            } else {
+                terrain3d_status_label_.set_text("Failed to load terrain");
             }
 
             loading_ = false;
         });
     });
+}
+
+void TabWrpInfo::refresh_source_combo() {
+    source_combo_updating_ = true;
+    source_combo_.remove_all();
+    source_combo_.append("", "All");
+
+    if (db_) {
+        static const std::unordered_map<std::string, std::string> source_labels = {
+            {"arma3", "Arma 3"},
+            {"workshop", "Workshop"},
+            {"ofp", "OFP/CWA"},
+            {"arma1", "Arma 1"},
+            {"arma2", "Arma 2"},
+            {"custom", "Custom"},
+        };
+        auto sources = db_->query_sources();
+        for (const auto& src : sources) {
+            auto it = source_labels.find(src);
+            source_combo_.append(src, it != source_labels.end() ? it->second : src);
+        }
+    }
+
+    source_combo_.set_active_id(current_source_);
+    source_combo_updating_ = false;
+}
+
+void TabWrpInfo::on_source_changed() {
+    if (source_combo_updating_) return;
+    current_source_ = std::string(source_combo_.get_active_id());
+    on_scan();
 }
 
 void TabWrpInfo::populate_class_list() {
@@ -412,8 +601,311 @@ void TabWrpInfo::populate_class_list() {
         + std::to_string(categories.size()) + " categories");
 }
 
+void TabWrpInfo::ensure_objects_loaded() {
+    if (!world_data_ || !loaded_wrp_entry_valid_) return;
+    if (objects_loaded_ || objects_loading_) return;
+
+    const unsigned gen = load_generation_.load();
+    const auto entry = loaded_wrp_entry_;
+    objects_loading_ = true;
+    class_status_label_.set_text("Loading objects...");
+
+    if (objects_worker_.joinable()) objects_worker_.join();
+    objects_worker_ = std::thread([this, entry, gen]() {
+        std::shared_ptr<armatools::wrp::WorldData> wd_ptr;
+        std::string err;
+        try {
+            std::unique_ptr<std::istream> in;
+            std::istringstream mem_stream;
+            std::ifstream file_stream;
+            if (entry.from_pbo) {
+                auto bytes = extract_from_pbo(entry.pbo_path, entry.entry_name);
+                if (!bytes.empty()) {
+                    std::string buf(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                    mem_stream = std::istringstream(std::move(buf), std::ios::binary);
+                    in = std::make_unique<std::istringstream>(std::move(mem_stream));
+                }
+            } else {
+                file_stream = std::ifstream(entry.full_path, std::ios::binary);
+                if (file_stream.is_open()) in = std::make_unique<std::ifstream>(std::move(file_stream));
+            }
+
+            if (!in || !*in) {
+                err = entry.from_pbo ? "Cannot extract file from PBO" : "Cannot open file";
+            } else {
+                armatools::wrp::Options opts;
+                opts.no_objects = false;
+                auto wd = armatools::wrp::read(*in, opts);
+                wd_ptr = std::make_shared<armatools::wrp::WorldData>(std::move(wd));
+            }
+        } catch (const std::exception& e) {
+            err = e.what();
+        }
+
+        Glib::signal_idle().connect_once([this, wd_ptr = std::move(wd_ptr),
+                                          err = std::move(err), gen]() {
+            if (gen != load_generation_.load()) return;
+            objects_loading_ = false;
+            if (!wd_ptr || !err.empty()) {
+                class_status_label_.set_text("Objects load failed: " + err);
+                return;
+            }
+            if (!world_data_) {
+                class_status_label_.set_text("Objects loaded, world not active");
+                return;
+            }
+
+            world_data_->objects = std::move(wd_ptr->objects);
+            world_data_->models = std::move(wd_ptr->models);
+            world_data_->stats.object_count = static_cast<int>(world_data_->objects.size());
+            world_data_->stats.model_count = static_cast<int>(world_data_->models.size());
+            objects_loaded_ = true;
+
+            terrain3d_view_.set_objects(world_data_->objects);
+            populate_class_list();
+        });
+    });
+}
+
+void TabWrpInfo::ensure_satellite_palette_loaded() {
+    if (!world_data_ || world_data_->textures.empty()) return;
+    if (satellite_loaded_ || satellite_loading_) return;
+
+    const unsigned gen = load_generation_.load();
+    const auto index = index_;
+    const auto db = db_;
+    const auto cfg = cfg_;
+    const auto wrp_path = loaded_wrp_path_;
+    const auto textures = world_data_->textures;
+
+    satellite_loading_ = true;
+    if (satellite_worker_.joinable()) satellite_worker_.join();
+    satellite_worker_ = std::thread([this, gen, index, db, cfg, wrp_path, textures]() {
+        auto fallback_color = [](size_t idx) -> std::array<float, 3> {
+            const float n = static_cast<float>(idx + 1);
+            const float x = std::fmod(std::sin(n * 12.9898f) * 43758.5453f, 1.0f);
+            const float y = std::fmod(std::sin((n + 17.0f) * 78.233f) * 12345.6789f, 1.0f);
+            const float z = std::fmod(std::sin((n + 37.0f) * 45.164f) * 24680.1357f, 1.0f);
+            auto fix = [](float v) { return v < 0.0f ? v + 1.0f : v; };
+            return {0.20f + 0.75f * fix(x),
+                    0.20f + 0.75f * fix(y),
+                    0.20f + 0.75f * fix(z)};
+        };
+
+        auto try_decode = [](const std::vector<uint8_t>& data,
+                             std::array<float, 3>& out) -> bool {
+            if (data.empty()) return false;
+            try {
+                std::string buf(reinterpret_cast<const char*>(data.data()), data.size());
+                std::istringstream iss(buf, std::ios::binary);
+                auto [img, _] = armatools::paa::decode(iss);
+                if (img.width <= 0 || img.height <= 0 || img.pixels.empty()) return false;
+                const int step = std::max(1, std::max(img.width, img.height) / 64);
+                uint64_t rs = 0, gs = 0, bs = 0, n = 0;
+                for (int y = 0; y < img.height; y += step) {
+                    for (int x = 0; x < img.width; x += step) {
+                        const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(img.width)
+                                          + static_cast<size_t>(x)) * 4;
+                        rs += img.pixels[off + 0];
+                        gs += img.pixels[off + 1];
+                        bs += img.pixels[off + 2];
+                        n++;
+                    }
+                }
+                if (n == 0) return false;
+                out = {static_cast<float>(rs) / (255.0f * static_cast<float>(n)),
+                       static_cast<float>(gs) / (255.0f * static_cast<float>(n)),
+                       static_cast<float>(bs) / (255.0f * static_cast<float>(n))};
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+
+        auto normalize_asset_path = [](const std::string& raw) -> std::string {
+            auto p = armatools::armapath::to_slash_lower(raw);
+            while (!p.empty() && (p[0] == '/' || p[0] == '\\')) p.erase(p.begin());
+            while (!p.empty() && (p[0] == '.' || p[0] == ' ')) {
+                if (p.size() >= 2 && p[0] == '.' && (p[1] == '/' || p[1] == '\\')) {
+                    p.erase(0, 2);
+                } else if (p[0] == ' ') {
+                    p.erase(p.begin());
+                } else {
+                    break;
+                }
+            }
+            return p;
+        };
+
+        auto resolve_relative = [&](const std::string& base, const std::string& rel) -> std::string {
+            auto nrel = normalize_asset_path(rel);
+            if (nrel.empty()) return {};
+            if (nrel.find(':') != std::string::npos) return normalize_asset_path(nrel);
+            if (nrel.starts_with("ca/") || nrel.starts_with("a3/")
+                || nrel.starts_with("cup/") || nrel.starts_with("dz/")) {
+                return nrel;
+            }
+            fs::path bp = fs::path(normalize_asset_path(base)).parent_path() / fs::path(nrel);
+            return normalize_asset_path(bp.generic_string());
+        };
+
+        std::vector<fs::path> disk_roots;
+        if (cfg && !cfg->drive_root.empty())
+            disk_roots.push_back(fs::path(cfg->drive_root));
+        if (!wrp_path.empty()) {
+            fs::path p = fs::path(wrp_path).parent_path();
+            while (!p.empty()) {
+                auto n = armatools::armapath::to_slash_lower(p.filename().string());
+                if (n == "worlds" || n == "p") {
+                    disk_roots.push_back(p);
+                    break;
+                }
+                p = p.parent_path();
+            }
+            disk_roots.push_back(fs::path(wrp_path).parent_path());
+        }
+
+        auto load_asset_bytes = [&](const std::string& raw_path) -> std::vector<uint8_t> {
+            const auto normalized = normalize_asset_path(raw_path);
+            if (normalized.empty()) return {};
+
+            if (index) {
+                armatools::pboindex::ResolveResult rr;
+                if (index->resolve(normalized, rr)) {
+                    auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
+                    if (!data.empty()) return data;
+                }
+            }
+            if (db) {
+                auto filename = fs::path(normalized).filename().string();
+                auto results = db->find_files("*" + filename);
+                for (const auto& r : results) {
+                    auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+                    if (full == normalized || full.ends_with("/" + normalized)) {
+                        auto data = extract_from_pbo(r.pbo_path, r.file_path);
+                        if (!data.empty()) return data;
+                    }
+                }
+            }
+            for (const auto& root : disk_roots) {
+                auto resolved = armatools::armapath::find_file_ci(root, normalized);
+                if (!resolved) continue;
+                std::ifstream tf(resolved->string(), std::ios::binary);
+                if (tf.is_open()) {
+                    return std::vector<uint8_t>((std::istreambuf_iterator<char>(tf)),
+                                                 std::istreambuf_iterator<char>());
+                }
+            }
+            return {};
+        };
+
+        auto extract_material_texture = [&](const std::string& material_path,
+                                            const std::vector<uint8_t>& rvmat_data)
+            -> std::optional<std::string> {
+            if (rvmat_data.empty()) return std::nullopt;
+            std::string text(reinterpret_cast<const char*>(rvmat_data.data()), rvmat_data.size());
+            static const std::regex rx(
+                "\"([^\"]+\\.(?:paa|pac))\"",
+                std::regex_constants::icase);
+
+            std::vector<std::string> candidates;
+            for (auto it = std::sregex_iterator(text.begin(), text.end(), rx);
+                 it != std::sregex_iterator(); ++it) {
+                if (it->size() < 2) continue;
+                auto p = (*it)[1].str();
+                if (!p.empty()) candidates.push_back(p);
+            }
+            if (candidates.empty()) return std::nullopt;
+
+            auto score = [](const std::string& p) {
+                auto s = armatools::armapath::to_slash_lower(p);
+                int v = 0;
+                if (s.find("_mco.") != std::string::npos) v += 40;
+                else if (s.find("_co.") != std::string::npos) v += 30;
+                else if (s.find("_ca.") != std::string::npos) v += 20;
+                if (s.find("_smdi.") != std::string::npos) v -= 25;
+                if (s.find("_nohq.") != std::string::npos) v -= 25;
+                if (s.find("_as.") != std::string::npos) v -= 20;
+                return v;
+            };
+
+            std::string best = candidates.front();
+            int best_score = score(best);
+            for (const auto& c : candidates) {
+                int sc = score(c);
+                if (sc > best_score) {
+                    best_score = sc;
+                    best = c;
+                }
+            }
+            auto resolved = resolve_relative(material_path, best);
+            if (resolved.empty()) return std::nullopt;
+            return resolved;
+        };
+
+        std::vector<std::array<float, 3>> palette(textures.size());
+        for (size_t i = 0; i < palette.size(); ++i) palette[i] = fallback_color(i);
+
+        size_t decoded_count = 0;
+        for (size_t i = 0; i < textures.size(); ++i) {
+            auto tex = textures[i].filename;
+            if (tex.empty()) continue;
+            const auto normalized = normalize_asset_path(tex);
+            std::array<float, 3> rgb{};
+
+            auto try_paths = [&](const std::vector<std::string>& paths) -> bool {
+                for (const auto& p : paths) {
+                    auto data = load_asset_bytes(p);
+                    if (!data.empty() && try_decode(data, rgb)) return true;
+                }
+                return false;
+            };
+
+            bool ok = false;
+            const auto ext = fs::path(normalized).extension().string();
+            if (ext == ".paa" || ext == ".pac") {
+                ok = try_paths({normalized});
+            } else {
+                auto mat_paths = std::vector<std::string>{normalized};
+                if (ext.empty()) mat_paths.push_back(normalized + ".rvmat");
+                for (const auto& mat : mat_paths) {
+                    auto mat_data = load_asset_bytes(mat);
+                    if (mat_data.empty()) continue;
+                    if (auto tex_path = extract_material_texture(mat, mat_data)) {
+                        auto ntex = normalize_asset_path(*tex_path);
+                        ok = try_paths({ntex, ntex + ".paa", ntex + ".pac"});
+                        if (ok) break;
+                    }
+                }
+            }
+            if (ok) {
+                palette[i] = rgb;
+                decoded_count++;
+            }
+        }
+
+        Glib::signal_idle().connect_once([this, gen, palette = std::move(palette), decoded_count]() {
+            if (gen != load_generation_.load()) return;
+            satellite_loading_ = false;
+            satellite_loaded_ = true;
+            satellite_palette_ = palette;
+            terrain3d_view_.set_satellite_palette(satellite_palette_);
+            auto status = terrain3d_status_label_.get_text();
+            terrain3d_status_label_.set_text(
+                status + " | satellite palette loaded (" + std::to_string(decoded_count) + ")");
+            app_log(LogLevel::Debug,
+                    "WrpInfo: satellite palette decoded " + std::to_string(decoded_count)
+                    + "/" + std::to_string(satellite_palette_.size()));
+        });
+    });
+}
+
 void TabWrpInfo::on_class_selected(Gtk::ListBoxRow* row) {
     if (!row) return;
+    if (class_entries_.empty()) {
+        ensure_objects_loaded();
+        return;
+    }
 
     // Walk through rows to find which class_entry this corresponds to.
     // We need to skip header rows (non-selectable).
@@ -430,6 +922,23 @@ void TabWrpInfo::on_class_selected(Gtk::ListBoxRow* row) {
 
     const auto& entry = class_entries_[static_cast<size_t>(selectable_idx)];
     load_p3d_preview(entry.model_name);
+}
+
+void TabWrpInfo::on_class_activated(Gtk::ListBoxRow* row) {
+    if (!row) return;
+    if (class_entries_.empty()) return;
+
+    int selectable_idx = -1;
+    for (int i = 0; ; ++i) {
+        auto* r = class_list_.get_row_at_index(i);
+        if (!r) break;
+        if (r->get_selectable()) selectable_idx++;
+        if (r == row) break;
+    }
+    if (selectable_idx < 0 || selectable_idx >= static_cast<int>(class_entries_.size())) return;
+
+    const auto& entry = class_entries_[static_cast<size_t>(selectable_idx)];
+    if (on_open_p3d_info_) on_open_p3d_info_(entry.model_name);
 }
 
 void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
@@ -537,7 +1046,10 @@ void TabWrpInfo::on_hm_export() {
     dialog->set_filters(filters);
 
     // Suggest a default filename
-    auto stem = fs::path(loaded_wrp_path_).stem().string();
+    auto stem = loaded_wrp_entry_valid_
+        ? fs::path(loaded_wrp_entry_.full_path).stem().string()
+        : fs::path(loaded_wrp_path_).stem().string();
+    if (stem.empty()) stem = "heightmap";
     dialog->set_initial_name(stem + "_heightmap.asc");
 
     auto* window = dynamic_cast<Gtk::Window*>(get_root());
@@ -567,6 +1079,11 @@ void TabWrpInfo::on_hm_export() {
                 if (ext == ".tif" || ext == ".tiff") {
                     // Export TIFF using wrp_heightmap tool (native resolution only)
                     auto wrp_path = loaded_wrp_path_;
+                    if (wrp_path.empty()) {
+                        app_log(LogLevel::Warning,
+                                "WrpInfo: TIFF export requires a filesystem WRP path");
+                        return;
+                    }
                     if (!cfg_) {
                         app_log(LogLevel::Error, "WrpInfo: Configuration not available for wrp_heightmap");
                         return;

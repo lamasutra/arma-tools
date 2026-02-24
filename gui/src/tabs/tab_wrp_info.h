@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "gl_wrp_terrain_view.h"
 #include "model_view_panel.h"
 #include "pbo_index_service.h"
 
@@ -12,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
 
 namespace armatools::pboindex {
 class Index;
@@ -26,6 +28,7 @@ public:
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
     void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_on_open_p3d_info(std::function<void(const std::string&)> cb);
 
 private:
     Config* cfg_ = nullptr;
@@ -38,6 +41,8 @@ private:
     // Left panel: file list
     Gtk::Box list_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Box filter_box_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Label source_label_{"Source:"};
+    Gtk::ComboBoxText source_combo_;
     Gtk::Entry filter_entry_;
     Gtk::Button scan_button_{"Scan"};
     Gtk::Button folder_button_{"Folder..."};
@@ -68,6 +73,16 @@ private:
     Gtk::ScrolledWindow hm_scroll_;
     Gtk::Picture hm_picture_;
 
+    // Page 4: Terrain 3D
+    Gtk::Box terrain3d_box_{Gtk::Orientation::VERTICAL};
+    Gtk::Box terrain3d_toolbar_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Label terrain3d_mode_label_{"Mode:"};
+    Gtk::ComboBoxText terrain3d_mode_combo_;
+    Gtk::CheckButton terrain3d_wireframe_btn_{"Wireframe"};
+    Gtk::CheckButton terrain3d_objects_btn_{"Objects"};
+    Gtk::Label terrain3d_status_label_;
+    GLWrpTerrainView terrain3d_view_;
+
     // Cached WRP data
     std::unique_ptr<armatools::wrp::WorldData> world_data_;
     std::string loaded_wrp_path_;
@@ -81,19 +96,41 @@ private:
     std::vector<ClassEntry> class_entries_;
 
     std::string scan_dir_;
-    std::vector<std::string> wrp_files_;
-    std::vector<std::string> filtered_files_;
+    struct WrpFileEntry {
+        std::string display;
+        std::string full_path;
+        std::string pbo_path;
+        std::string entry_name;
+        std::string source;
+        bool from_pbo = false;
+    };
+    std::vector<WrpFileEntry> wrp_files_;
+    std::vector<WrpFileEntry> filtered_files_;
+    std::string current_source_;
+    bool source_combo_updating_ = false;
+    WrpFileEntry loaded_wrp_entry_;
+    bool loaded_wrp_entry_valid_ = false;
     std::thread worker_;
+    std::thread objects_worker_;
+    std::thread satellite_worker_;
     std::thread scan_thread_;
     std::atomic<bool> loading_{false};
+    std::atomic<bool> objects_loading_{false};
+    std::atomic<bool> satellite_loading_{false};
+    bool objects_loaded_ = false;
+    bool satellite_loaded_ = false;
+    std::vector<std::array<float, 3>> satellite_palette_;
+    std::atomic<unsigned> load_generation_{0};
     std::atomic<unsigned> scan_generation_{0};
 
     void on_scan();
     void on_folder_browse();
     void on_filter_changed();
+    void on_source_changed();
+    void refresh_source_combo();
     void on_file_selected(Gtk::ListBoxRow* row);
     void scan_wrp_files(const std::string& dir);
-    void load_wrp(const std::string& path);
+    void load_wrp(const WrpFileEntry& entry);
     void update_file_list();
     Glib::RefPtr<Gdk::Texture> render_heightmap(const std::vector<float>& elevations, int grid_x, int grid_y);
 
@@ -101,5 +138,9 @@ private:
     void on_class_selected(Gtk::ListBoxRow* row);
     void on_hm_export();
     void populate_class_list();
+    void on_class_activated(Gtk::ListBoxRow* row);
     void load_p3d_preview(const std::string& model_path);
+    void ensure_objects_loaded();
+    void ensure_satellite_palette_loaded();
+    std::function<void(const std::string&)> on_open_p3d_info_;
 };

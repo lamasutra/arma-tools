@@ -12,6 +12,16 @@
 namespace fs = std::filesystem;
 
 TabPbo::TabPbo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(browse_button_, "document-open-symbolic", "Browse PBO file");
+    make_icon_button(search_button_, "system-search-symbolic", "Search indexed PBOs");
+    make_icon_button(extract_browse_, "document-open-symbolic", "Browse output directory");
+
     // Left panel
     left_box_.set_margin(8);
     left_box_.set_size_request(200, -1);
@@ -26,7 +36,6 @@ TabPbo::TabPbo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     path_box_.append(switch_box_);
     path_entry_.set_hexpand(true);
     path_entry_.set_placeholder_text("PBO file path...");
-    browse_button_.set_tooltip_text("Browse for a PBO file");
     path_box_.append(path_entry_);
     path_box_.append(browse_button_);
     search_button_.set_visible(false);
@@ -69,7 +78,6 @@ TabPbo::TabPbo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     extract_dir_entry_.set_hexpand(true);
     extract_dir_entry_.set_placeholder_text("Extract to directory...");
-    extract_browse_.set_tooltip_text("Browse for output directory");
     extract_button_.set_tooltip_text("Extract all files from PBO");
     extract_selected_button_.set_tooltip_text("Extract selected file from PBO");
     extract_box_.append(extract_dir_entry_);

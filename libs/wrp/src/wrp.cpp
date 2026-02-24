@@ -84,6 +84,7 @@ static void compute_elevation_bounds(const std::vector<float>& elev, BoundsInfo&
     bounds.max_elevation = max_e;
 }
 
+
 // Build unique model list from objects and assign model_index back.
 static void build_model_index(WorldData& w) {
     std::map<std::string, int> model_map;

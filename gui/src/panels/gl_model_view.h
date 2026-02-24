@@ -9,12 +9,27 @@
 
 class GLModelView : public Gtk::GLArea {
 public:
+    struct MaterialParams {
+        float ambient[3]{0.18f, 0.18f, 0.18f};
+        float diffuse[3]{1.0f, 1.0f, 1.0f};
+        float emissive[3]{0.0f, 0.0f, 0.0f};
+        float specular[3]{0.08f, 0.08f, 0.08f};
+        float specular_power = 32.0f;
+        int shader_mode = 0; // 0=default, 1=normal/spec, 2=emissive, 3=alpha-test
+    };
+
     GLModelView();
     ~GLModelView() override;
 
     void set_lod(const armatools::p3d::LOD& lod);
+    void set_lods(const std::vector<armatools::p3d::LOD>& lods);
     void set_texture(const std::string& key, int width, int height,
                      const uint8_t* rgba_data);
+    void set_normal_map(const std::string& key, int width, int height,
+                        const uint8_t* rgba_data);
+    void set_specular_map(const std::string& key, int width, int height,
+                          const uint8_t* rgba_data);
+    void set_material_params(const std::string& key, const MaterialParams& params);
     void reset_camera();
     void set_camera_from_bounds(float cx, float cy, float cz, float radius);
     void set_wireframe(bool on);
@@ -29,8 +44,8 @@ public:
     // 5b. Background color
     void set_background_color(float r, float g, float b);
 
-    // 5c. Named selection highlighting (preparation)
-    void set_highlight_faces(const std::vector<uint32_t>& face_indices);
+    // Named selection vertex highlighting.
+    void set_highlight_vertices(const std::vector<uint32_t>& vertex_indices);
 
     // Camera state access (for synchronized views)
     struct CameraState {
@@ -54,8 +69,19 @@ private:
     int loc_mvp_solid_ = -1;
     int loc_normal_mat_ = -1;
     int loc_texture_ = -1;
+    int loc_normal_map_ = -1;
+    int loc_specular_map_ = -1;
     int loc_has_texture_ = -1;
+    int loc_has_normal_map_ = -1;
+    int loc_has_specular_map_ = -1;
     int loc_light_dir_ = -1;
+    int loc_has_material_ = -1;
+    int loc_mat_ambient_ = -1;
+    int loc_mat_diffuse_ = -1;
+    int loc_mat_emissive_ = -1;
+    int loc_mat_specular_ = -1;
+    int loc_mat_spec_power_ = -1;
+    int loc_shader_mode_ = -1;
     int loc_mvp_wire_ = -1;
     int loc_color_wire_ = -1;
 
@@ -67,7 +93,11 @@ private:
     };
     std::vector<MeshGroup> groups_;
     std::unordered_map<std::string, uint32_t> textures_;
+    std::unordered_map<std::string, uint32_t> normal_maps_;
+    std::unordered_map<std::string, uint32_t> specular_maps_;
     std::unordered_map<std::string, bool> texture_has_alpha_;
+    std::unordered_map<std::string, MaterialParams> material_params_;
+    bool debug_group_report_pending_ = false;
 
     // Camera state
     float azimuth_ = 0.4f;
@@ -92,8 +122,12 @@ private:
     // 5b. Background color
     float bg_color_[3] = {0.2f, 0.2f, 0.2f};
 
-    // 5c. Named selection highlighting
-    std::vector<uint32_t> highlighted_faces_;
+    // Named selection highlighting
+    std::vector<uint32_t> highlighted_vertices_;
+    std::vector<float> lod_vertex_positions_;
+    uint32_t highlight_vao_ = 0;
+    uint32_t highlight_vbo_ = 0;
+    int highlight_vertex_count_ = 0;
 
     // Wireframe line buffer (for GLES path)
     uint32_t wire_vao_ = 0;
@@ -112,6 +146,16 @@ private:
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
     Glib::RefPtr<Gtk::EventControllerScroll> scroll_zoom_;
+    Glib::RefPtr<Gtk::GestureClick> click_focus_;
+    Glib::RefPtr<Gtk::EventControllerKey> key_move_;
+    sigc::connection move_tick_conn_;
+    bool move_fwd_ = false;
+    bool move_back_ = false;
+    bool move_left_ = false;
+    bool move_right_ = false;
+    bool move_up_ = false;
+    bool move_down_ = false;
+    bool move_fast_ = false;
 
     // GL callbacks
     void on_realize_gl();
@@ -125,4 +169,7 @@ private:
     void build_matrices(float* mvp, float* normal_mat);
     void build_grid_and_axis();
     void draw_grid_and_axis(const float* mvp);
+    void rebuild_highlight_vertex_buffer();
+    void move_camera_local(float forward, float right);
+    bool movement_tick();
 };

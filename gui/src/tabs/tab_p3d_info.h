@@ -25,6 +25,7 @@ public:
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
     void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void open_model_path(const std::string& model_path);
 
 private:
     Config* cfg_ = nullptr;
@@ -60,6 +61,7 @@ private:
     // PboIndex
     std::shared_ptr<armatools::pboindex::DB> db_;
     std::shared_ptr<armatools::pboindex::Index> index_;
+    std::shared_ptr<P3dModelLoaderService> model_loader_service_;
 
     // PBO mode UI
     Gtk::Box switch_box_{Gtk::Orientation::VERTICAL, 4};

@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <functional>
 
 struct Config;
@@ -70,11 +71,15 @@ private:
     Gtk::Button screenshot_btn_;
     Gtk::MenuButton bg_color_btn_;
     Gtk::MenuButton lods_btn_;
+    Gtk::MenuButton named_selections_btn_;
     Gtk::Popover bg_color_popover_;
     Gtk::Popover lod_popover_;
+    Gtk::Popover named_selections_popover_;
     Gtk::Box bg_color_box_{Gtk::Orientation::VERTICAL, 2};
-    Gtk::ScrolledWindow lod_scroll_;
-    Gtk::ListBox lod_list_;
+    Gtk::ScrolledWindow lods_scroll_;
+    Gtk::Box lods_box_{Gtk::Orientation::VERTICAL, 2};
+    Gtk::ScrolledWindow named_selections_scroll_;
+    Gtk::Box named_selections_box_{Gtk::Orientation::VERTICAL, 2};
 
     // GL view
     GLModelView gl_view_;
@@ -91,15 +96,21 @@ private:
     sigc::connection realize_connection_;
 
     std::string current_model_path_;
-    int current_lod_index_ = -1;
+    std::unordered_set<int> active_lod_indices_;
+    std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_vertices_;
+    std::unordered_set<std::string> active_named_selections_;
     std::function<void(const armatools::p3d::LOD&, int)> on_lod_changed_;
 
     void apply_lod(const armatools::p3d::LOD& lod, const std::string& model_path);
     void on_gl_realized();
     void load_textures_for_lod(const armatools::p3d::LOD& lod,
                                const std::string& model_path);
-    void on_lod_selected(Gtk::ListBoxRow* row);
+    void load_textures_for_lods(const std::vector<armatools::p3d::LOD>& lods,
+                                const std::string& model_path);
+    void render_active_lods(bool reset_camera);
     void setup_bg_color_popover();
     void on_screenshot();
     void setup_lods_menu();
+    void setup_named_selections_menu(const armatools::p3d::LOD& lod);
+    void update_named_selection_highlight();
 };

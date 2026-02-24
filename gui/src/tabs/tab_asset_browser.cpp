@@ -2,6 +2,7 @@
 #include "audio_draw_util.h"
 #include "log_panel.h"
 #include "pbo_util.h"
+#include "procedural_texture.h"
 
 #include <armatools/config.h>
 #include <armatools/armapath.h>
@@ -46,12 +47,23 @@ std::string TabAssetBrowser::icon_for_extension(const std::string& ext) {
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+
     // Left panel
     left_box_.set_margin(8);
     left_box_.set_size_request(200, -1);
 
-    build_button_.set_tooltip_text("Build a new asset database from Arma 3 files");
-    update_button_.set_tooltip_text("Incrementally update the asset database");
+    make_icon_button(build_button_, "database-add-symbolic",
+                     "Build DB: build a new asset database from configured sources");
+    make_icon_button(update_button_, "view-refresh-symbolic",
+                     "Update DB: incrementally update the asset database");
+    make_icon_button(search_button_, "system-search-symbolic",
+                     "Search files by glob pattern");
     stats_button_.set_tooltip_text("Show database statistics");
     toolbar_box_.append(build_button_);
     toolbar_box_.append(update_button_);
@@ -67,7 +79,6 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     source_box_.append(source_combo_);
     left_box_.append(source_box_);
 
-    search_button_.set_tooltip_text("Search files by glob pattern");
     search_entry_.set_hexpand(true);
     search_entry_.set_placeholder_text("Search pattern (e.g. *.p3d)...");
     search_box_.append(search_entry_);
@@ -114,6 +125,22 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     preview_scroll_.set_vexpand(true);
     preview_scroll_.set_visible(false);
     right_box_.append(preview_scroll_);
+
+    rvmat_info_view_.set_editable(false);
+    rvmat_info_view_.set_monospace(true);
+    rvmat_info_scroll_.set_child(rvmat_info_view_);
+    rvmat_info_scroll_.set_hexpand(true);
+    rvmat_info_scroll_.set_vexpand(true);
+    rvmat_paned_.set_start_child(rvmat_info_scroll_);
+    rvmat_paned_.set_end_child(rvmat_preview_);
+    rvmat_paned_.set_resize_start_child(true);
+    rvmat_paned_.set_resize_end_child(true);
+    rvmat_paned_.set_shrink_start_child(false);
+    rvmat_paned_.set_shrink_end_child(false);
+    rvmat_paned_.set_position(420);
+    rvmat_paned_.set_vexpand(true);
+    rvmat_paned_.set_visible(false);
+    right_box_.append(rvmat_paned_);
 
     model_panel_.set_vexpand(true);
     model_panel_.set_visible(false);
@@ -830,6 +857,7 @@ void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file
     info_scroll_.set_visible(true);
     preview_scroll_.set_visible(false);
     preview_picture_.set_paintable({});
+    rvmat_paned_.set_visible(false);
     model_panel_.set_visible(false);
     audio_panel_.set_visible(false);
     audio_stop_all();
@@ -970,6 +998,70 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
         }
 
         auto mat = armatools::rvmat::parse(cfg);
+        rvmat_preview_.clear_material();
+        GLRvmatPreview::MaterialParams mp;
+        mp.ambient[0] = mat.ambient[0];
+        mp.ambient[1] = mat.ambient[1];
+        mp.ambient[2] = mat.ambient[2];
+        mp.diffuse[0] = mat.diffuse[0];
+        mp.diffuse[1] = mat.diffuse[1];
+        mp.diffuse[2] = mat.diffuse[2];
+        mp.emissive[0] = mat.emissive[0];
+        mp.emissive[1] = mat.emissive[1];
+        mp.emissive[2] = mat.emissive[2];
+        mp.specular[0] = mat.specular[0];
+        mp.specular[1] = mat.specular[1];
+        mp.specular[2] = mat.specular[2];
+        mp.specular_power = std::max(2.0f, mat.specular_power);
+        rvmat_preview_.set_material_params(mp);
+
+        auto lower = [](std::string v) {
+            std::transform(v.begin(), v.end(), v.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return v;
+        };
+        auto stage_rank = [&](const std::string& path, const std::string& kind) {
+            auto p = lower(path);
+            if (kind == "diff") {
+                if (p.find("_mco.") != std::string::npos) return 40;
+                if (p.find("_co.") != std::string::npos) return 30;
+                if (p.find("_ca.") != std::string::npos) return 20;
+                return 1;
+            }
+            if (kind == "nrm") return p.find("_nohq.") != std::string::npos ? 100 : 0;
+            if (kind == "spec") return p.find("_smdi.") != std::string::npos ? 100 : 0;
+            return 0;
+        };
+
+        std::string best_diff;
+        std::string best_nrm;
+        std::string best_spec;
+        int rd = -1, rn = -1, rs = -1;
+        for (const auto& st : mat.stages) {
+            if (st.texture_path.empty()) continue;
+            int sd = stage_rank(st.texture_path, "diff");
+            int sn = stage_rank(st.texture_path, "nrm");
+            int ss = stage_rank(st.texture_path, "spec");
+            if (sd > rd) { rd = sd; best_diff = st.texture_path; }
+            if (sn > rn) { rn = sn; best_nrm = st.texture_path; }
+            if (ss > rs) { rs = ss; best_spec = st.texture_path; }
+        }
+
+        if (!best_diff.empty()) {
+            if (auto tex = load_preview_texture_asset(file, best_diff)) {
+                rvmat_preview_.set_diffuse_texture(tex->width, tex->height, tex->pixels.data());
+            }
+        }
+        if (!best_nrm.empty()) {
+            if (auto tex = load_preview_texture_asset(file, best_nrm)) {
+                rvmat_preview_.set_normal_texture(tex->width, tex->height, tex->pixels.data());
+            }
+        }
+        if (!best_spec.empty()) {
+            if (auto tex = load_preview_texture_asset(file, best_spec)) {
+                rvmat_preview_.set_specular_texture(tex->width, tex->height, tex->pixels.data());
+            }
+        }
 
         auto fmt_rgba = [](const std::array<float, 4>& c) {
             std::ostringstream s;
@@ -998,7 +1090,9 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
                 << " uvSource: " << (st.uv_source.empty() ? "-" : st.uv_source) << "\n";
         }
 
-        info_view_.get_buffer()->set_text(out.str());
+        rvmat_info_view_.get_buffer()->set_text(out.str());
+        info_scroll_.set_visible(false);
+        rvmat_paned_.set_visible(true);
     } catch (const std::exception& e) {
         info_view_.get_buffer()->set_text(std::string("RVMAT error: ") + e.what());
     }
@@ -1085,6 +1179,76 @@ bool TabAssetBrowser::get_selected_file(armatools::pboindex::FindResult& out) {
         out = current_entries_[entry_idx].files[0];
         return true;
     }
+}
+
+std::optional<TabAssetBrowser::DecodedTexture> TabAssetBrowser::load_preview_texture_asset(
+    const armatools::pboindex::FindResult& context_file,
+    const std::string& texture_path) {
+    if (armatools::armapath::is_procedural_texture(texture_path)) {
+        if (auto img = procedural_texture::generate(texture_path)) {
+            return DecodedTexture{img->width, img->height, img->pixels};
+        }
+        return std::nullopt;
+    }
+    auto normalize = [](std::string p) {
+        p = armatools::armapath::to_slash_lower(p);
+        while (!p.empty() && (p.front() == '/' || p.front() == '\\'))
+            p.erase(p.begin());
+        return p;
+    };
+    auto decode = [](const std::vector<uint8_t>& bytes) -> std::optional<DecodedTexture> {
+        if (bytes.empty()) return std::nullopt;
+        try {
+            std::string str(bytes.begin(), bytes.end());
+            std::istringstream stream(str);
+            auto [img, _hdr] = armatools::paa::decode(stream);
+            if (img.width <= 0 || img.height <= 0) return std::nullopt;
+            return DecodedTexture{img.width, img.height, img.pixels};
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+
+    auto try_extract = [&](const std::string& key) -> std::optional<DecodedTexture> {
+        if (key.empty()) return std::nullopt;
+        if (index_) {
+            armatools::pboindex::ResolveResult rr;
+            if (index_->resolve(key, rr)) {
+                if (auto out = decode(extract_from_pbo(rr.pbo_path, rr.entry_name)))
+                    return out;
+            }
+        }
+        if (db_) {
+            auto filename = fs::path(key).filename().string();
+            auto results = db_->find_files("*" + filename);
+            for (const auto& r : results) {
+                auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+                if (full == key || full.ends_with("/" + key)) {
+                    if (auto out = decode(extract_from_pbo(r.pbo_path, r.file_path)))
+                        return out;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+
+    auto rel = normalize(texture_path);
+    auto base = normalize(context_file.prefix + "/" + context_file.file_path);
+    auto candidate = rel;
+    if (!(rel.starts_with("a3/") || rel.starts_with("ca/") ||
+          rel.starts_with("cup/") || rel.starts_with("dz/"))) {
+        candidate = normalize((fs::path(base).parent_path() / fs::path(rel)).generic_string());
+    }
+
+    std::vector<std::string> keys{candidate};
+    if (fs::path(candidate).extension().empty()) {
+        keys.push_back(candidate + ".paa");
+        keys.push_back(candidate + ".pac");
+    }
+    for (const auto& k : keys) {
+        if (auto out = try_extract(k)) return out;
+    }
+    return std::nullopt;
 }
 
 // ---------------------------------------------------------------------------

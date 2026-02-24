@@ -1,11 +1,14 @@
 #include "tab_wrp_project.h"
 #include "pbo_util.h"
 
+#include <armatools/armapath.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <format>
+#include <functional>
 #include <sstream>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 namespace hp = armatools::heightpipe;
@@ -37,11 +40,27 @@ double parse_double_or_default(const Glib::ustring& text, double fallback) {
 } // namespace
 
 TabWrpProject::TabWrpProject() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(scan_button_, "system-search-symbolic", "Scan/search WRP files");
+    make_icon_button(folder_button_, "document-open-symbolic", "Browse folder with WRP files");
+    make_icon_button(output_browse_, "document-open-symbolic", "Browse output directory");
+    make_icon_button(replace_browse_, "document-open-symbolic", "Browse replacement TSV file");
+
     left_box_.set_margin(8);
 
     // WRP file browser
+    source_combo_.set_tooltip_text("Filter WRP files by A3DB source");
+    source_combo_.append("", "All");
+    source_combo_.set_active_id("");
     filter_entry_.set_hexpand(true);
     filter_entry_.set_placeholder_text("Filter WRP files...");
+    filter_box_.append(source_label_);
+    filter_box_.append(source_combo_);
     filter_box_.append(filter_entry_);
     filter_box_.append(scan_button_);
     filter_box_.append(folder_button_);
@@ -160,6 +179,7 @@ TabWrpProject::TabWrpProject() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     // Signals
     scan_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpProject::on_scan));
     folder_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpProject::on_folder_browse));
+    source_combo_.signal_changed().connect(sigc::mem_fun(*this, &TabWrpProject::on_source_changed));
     filter_entry_.signal_changed().connect(sigc::mem_fun(*this, &TabWrpProject::on_filter_changed));
     file_list_.signal_row_selected().connect(sigc::mem_fun(*this, &TabWrpProject::on_file_selected));
     output_browse_.signal_clicked().connect(sigc::mem_fun(*this, &TabWrpProject::on_output_browse));
@@ -176,16 +196,55 @@ TabWrpProject::~TabWrpProject() {
         worker_.join();
     if (hm_worker_.joinable())
         hm_worker_.join();
+    if (!selected_wrp_temp_path_.empty()) {
+        std::error_code ec;
+        fs::remove(selected_wrp_temp_path_, ec);
+    }
 }
 
 void TabWrpProject::set_config(Config* cfg) {
     cfg_ = cfg;
     populate_defaults();
+    refresh_source_combo();
 
     if (cfg_ && !cfg_->worlds_dir.empty()) {
         scan_dir_ = cfg_->worlds_dir;
         on_scan();
     }
+}
+
+void TabWrpProject::refresh_source_combo() {
+    source_combo_updating_ = true;
+    source_combo_.remove_all();
+    source_combo_.append("", "All");
+
+    if (cfg_ && !cfg_->a3db_path.empty()) {
+        try {
+            auto db = armatools::pboindex::DB::open(cfg_->a3db_path);
+            static const std::unordered_map<std::string, std::string> source_labels = {
+                {"arma3", "Arma 3"},
+                {"workshop", "Workshop"},
+                {"ofp", "OFP/CWA"},
+                {"arma1", "Arma 1"},
+                {"arma2", "Arma 2"},
+                {"custom", "Custom"},
+            };
+            for (const auto& src : db.query_sources()) {
+                auto it = source_labels.find(src);
+                source_combo_.append(src, it != source_labels.end() ? it->second : src);
+            }
+        } catch (...) {
+        }
+    }
+
+    source_combo_.set_active_id(current_source_);
+    source_combo_updating_ = false;
+}
+
+void TabWrpProject::on_source_changed() {
+    if (source_combo_updating_) return;
+    current_source_ = std::string(source_combo_.get_active_id());
+    on_scan();
 }
 
 void TabWrpProject::populate_defaults() {
@@ -239,22 +298,51 @@ void TabWrpProject::on_folder_browse() {
 }
 
 void TabWrpProject::on_scan() {
-    if (scan_dir_.empty()) return;
+    if ((!cfg_ || cfg_->a3db_path.empty()) && scan_dir_.empty()) return;
     const auto dir = scan_dir_;
+    const auto source = current_source_;
+    const auto db_path = cfg_ ? cfg_->a3db_path : std::string();
     const unsigned gen = ++scan_generation_;
     status_label_.set_text("Scanning WRP files...");
     if (scan_thread_.joinable()) scan_thread_.join();
-    scan_thread_ = std::thread([this, dir, gen]() {
-        std::vector<std::string> files;
-        std::error_code ec;
-        for (auto& entry : fs::recursive_directory_iterator(
-                 dir, fs::directory_options::skip_permission_denied, ec)) {
-            if (!entry.is_regular_file()) continue;
-            auto ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext == ".wrp") files.push_back(entry.path().string());
+    scan_thread_ = std::thread([this, dir, source, db_path, gen]() {
+        std::vector<WrpFileEntry> files;
+        if (!db_path.empty()) {
+            try {
+                auto db = armatools::pboindex::DB::open(db_path);
+                auto results = db.find_files("*.wrp", source);
+                files.reserve(results.size());
+                for (const auto& r : results) {
+                    WrpFileEntry e;
+                    e.from_pbo = true;
+                    e.pbo_path = r.pbo_path;
+                    e.entry_name = r.file_path;
+                    e.full_path = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+                    e.display = fs::path(r.file_path).filename().string();
+                    if (e.display.empty()) e.display = fs::path(e.full_path).filename().string();
+                    e.source = source;
+                    files.push_back(std::move(e));
+                }
+            } catch (...) {
+            }
         }
-        std::sort(files.begin(), files.end());
+        if (files.empty() && !dir.empty()) {
+            std::error_code ec;
+            for (auto& entry : fs::recursive_directory_iterator(
+                     dir, fs::directory_options::skip_permission_denied, ec)) {
+                if (!entry.is_regular_file()) continue;
+                auto ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".wrp") continue;
+                WrpFileEntry e;
+                e.from_pbo = false;
+                e.full_path = entry.path().string();
+                e.display = entry.path().filename().string();
+                files.push_back(std::move(e));
+            }
+        }
+        std::sort(files.begin(), files.end(),
+                  [](const auto& a, const auto& b) { return a.full_path < b.full_path; });
         Glib::signal_idle().connect_once([this, files = std::move(files), gen]() mutable {
             if (gen != scan_generation_.load()) return;
             wrp_files_ = std::move(files);
@@ -272,7 +360,11 @@ void TabWrpProject::scan_wrp_files(const std::string& dir) {
             auto ext = entry.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".wrp") {
-                wrp_files_.push_back(entry.path().string());
+                WrpFileEntry e;
+                e.from_pbo = false;
+                e.full_path = entry.path().string();
+                e.display = entry.path().filename().string();
+                wrp_files_.push_back(std::move(e));
             }
         }
     }
@@ -284,10 +376,11 @@ void TabWrpProject::on_filter_changed() {
 
     filtered_files_.clear();
     for (const auto& f : wrp_files_) {
+        const std::string haystack = f.full_path + " " + f.display;
         if (filter.empty()) {
             filtered_files_.push_back(f);
         } else {
-            auto lower = f;
+            auto lower = haystack;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (lower.find(filter) != std::string::npos) {
                 filtered_files_.push_back(f);
@@ -303,9 +396,11 @@ void TabWrpProject::update_file_list() {
     }
 
     for (const auto& f : filtered_files_) {
-        auto* label = Gtk::make_managed<Gtk::Label>(fs::path(f).filename().string());
+        auto* label = Gtk::make_managed<Gtk::Label>(f.display);
         label->set_halign(Gtk::Align::START);
-        label->set_tooltip_text(f);
+        label->set_tooltip_text(f.from_pbo
+            ? (f.full_path + " [" + f.pbo_path + "]")
+            : f.full_path);
         file_list_.append(*label);
     }
 }
@@ -315,17 +410,24 @@ void TabWrpProject::on_file_selected(Gtk::ListBoxRow* row) {
     int idx = row->get_index();
     if (idx < 0 || idx >= static_cast<int>(filtered_files_.size())) return;
 
-    selected_wrp_path_ = filtered_files_[static_cast<size_t>(idx)];
+    selected_wrp_entry_ = filtered_files_[static_cast<size_t>(idx)];
+    selected_wrp_entry_valid_ = true;
+    selected_wrp_path_ = selected_wrp_entry_.full_path;
 
     // Auto-suggest output directory based on selected file
     if (output_entry_.get_text().empty() || !cfg_ || cfg_->drive_root.empty()) {
-        fs::path p{selected_wrp_path_};
+        fs::path p{selected_wrp_entry_.full_path};
         output_entry_.set_text((p.parent_path() / p.stem()).string());
     }
 
     // Load heightmap preview
-    if (selected_wrp_path_ != hm_loaded_path_) {
-        load_heightmap(selected_wrp_path_);
+    std::string wrp_input_path, err;
+    if (!materialize_wrp_entry(selected_wrp_entry_, wrp_input_path, err)) {
+        hm_info_label_.set_text("Error: " + err);
+        return;
+    }
+    if (wrp_input_path != hm_loaded_path_) {
+        load_heightmap(wrp_input_path);
     }
 }
 
@@ -423,6 +525,47 @@ Glib::RefPtr<Gdk::Texture> TabWrpProject::render_heightmap(
     return Gdk::Texture::create_for_pixbuf(copy);
 }
 
+bool TabWrpProject::materialize_wrp_entry(const WrpFileEntry& entry,
+                                          std::string& out_path,
+                                          std::string& err) {
+    if (!entry.from_pbo) {
+        out_path = entry.full_path;
+        return true;
+    }
+
+    auto data = extract_from_pbo(entry.pbo_path, entry.entry_name);
+    if (data.empty()) {
+        err = "cannot extract from PBO";
+        return false;
+    }
+
+    if (!selected_wrp_temp_path_.empty()) {
+        std::error_code ec;
+        fs::remove(selected_wrp_temp_path_, ec);
+        selected_wrp_temp_path_.clear();
+    }
+
+    const auto key = entry.pbo_path + "|" + entry.entry_name;
+    const auto hash = std::to_string(std::hash<std::string>{}(key));
+    auto tmp = fs::temp_directory_path() / ("arma-tools-wrp-" + hash + ".wrp");
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        err = "cannot create temporary WRP file";
+        return false;
+    }
+    out.write(reinterpret_cast<const char*>(data.data()),
+              static_cast<std::streamsize>(data.size()));
+    out.close();
+    if (!out.good()) {
+        err = "cannot write temporary WRP file";
+        return false;
+    }
+
+    selected_wrp_temp_path_ = tmp.string();
+    out_path = selected_wrp_temp_path_;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Options / generate
 // ---------------------------------------------------------------------------
@@ -488,8 +631,13 @@ void TabWrpProject::on_replace_browse() {
 void TabWrpProject::on_generate() {
     if (!cfg_) return;
 
-    if (selected_wrp_path_.empty()) {
+    if (!selected_wrp_entry_valid_) {
         status_label_.set_text("Please select a WRP file from the list.");
+        return;
+    }
+    std::string wrp_input_path, wrp_err;
+    if (!materialize_wrp_entry(selected_wrp_entry_, wrp_input_path, wrp_err)) {
+        status_label_.set_text("WRP input error: " + wrp_err);
         return;
     }
     auto output = std::string(output_entry_.get_text());
@@ -506,7 +654,7 @@ void TabWrpProject::on_generate() {
 
     // Build argument list
     std::vector<std::string> args;
-    args.push_back(selected_wrp_path_);
+    args.push_back(wrp_input_path);
     args.push_back(output);
 
     auto ox = std::string(offset_x_entry_.get_text());
@@ -542,7 +690,7 @@ void TabWrpProject::on_generate() {
     const uint32_t hp_seed = parse_seed_or_default(heightpipe_seed_entry_.get_text(), 1u);
     const double offset_x = parse_double_or_default(offset_x_entry_.get_text(), 200000.0);
     const double offset_z = parse_double_or_default(offset_z_entry_.get_text(), 0.0);
-    const std::string selected_wrp_path = selected_wrp_path_;
+    const std::string selected_wrp_path = wrp_input_path;
 
     // Build display string for log
     std::string display_cmd = tool;

@@ -3,6 +3,7 @@
 #include "audio_decode.h"
 #include "audio_engine.h"
 #include "config.h"
+#include "gl_rvmat_preview.h"
 #include "model_view_panel.h"
 #include "pbo_index_service.h"
 #include "spectrogram.h"
@@ -10,8 +11,10 @@
 #include <armatools/pboindex.h>
 
 #include <atomic>
+#include <array>
 #include <gtkmm.h>
 #include <memory>
+#include <optional>
 #include <sigc++/connection.h>
 #include <string>
 #include <thread>
@@ -82,6 +85,10 @@ private:
     Gtk::TextView info_view_;
     Gtk::ScrolledWindow preview_scroll_;
     Gtk::Picture preview_picture_;
+    Gtk::Paned rvmat_paned_{Gtk::Orientation::HORIZONTAL};
+    Gtk::ScrolledWindow rvmat_info_scroll_;
+    Gtk::TextView rvmat_info_view_;
+    GLRvmatPreview rvmat_preview_;
     ModelViewPanel model_panel_;
 
     // --- Audio panel (embedded player) ---
@@ -135,6 +142,15 @@ private:
     void preview_rvmat(const armatools::pboindex::FindResult& file);
     void preview_jpg(const armatools::pboindex::FindResult& file);
     void preview_text(const armatools::pboindex::FindResult& file);
+
+    struct DecodedTexture {
+        int width = 0;
+        int height = 0;
+        std::vector<uint8_t> pixels;
+    };
+    std::optional<DecodedTexture> load_preview_texture_asset(
+        const armatools::pboindex::FindResult& context_file,
+        const std::string& texture_path);
 
     // Audio player methods
     void audio_load_from_memory(const uint8_t* data, size_t size,

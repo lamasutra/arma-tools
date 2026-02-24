@@ -3,6 +3,7 @@
 #include "config.h"
 
 #include <armatools/heightpipe.h>
+#include <armatools/pboindex.h>
 #include <armatools/wrp.h>
 #include <gtkmm.h>
 #include <thread>
@@ -22,6 +23,8 @@ private:
 
     // WRP file browser
     Gtk::Box filter_box_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Label source_label_{"Source:"};
+    Gtk::ComboBoxText source_combo_;
     Gtk::Entry filter_entry_;
     Gtk::Button scan_button_{"Scan"};
     Gtk::Button folder_button_{"Folder..."};
@@ -29,8 +32,18 @@ private:
     Gtk::ListBox file_list_;
 
     std::string scan_dir_;
-    std::vector<std::string> wrp_files_;
-    std::vector<std::string> filtered_files_;
+    struct WrpFileEntry {
+        std::string display;
+        std::string full_path;
+        std::string pbo_path;
+        std::string entry_name;
+        std::string source;
+        bool from_pbo = false;
+    };
+    std::vector<WrpFileEntry> wrp_files_;
+    std::vector<WrpFileEntry> filtered_files_;
+    std::string current_source_;
+    bool source_combo_updating_ = false;
 
     // Output
     Gtk::Box output_box_{Gtk::Orientation::HORIZONTAL, 4};
@@ -75,9 +88,14 @@ private:
     std::atomic<unsigned> scan_generation_{0};
     std::string hm_loaded_path_;
     std::string selected_wrp_path_;
+    WrpFileEntry selected_wrp_entry_;
+    bool selected_wrp_entry_valid_ = false;
+    std::string selected_wrp_temp_path_;
 
     void on_scan();
     void on_folder_browse();
+    void on_source_changed();
+    void refresh_source_combo();
     void on_filter_changed();
     void on_file_selected(Gtk::ListBoxRow* row);
     void scan_wrp_files(const std::string& dir);
@@ -100,4 +118,7 @@ private:
         std::string& log_text);
     Glib::RefPtr<Gdk::Texture> render_heightmap(
         const std::vector<float>& elevations, int grid_x, int grid_y);
+    bool materialize_wrp_entry(const WrpFileEntry& entry,
+                               std::string& out_path,
+                               std::string& err);
 };

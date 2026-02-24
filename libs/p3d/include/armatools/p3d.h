@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace armatools::p3d {
@@ -44,6 +45,7 @@ struct LOD {
     std::vector<std::string> materials; // MLOD face materials, ODOL v28+ rvmat paths
     std::vector<NamedProperty> named_properties;
     std::vector<std::string> named_selections; // just names, not the full vertex/face data
+    std::unordered_map<std::string, std::vector<uint32_t>> named_selection_vertices;
     std::vector<Vector3P> vertices;            // vertex positions (X, Y, Z)
     std::vector<Vector3P> normals;             // normal vectors
     std::vector<std::vector<UV>> uv_sets;      // UV sets per vertex: [set][vertex]{u,v}

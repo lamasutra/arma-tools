@@ -17,6 +17,15 @@
 namespace fs = std::filesystem;
 
 TabAudio::TabAudio() : Gtk::Box(Gtk::Orientation::VERTICAL, 4) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(browse_button_, "document-open-symbolic", "Browse audio file");
+    make_icon_button(search_button_, "system-search-symbolic", "Search indexed PBOs for audio");
+
     set_margin(8);
 
     // --- Path row ---

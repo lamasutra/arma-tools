@@ -15,6 +15,15 @@
 #include <thread>
 
 TabPaaPreview::TabPaaPreview() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(browse_button_, "document-open-symbolic", "Browse PAA/PAC file");
+    make_icon_button(search_button_, "system-search-symbolic", "Search indexed PBOs for PAA/PAC");
+
     // Left panel: path + info
     info_box_.set_margin(8);
     info_box_.set_size_request(600, -1);

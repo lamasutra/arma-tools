@@ -16,13 +16,16 @@ static constexpr const char* VERT_SRC = R"(
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
+layout(location=3) in vec3 aTangent;
 uniform mat4 uMVP;
 uniform mat3 uNormalMat;
 out vec3 vNormal;
 out vec2 vUV;
+out vec3 vTangent;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = normalize(uNormalMat * aNormal);
+    vTangent = normalize(uNormalMat * aTangent);
     vUV = aUV;
 }
 )";
@@ -31,17 +34,59 @@ static constexpr const char* FRAG_SOLID_SRC = R"(
 #version 330 core
 in vec3 vNormal;
 in vec2 vUV;
+in vec3 vTangent;
 uniform sampler2D uTexture;
+uniform sampler2D uNormalMap;
+uniform sampler2D uSpecularMap;
 uniform bool uHasTexture;
+uniform bool uHasNormalMap;
+uniform bool uHasSpecularMap;
 uniform vec3 uLightDir;
+uniform bool uHasMaterial;
+uniform vec3 uMatAmbient;
+uniform vec3 uMatDiffuse;
+uniform vec3 uMatEmissive;
+uniform vec3 uMatSpecular;
+uniform float uMatSpecPower;
+uniform int uShaderMode;
 out vec4 FragColor;
 void main() {
     vec3 n = normalize(vNormal);
+    if (uHasNormalMap) {
+        vec3 t = normalize(vTangent - dot(vTangent, n) * n);
+        vec3 b = normalize(cross(n, t));
+        vec3 nt = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
+        n = normalize(mat3(t, b, n) * nt);
+    }
+    vec3 v = vec3(0.0, 0.0, 1.0);
     float diff = max(dot(n, uLightDir), 0.0);
     float back_fill = max(dot(n, -uLightDir), 0.0);
-    float light = min(1.0, 0.55 + 0.55 * diff + 0.20 * back_fill);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
-    FragColor = vec4(baseColor.rgb * light, baseColor.a);
+    if (uShaderMode == 3 && baseColor.a < 0.35) discard;
+
+    vec3 ambient = clamp(uHasMaterial ? uMatAmbient : vec3(0.18), 0.0, 1.0);
+    vec3 diffuseC = clamp(uHasMaterial ? uMatDiffuse : vec3(1.0), 0.0, 1.0);
+    vec3 emissive = clamp(uHasMaterial ? uMatEmissive : vec3(0.0), 0.0, 1.0);
+    vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
+    float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
+
+    vec3 h = normalize(uLightDir + v);
+    float spec = pow(max(dot(n, h), 0.0), sp);
+    if (uHasSpecularMap)
+        spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
+    float light = min(1.0, 0.15 + 0.85 * diff + 0.20 * back_fill);
+
+    if (uShaderMode == 1) {
+        spec *= 1.8;
+        light = min(1.0, light * 1.08);
+    } else if (uShaderMode == 2) {
+        emissive *= 1.6;
+    }
+
+    vec3 lit = baseColor.rgb * (ambient * 0.25 + diffuseC * light)
+             + specC * spec * 0.35
+             + emissive;
+    FragColor = vec4(clamp(lit, 0.0, 1.0), baseColor.a);
     if (FragColor.a < 0.01) discard;
 }
 )";
@@ -60,13 +105,16 @@ static constexpr const char* VERT_ES_SRC = R"(
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
+layout(location=3) in vec3 aTangent;
 uniform mat4 uMVP;
 uniform mat3 uNormalMat;
 out vec3 vNormal;
 out vec2 vUV;
+out vec3 vTangent;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = normalize(uNormalMat * aNormal);
+    vTangent = normalize(uNormalMat * aTangent);
     vUV = aUV;
 }
 )";
@@ -76,17 +124,59 @@ static constexpr const char* FRAG_SOLID_ES_SRC = R"(
 precision mediump float;
 in vec3 vNormal;
 in vec2 vUV;
+in vec3 vTangent;
 uniform sampler2D uTexture;
+uniform sampler2D uNormalMap;
+uniform sampler2D uSpecularMap;
 uniform bool uHasTexture;
+uniform bool uHasNormalMap;
+uniform bool uHasSpecularMap;
 uniform vec3 uLightDir;
+uniform bool uHasMaterial;
+uniform vec3 uMatAmbient;
+uniform vec3 uMatDiffuse;
+uniform vec3 uMatEmissive;
+uniform vec3 uMatSpecular;
+uniform float uMatSpecPower;
+uniform int uShaderMode;
 out vec4 FragColor;
 void main() {
     vec3 n = normalize(vNormal);
+    if (uHasNormalMap) {
+        vec3 t = normalize(vTangent - dot(vTangent, n) * n);
+        vec3 b = normalize(cross(n, t));
+        vec3 nt = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
+        n = normalize(mat3(t, b, n) * nt);
+    }
+    vec3 v = vec3(0.0, 0.0, 1.0);
     float diff = max(dot(n, uLightDir), 0.0);
     float back_fill = max(dot(n, -uLightDir), 0.0);
-    float light = min(1.0, 0.55 + 0.55 * diff + 0.20 * back_fill);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
-    FragColor = vec4(baseColor.rgb * light, baseColor.a);
+    if (uShaderMode == 3 && baseColor.a < 0.35) discard;
+
+    vec3 ambient = clamp(uHasMaterial ? uMatAmbient : vec3(0.18), 0.0, 1.0);
+    vec3 diffuseC = clamp(uHasMaterial ? uMatDiffuse : vec3(1.0), 0.0, 1.0);
+    vec3 emissive = clamp(uHasMaterial ? uMatEmissive : vec3(0.0), 0.0, 1.0);
+    vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
+    float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
+
+    vec3 h = normalize(uLightDir + v);
+    float spec = pow(max(dot(n, h), 0.0), sp);
+    if (uHasSpecularMap)
+        spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
+    float light = min(1.0, 0.15 + 0.85 * diff + 0.20 * back_fill);
+
+    if (uShaderMode == 1) {
+        spec *= 1.8;
+        light = min(1.0, light * 1.08);
+    } else if (uShaderMode == 2) {
+        emissive *= 1.6;
+    }
+
+    vec3 lit = baseColor.rgb * (ambient * 0.25 + diffuseC * light)
+             + specC * spec * 0.35
+             + emissive;
+    FragColor = vec4(clamp(lit, 0.0, 1.0), baseColor.a);
     if (FragColor.a < 0.01) discard;
 }
 )";
@@ -107,6 +197,7 @@ layout(location=0) in vec3 aPos;
 uniform mat4 uMVP;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_PointSize = 8.0;
 }
 )";
 
@@ -116,6 +207,7 @@ layout(location=0) in vec3 aPos;
 uniform mat4 uMVP;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_PointSize = 8.0;
 }
 )";
 
@@ -194,6 +286,7 @@ GLModelView::GLModelView() {
     set_hexpand(true);
     set_vexpand(true);
     set_size_request(200, 200);
+    set_focusable(true);
 
     signal_realize().connect(sigc::mem_fun(*this, &GLModelView::on_realize_gl), false);
     signal_unrealize().connect(sigc::mem_fun(*this, &GLModelView::on_unrealize_gl), false);
@@ -250,6 +343,86 @@ GLModelView::GLModelView() {
         return true;
     }, false);
     add_controller(scroll_zoom_);
+
+    click_focus_ = Gtk::GestureClick::create();
+    click_focus_->set_button(GDK_BUTTON_PRIMARY);
+    click_focus_->signal_pressed().connect([this](int, double, double) {
+        grab_focus();
+    });
+    add_controller(click_focus_);
+
+    key_move_ = Gtk::EventControllerKey::create();
+    key_move_->signal_key_pressed().connect(
+        [this](guint keyval, guint, Gdk::ModifierType state) -> bool {
+            bool handled = true;
+            switch (keyval) {
+            case GDK_KEY_w:
+            case GDK_KEY_W:
+                move_fwd_ = true;
+                break;
+            case GDK_KEY_s:
+            case GDK_KEY_S:
+                move_back_ = true;
+                break;
+            case GDK_KEY_a:
+            case GDK_KEY_A:
+                move_left_ = true;
+                break;
+            case GDK_KEY_d:
+            case GDK_KEY_D:
+                move_right_ = true;
+                break;
+            case GDK_KEY_q:
+            case GDK_KEY_Q:
+                move_up_ = true;
+                break;
+            case GDK_KEY_z:
+            case GDK_KEY_Z:
+                move_down_ = true;
+                break;
+            case GDK_KEY_Shift_L:
+            case GDK_KEY_Shift_R:
+                move_fast_ = true;
+                break;
+            default:
+                handled = false;
+                break;
+            }
+            if ((state & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType(0))
+                move_fast_ = true;
+            if (handled && !move_tick_conn_.connected()) {
+                move_tick_conn_ = Glib::signal_timeout().connect(
+                    sigc::mem_fun(*this, &GLModelView::movement_tick), 16);
+            }
+            return handled;
+        }, false);
+    key_move_->signal_key_released().connect(
+        [this](guint keyval, guint, Gdk::ModifierType state) {
+            switch (keyval) {
+            case GDK_KEY_w:
+            case GDK_KEY_W: move_fwd_ = false; break;
+            case GDK_KEY_s:
+            case GDK_KEY_S: move_back_ = false; break;
+            case GDK_KEY_a:
+            case GDK_KEY_A: move_left_ = false; break;
+            case GDK_KEY_d:
+            case GDK_KEY_D: move_right_ = false; break;
+            case GDK_KEY_q:
+            case GDK_KEY_Q: move_up_ = false; break;
+            case GDK_KEY_z:
+            case GDK_KEY_Z: move_down_ = false; break;
+            case GDK_KEY_Shift_L:
+            case GDK_KEY_Shift_R: move_fast_ = false; break;
+            default: break;
+            }
+            if ((state & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType(0))
+                move_fast_ = false;
+            if (!move_fwd_ && !move_back_ && !move_left_ && !move_right_
+                && !move_up_ && !move_down_) {
+                move_tick_conn_.disconnect();
+            }
+        });
+    add_controller(key_move_);
 }
 
 GLModelView::~GLModelView() = default;
@@ -291,8 +464,19 @@ void GLModelView::on_realize_gl() {
     loc_mvp_solid_ = glGetUniformLocation(prog_solid_, "uMVP");
     loc_normal_mat_ = glGetUniformLocation(prog_solid_, "uNormalMat");
     loc_texture_ = glGetUniformLocation(prog_solid_, "uTexture");
+    loc_normal_map_ = glGetUniformLocation(prog_solid_, "uNormalMap");
+    loc_specular_map_ = glGetUniformLocation(prog_solid_, "uSpecularMap");
     loc_has_texture_ = glGetUniformLocation(prog_solid_, "uHasTexture");
+    loc_has_normal_map_ = glGetUniformLocation(prog_solid_, "uHasNormalMap");
+    loc_has_specular_map_ = glGetUniformLocation(prog_solid_, "uHasSpecularMap");
     loc_light_dir_ = glGetUniformLocation(prog_solid_, "uLightDir");
+    loc_has_material_ = glGetUniformLocation(prog_solid_, "uHasMaterial");
+    loc_mat_ambient_ = glGetUniformLocation(prog_solid_, "uMatAmbient");
+    loc_mat_diffuse_ = glGetUniformLocation(prog_solid_, "uMatDiffuse");
+    loc_mat_emissive_ = glGetUniformLocation(prog_solid_, "uMatEmissive");
+    loc_mat_specular_ = glGetUniformLocation(prog_solid_, "uMatSpecular");
+    loc_mat_spec_power_ = glGetUniformLocation(prog_solid_, "uMatSpecPower");
+    loc_shader_mode_ = glGetUniformLocation(prog_solid_, "uShaderMode");
     loc_mvp_wire_ = glGetUniformLocation(prog_wire_, "uMVP");
     loc_color_wire_ = glGetUniformLocation(prog_wire_, "uColor");
 
@@ -321,7 +505,14 @@ void GLModelView::cleanup_gl() {
     for (auto& [key, tex] : textures_)
         glDeleteTextures(1, &tex);
     textures_.clear();
+    for (auto& [key, tex] : normal_maps_)
+        glDeleteTextures(1, &tex);
+    normal_maps_.clear();
+    for (auto& [key, tex] : specular_maps_)
+        glDeleteTextures(1, &tex);
+    specular_maps_.clear();
     texture_has_alpha_.clear();
+    material_params_.clear();
 
     if (wire_vao_) { glDeleteVertexArrays(1, &wire_vao_); wire_vao_ = 0; }
     if (wire_vbo_) { glDeleteBuffers(1, &wire_vbo_); wire_vbo_ = 0; }
@@ -334,6 +525,9 @@ void GLModelView::cleanup_gl() {
 
     if (axis_vao_) { glDeleteVertexArrays(1, &axis_vao_); axis_vao_ = 0; }
     if (axis_vbo_) { glDeleteBuffers(1, &axis_vbo_); axis_vbo_ = 0; }
+    if (highlight_vao_) { glDeleteVertexArrays(1, &highlight_vao_); highlight_vao_ = 0; }
+    if (highlight_vbo_) { glDeleteBuffers(1, &highlight_vbo_); highlight_vbo_ = 0; }
+    highlight_vertex_count_ = 0;
 
     if (prog_solid_) { glDeleteProgram(prog_solid_); prog_solid_ = 0; }
     if (prog_wire_) { glDeleteProgram(prog_wire_); prog_wire_ = 0; }
@@ -461,6 +655,10 @@ void GLModelView::draw_grid_and_axis(const float* mvp) {
 }
 
 void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
+    set_lods(std::vector<armatools::p3d::LOD>{lod});
+}
+
+void GLModelView::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
     make_current();
     if (has_error()) return;
 
@@ -474,59 +672,107 @@ void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
     // Group faces by texture (normalized key for case-insensitive matching)
     std::unordered_map<std::string, std::vector<float>> grouped_verts;
 
-    for (const auto& face : lod.face_data) {
-        const auto& fvs = face.vertices;
-        if (fvs.size() < 3) continue;
+    for (const auto& lod : lods) {
+        for (const auto& face : lod.face_data) {
+            const auto& fvs = face.vertices;
+            if (fvs.size() < 3) continue;
 
-        auto tex_key = armatools::armapath::to_slash_lower(face.texture);
-        auto& buf = grouped_verts[tex_key];
+            auto tex_key = armatools::armapath::to_slash_lower(face.texture);
+            if (tex_key.empty())
+                tex_key = armatools::armapath::to_slash_lower(face.material);
+            auto& buf = grouped_verts[tex_key];
 
-        // Triangulate: fan from vertex 0
-        for (size_t i = 1; i + 1 < fvs.size(); i++) {
-            const size_t tri[3] = {0, i, i + 1};
-            for (auto vi : tri) {
-                const auto& fv = fvs[vi];
-
-                // Position (negate X to convert from P3D left-handed to GL right-handed)
-                if (fv.point_index < lod.vertices.size()) {
-                    const auto& p = lod.vertices[fv.point_index];
-                    buf.push_back(-p[0]);
-                    buf.push_back(p[1]);
-                    buf.push_back(p[2]);
-                } else {
-                    buf.push_back(0); buf.push_back(0); buf.push_back(0);
+            // Triangulate: fan from vertex 0
+            for (size_t i = 1; i + 1 < fvs.size(); i++) {
+                const size_t tri[3] = {0, i, i + 1};
+                float pos[3][3] = {};
+                float uv[3][2] = {};
+                for (int ti = 0; ti < 3; ++ti) {
+                    const auto& fv = fvs[tri[ti]];
+                    if (fv.point_index < lod.vertices.size()) {
+                        const auto& p = lod.vertices[fv.point_index];
+                        pos[ti][0] = -p[0];
+                        pos[ti][1] = p[1];
+                        pos[ti][2] = p[2];
+                    }
+                    uv[ti][0] = std::isfinite(fv.uv[0]) ? fv.uv[0] : 0.0f;
+                    uv[ti][1] = std::isfinite(fv.uv[1]) ? fv.uv[1] : 0.0f;
                 }
-
-                // Normal (negate X to match the coordinate flip)
-                if (fv.normal_index >= 0 &&
-                    static_cast<size_t>(fv.normal_index) < lod.normals.size()) {
-                    const auto& n = lod.normals[static_cast<size_t>(fv.normal_index)];
-                    buf.push_back(-n[0]);
-                    buf.push_back(n[1]);
-                    buf.push_back(n[2]);
-                } else {
-                    buf.push_back(0); buf.push_back(1); buf.push_back(0);
+                float e1x = pos[1][0] - pos[0][0];
+                float e1y = pos[1][1] - pos[0][1];
+                float e1z = pos[1][2] - pos[0][2];
+                float e2x = pos[2][0] - pos[0][0];
+                float e2y = pos[2][1] - pos[0][1];
+                float e2z = pos[2][2] - pos[0][2];
+                float du1 = uv[1][0] - uv[0][0];
+                float dv1 = uv[1][1] - uv[0][1];
+                float du2 = uv[2][0] - uv[0][0];
+                float dv2 = uv[2][1] - uv[0][1];
+                float denom = du1 * dv2 - dv1 * du2;
+                float tx = 1.0f, ty = 0.0f, tz = 0.0f;
+                if (std::abs(denom) > 1e-8f) {
+                    float r = 1.0f / denom;
+                    tx = (dv2 * e1x - dv1 * e2x) * r;
+                    ty = (dv2 * e1y - dv1 * e2y) * r;
+                    tz = (dv2 * e1z - dv1 * e2z) * r;
+                    float tlen = std::sqrt(tx * tx + ty * ty + tz * tz);
+                    if (tlen > 1e-8f) {
+                        tx /= tlen;
+                        ty /= tlen;
+                        tz /= tlen;
+                    } else {
+                        tx = 1.0f; ty = 0.0f; tz = 0.0f;
+                    }
                 }
+                for (auto vi : tri) {
+                    const auto& fv = fvs[vi];
 
-                // UV (pass through raw; GL's bottom-up convention cancels P3D's top-down UVs)
-                float u = fv.uv[0];
-                float v = fv.uv[1];
+                    // Position (negate X to convert from P3D left-handed to GL right-handed)
+                    if (fv.point_index < lod.vertices.size()) {
+                        const auto& p = lod.vertices[fv.point_index];
+                        buf.push_back(-p[0]);
+                        buf.push_back(p[1]);
+                        buf.push_back(p[2]);
+                    } else {
+                        buf.push_back(0); buf.push_back(0); buf.push_back(0);
+                    }
 
-                // Sanitize NaN / infinity
-                if (!std::isfinite(u)) u = 0.0f;
-                if (!std::isfinite(v)) v = 0.0f;
+                    // Normal (negate X to match the coordinate flip)
+                    if (fv.normal_index >= 0 &&
+                        static_cast<size_t>(fv.normal_index) < lod.normals.size()) {
+                        const auto& n = lod.normals[static_cast<size_t>(fv.normal_index)];
+                        buf.push_back(-n[0]);
+                        buf.push_back(n[1]);
+                        buf.push_back(n[2]);
+                    } else {
+                        buf.push_back(0); buf.push_back(1); buf.push_back(0);
+                    }
 
-                buf.push_back(u);
-                buf.push_back(v);
+                    // UV (pass through raw; GL's bottom-up convention cancels P3D's top-down UVs)
+                    float u = fv.uv[0];
+                    float v = fv.uv[1];
+
+                    // Sanitize NaN / infinity
+                    if (!std::isfinite(u)) u = 0.0f;
+                    if (!std::isfinite(v)) v = 0.0f;
+
+                    buf.push_back(u);
+                    buf.push_back(v);
+                    buf.push_back(tx);
+                    buf.push_back(ty);
+                    buf.push_back(tz);
+                }
             }
         }
     }
 
     // Upload each group
+    size_t empty_key_groups = 0;
     for (auto& [tex_key, verts] : grouped_verts) {
         MeshGroup g;
         g.texture_key = tex_key;
-        g.vertex_count = static_cast<int>(verts.size()) / 8;
+        if (g.texture_key.empty()) ++empty_key_groups;
+        g.vertex_count = static_cast<int>(verts.size()) / 11;
 
         glGenVertexArrays(1, &g.vao);
         glGenBuffers(1, &g.vbo);
@@ -539,16 +785,20 @@ void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
 
         // aPos (location 0)
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(0));
         // aNormal (location 1)
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(3 * sizeof(float)));
         // aUV (location 2)
         glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(6 * sizeof(float)));
+        // aTangent (location 3)
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
+                              reinterpret_cast<void*>(8 * sizeof(float)));
 
         glBindVertexArray(0);
         groups_.push_back(std::move(g));
@@ -564,11 +814,11 @@ void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
         // Collect all triangle positions into a flat buffer
         std::vector<float> all_positions;
         for (const auto& [tex_key, verts] : grouped_verts) {
-            size_t vert_count = verts.size() / 8;
+            size_t vert_count = verts.size() / 11;
             for (size_t i = 0; i < vert_count; i++) {
-                all_positions.push_back(verts[i * 8 + 0]);
-                all_positions.push_back(verts[i * 8 + 1]);
-                all_positions.push_back(verts[i * 8 + 2]);
+                all_positions.push_back(verts[i * 11 + 0]);
+                all_positions.push_back(verts[i * 11 + 1]);
+                all_positions.push_back(verts[i * 11 + 2]);
             }
         }
 
@@ -611,7 +861,25 @@ void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
         }
     }
 
+    lod_vertex_positions_.clear();
+    if (!lods.empty()) {
+        const auto& primary = lods.front();
+        lod_vertex_positions_.reserve(primary.vertices.size() * 3);
+        for (const auto& p : primary.vertices) {
+            lod_vertex_positions_.push_back(-p[0]);
+            lod_vertex_positions_.push_back(p[1]);
+            lod_vertex_positions_.push_back(p[2]);
+        }
+    }
+    rebuild_highlight_vertex_buffer();
+
     has_geometry_ = !groups_.empty();
+    debug_group_report_pending_ = true;
+    app_log(LogLevel::Debug,
+            "GLModelView: set_lods groups=" + std::to_string(groups_.size())
+            + " textures_loaded=" + std::to_string(textures_.size())
+            + " materials_loaded=" + std::to_string(material_params_.size())
+            + " empty_group_keys=" + std::to_string(empty_key_groups));
     queue_render();
 }
 
@@ -756,9 +1024,145 @@ Glib::RefPtr<Gdk::Pixbuf> GLModelView::snapshot() const {
     return pixbuf->copy();
 }
 
-void GLModelView::set_highlight_faces(const std::vector<uint32_t>& face_indices) {
-    highlighted_faces_ = face_indices;
+void GLModelView::set_highlight_vertices(const std::vector<uint32_t>& vertex_indices) {
+    highlighted_vertices_ = vertex_indices;
+    rebuild_highlight_vertex_buffer();
     queue_render();
+}
+
+void GLModelView::set_normal_map(const std::string& key, int width, int height,
+                                 const uint8_t* rgba_data) {
+    make_current();
+    if (has_error() || width <= 0 || height <= 0 || !rgba_data) return;
+    auto norm_key = armatools::armapath::to_slash_lower(key);
+    auto it = normal_maps_.find(norm_key);
+    if (it != normal_maps_.end()) {
+        glDeleteTextures(1, &it->second);
+        normal_maps_.erase(it);
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    normal_maps_[norm_key] = tex;
+    queue_render();
+}
+
+void GLModelView::set_specular_map(const std::string& key, int width, int height,
+                                   const uint8_t* rgba_data) {
+    make_current();
+    if (has_error() || width <= 0 || height <= 0 || !rgba_data) return;
+    auto norm_key = armatools::armapath::to_slash_lower(key);
+    auto it = specular_maps_.find(norm_key);
+    if (it != specular_maps_.end()) {
+        glDeleteTextures(1, &it->second);
+        specular_maps_.erase(it);
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    specular_maps_[norm_key] = tex;
+    queue_render();
+}
+
+void GLModelView::set_material_params(const std::string& key,
+                                      const MaterialParams& params) {
+    auto norm_key = armatools::armapath::to_slash_lower(key);
+    material_params_[norm_key] = params;
+    queue_render();
+}
+
+void GLModelView::move_camera_local(float forward, float right) {
+    const float ca = std::cos(azimuth_);
+    const float sa = std::sin(azimuth_);
+    const float fx = -sa;
+    const float fz = -ca;
+    const float rx = ca;
+    const float rz = -sa;
+
+    pivot_[0] += fx * forward + rx * right;
+    pivot_[2] += fz * forward + rz * right;
+    queue_render();
+    if (!suppress_camera_signal_) signal_camera_changed_.emit();
+}
+
+bool GLModelView::movement_tick() {
+    float forward = 0.0f;
+    float right = 0.0f;
+    float vertical = 0.0f;
+    if (move_fwd_) forward += 1.0f;
+    if (move_back_) forward -= 1.0f;
+    if (move_right_) right += 1.0f;
+    if (move_left_) right -= 1.0f;
+    if (move_up_) vertical += 1.0f;
+    if (move_down_) vertical -= 1.0f;
+    if (forward == 0.0f && right == 0.0f && vertical == 0.0f) return false;
+
+    float step = std::max(0.01f, distance_ * 0.006f);
+    if (move_fast_) step *= 3.0f;
+    move_camera_local(forward * step, right * step);
+    pivot_[1] += vertical * step;
+    queue_render();
+    return true;
+}
+
+void GLModelView::rebuild_highlight_vertex_buffer() {
+    make_current();
+    if (has_error()) return;
+
+    if (highlight_vao_) { glDeleteVertexArrays(1, &highlight_vao_); highlight_vao_ = 0; }
+    if (highlight_vbo_) { glDeleteBuffers(1, &highlight_vbo_); highlight_vbo_ = 0; }
+    highlight_vertex_count_ = 0;
+
+    if (highlighted_vertices_.empty() || lod_vertex_positions_.empty()) {
+        app_log(LogLevel::Debug, "Highlight buffer: empty input (selection or vertex positions)");
+        return;
+    }
+
+    std::vector<float> points;
+    points.reserve(highlighted_vertices_.size() * 3);
+    const size_t vertex_count = lod_vertex_positions_.size() / 3;
+    for (auto idx : highlighted_vertices_) {
+        if (idx >= vertex_count) continue;
+        const size_t base = static_cast<size_t>(idx) * 3;
+        points.push_back(lod_vertex_positions_[base + 0]);
+        points.push_back(lod_vertex_positions_[base + 1]);
+        points.push_back(lod_vertex_positions_[base + 2]);
+    }
+    if (points.empty()) {
+        app_log(LogLevel::Debug, "Highlight buffer: all selected vertices out of range");
+        return;
+    }
+
+    highlight_vertex_count_ = static_cast<int>(points.size() / 3);
+    glGenVertexArrays(1, &highlight_vao_);
+    glGenBuffers(1, &highlight_vbo_);
+    glBindVertexArray(highlight_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, highlight_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(points.size() * sizeof(float)),
+                 points.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                          reinterpret_cast<void*>(0));
+    glBindVertexArray(0);
+    app_log(LogLevel::Debug,
+            "Highlight buffer rebuilt: selected=" + std::to_string(highlighted_vertices_.size()) +
+            " drawn=" + std::to_string(highlight_vertex_count_));
 }
 
 void GLModelView::build_matrices(float* mvp, float* normal_mat) {
@@ -796,64 +1200,137 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     // Draw grid and axis before the model
     draw_grid_and_axis(mvp);
 
-    if (!has_geometry_ || !prog_solid_) return true;
+    if (!prog_solid_) return true;
 
-    // Light direction (normalized, world space — from upper-right-front)
-    float light_dir[3] = {0.4f, 0.7f, 0.5f};
-    vec3_normalize(light_dir);
-
-    // Common solid shader setup
-    glUseProgram(prog_solid_);
-    glUniformMatrix4fv(loc_mvp_solid_, 1, GL_FALSE, mvp);
-    glUniformMatrix3fv(loc_normal_mat_, 1, GL_FALSE, normal_mat);
-    glUniform3fv(loc_light_dir_, 1, light_dir);
-    glUniform1i(loc_texture_, 0);
-
-    if (is_desktop_gl_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
-    // Helper: check if a group's texture has alpha
-    auto group_has_alpha = [&](const MeshGroup& g) -> bool {
-        if (!textured_) return false;
-        auto it = texture_has_alpha_.find(g.texture_key);
-        return it != texture_has_alpha_.end() && it->second;
-    };
-
-    // Helper: bind texture for a group and draw
-    auto draw_group = [&](const MeshGroup& g) {
-        bool has_tex = false;
-        if (textured_) {
-            auto it = textures_.find(g.texture_key);
-            if (it != textures_.end()) {
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, it->second);
-                has_tex = true;
+    if (has_geometry_) {
+        if (debug_group_report_pending_) {
+            size_t missing_texture = 0;
+            size_t missing_material = 0;
+            size_t empty_key = 0;
+            size_t logged = 0;
+            for (const auto& g : groups_) {
+                if (g.texture_key.empty()) ++empty_key;
+                if (!textures_.contains(g.texture_key)) ++missing_texture;
+                if (!material_params_.contains(g.texture_key)) ++missing_material;
+                if (logged < 8) {
+                    const bool has_tex = textures_.contains(g.texture_key);
+                    const bool has_mat = material_params_.contains(g.texture_key);
+                    app_log(LogLevel::Debug,
+                            "GLModelView: group key='" + g.texture_key
+                            + "' verts=" + std::to_string(g.vertex_count)
+                            + " has_tex=" + std::string(has_tex ? "yes" : "no")
+                            + " has_mat=" + std::string(has_mat ? "yes" : "no"));
+                    ++logged;
+                }
             }
+            app_log(LogLevel::Debug,
+                    "GLModelView: group_bind_summary groups=" + std::to_string(groups_.size())
+                    + " missing_tex=" + std::to_string(missing_texture)
+                    + " missing_mat=" + std::to_string(missing_material)
+                    + " empty_keys=" + std::to_string(empty_key)
+                    + " textures_loaded=" + std::to_string(textures_.size())
+                    + " materials_loaded=" + std::to_string(material_params_.size()));
+            debug_group_report_pending_ = false;
         }
-        glUniform1i(loc_has_texture_, has_tex ? 1 : 0);
-        glBindVertexArray(g.vao);
-        glDrawArrays(GL_TRIANGLES, 0, g.vertex_count);
-    };
 
-    // Pass 1: Opaque groups — no blending, depth write ON
-    glDisable(GL_BLEND);
-    glDepthMask(GL_TRUE);
-    for (const auto& g : groups_) {
-        if (group_has_alpha(g)) continue;
-        draw_group(g);
+        // Light direction (normalized, world space — from upper-right-front)
+        float light_dir[3] = {0.4f, 0.7f, 0.5f};
+        vec3_normalize(light_dir);
+
+        // Common solid shader setup
+        glUseProgram(prog_solid_);
+        glUniformMatrix4fv(loc_mvp_solid_, 1, GL_FALSE, mvp);
+        glUniformMatrix3fv(loc_normal_mat_, 1, GL_FALSE, normal_mat);
+        glUniform3fv(loc_light_dir_, 1, light_dir);
+        glUniform1i(loc_texture_, 0);
+        glUniform1i(loc_normal_map_, 1);
+        glUniform1i(loc_specular_map_, 2);
+
+        if (is_desktop_gl_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+        // Helper: check if a group's texture has alpha
+        auto group_has_alpha = [&](const MeshGroup& g) -> bool {
+            if (!textured_) return false;
+            auto it = texture_has_alpha_.find(g.texture_key);
+            return it != texture_has_alpha_.end() && it->second;
+        };
+
+        // Helper: bind texture for a group and draw
+        auto draw_group = [&](const MeshGroup& g) {
+            bool has_tex = false;
+            bool has_normal = false;
+            bool has_spec = false;
+            if (textured_) {
+                auto it = textures_.find(g.texture_key);
+                if (it != textures_.end()) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, it->second);
+                    has_tex = true;
+                }
+                auto nit = normal_maps_.find(g.texture_key);
+                if (nit != normal_maps_.end()) {
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, nit->second);
+                    has_normal = true;
+                }
+                auto sit = specular_maps_.find(g.texture_key);
+                if (sit != specular_maps_.end()) {
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, sit->second);
+                    has_spec = true;
+                }
+            }
+            glUniform1i(loc_has_texture_, has_tex ? 1 : 0);
+            glUniform1i(loc_has_normal_map_, has_normal ? 1 : 0);
+            glUniform1i(loc_has_specular_map_, has_spec ? 1 : 0);
+            auto mit = material_params_.find(g.texture_key);
+            if (mit != material_params_.end()) {
+                const auto& mp = mit->second;
+                glUniform1i(loc_has_material_, 1);
+                glUniform3fv(loc_mat_ambient_, 1, mp.ambient);
+                glUniform3fv(loc_mat_diffuse_, 1, mp.diffuse);
+                glUniform3fv(loc_mat_emissive_, 1, mp.emissive);
+                glUniform3fv(loc_mat_specular_, 1, mp.specular);
+                glUniform1f(loc_mat_spec_power_, mp.specular_power);
+                glUniform1i(loc_shader_mode_, mp.shader_mode);
+            } else {
+                static const float ka[3] = {0.18f, 0.18f, 0.18f};
+                static const float kd[3] = {1.0f, 1.0f, 1.0f};
+                static const float ke[3] = {0.0f, 0.0f, 0.0f};
+                static const float ks[3] = {0.08f, 0.08f, 0.08f};
+                glUniform1i(loc_has_material_, 0);
+                glUniform3fv(loc_mat_ambient_, 1, ka);
+                glUniform3fv(loc_mat_diffuse_, 1, kd);
+                glUniform3fv(loc_mat_emissive_, 1, ke);
+                glUniform3fv(loc_mat_specular_, 1, ks);
+                glUniform1f(loc_mat_spec_power_, 32.0f);
+                glUniform1i(loc_shader_mode_, 0);
+            }
+            glBindVertexArray(g.vao);
+            glDrawArrays(GL_TRIANGLES, 0, g.vertex_count);
+        };
+
+        // Pass 1: Opaque groups — no blending, depth write ON
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        for (const auto& g : groups_) {
+            if (group_has_alpha(g)) continue;
+            draw_group(g);
+        }
+
+        // Pass 2: Transparent groups — blending ON, depth write OFF
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        for (const auto& g : groups_) {
+            if (!group_has_alpha(g)) continue;
+            draw_group(g);
+        }
+
+        // Restore depth write and disable blending before wireframe pass
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
     }
-
-    // Pass 2: Transparent groups — blending ON, depth write OFF
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_FALSE);
-    for (const auto& g : groups_) {
-        if (!group_has_alpha(g)) continue;
-        draw_group(g);
-    }
-
-    // Restore depth write and disable blending before wireframe pass
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
 
     // Wireframe pass
     if (wireframe_ && prog_wire_) {
@@ -879,6 +1356,18 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             glBindVertexArray(wire_vao_);
             glDrawElements(GL_LINES, wire_index_count_, GL_UNSIGNED_INT, nullptr);
         }
+    }
+
+    if (highlight_vao_ && highlight_vertex_count_ > 0 && prog_wire_) {
+        glUseProgram(prog_wire_);
+        glUniformMatrix4fv(loc_mvp_wire_, 1, GL_FALSE, mvp);
+        glUniform3f(loc_color_wire_, 1.0f, 0.9f, 0.1f);
+        glBindVertexArray(highlight_vao_);
+        glDisable(GL_DEPTH_TEST);
+        if (is_desktop_gl_) glPointSize(6.0f);
+        glDrawArrays(GL_POINTS, 0, highlight_vertex_count_);
+        if (is_desktop_gl_) glPointSize(1.0f);
+        glEnable(GL_DEPTH_TEST);
     }
 
     glBindVertexArray(0);

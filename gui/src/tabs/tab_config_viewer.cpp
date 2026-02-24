@@ -14,6 +14,16 @@
 namespace fs = std::filesystem;
 
 TabConfigViewer::TabConfigViewer() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(browse_button_, "document-open-symbolic", "Browse config file");
+    make_icon_button(search_button_, "system-search-symbolic",
+                     "Search indexed PBOs for config/bin/rvmat");
+
     // ---- Left panel ----
     left_box_.set_margin(8);
 

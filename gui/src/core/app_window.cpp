@@ -600,6 +600,17 @@ AppWindow::AppWindow(GtkApplication* app) {
     tab_wrp_info_.set_pbo_index_service(services_.pbo_index_service);
     tab_p3d_info_.set_pbo_index_service(services_.pbo_index_service);
     tab_paa_preview_.set_pbo_index_service(services_.pbo_index_service);
+    tab_wrp_info_.set_on_open_p3d_info([this](const std::string& model_path) {
+        if (model_path.empty()) return;
+        if (!tab_p3d_info_inited_) {
+            tab_p3d_info_.set_config(&cfg_);
+            tab_p3d_info_inited_ = true;
+        }
+        tab_p3d_info_.open_model_path(model_path);
+        auto it = panels_.find("p3d-info");
+        if (it != panels_.end() && it->second)
+            panel_widget_raise(it->second);
+    });
 
     auto rebuild_model_services =
         [this](const std::shared_ptr<armatools::pboindex::DB>& db,
@@ -616,6 +627,8 @@ AppWindow::AppWindow(GtkApplication* app) {
             tab_p3d_info_.set_texture_loader_service(services_.lod_textures_loader_service);
             tab_wrp_info_.set_model_loader_service(services_.p3d_model_loader_service);
             tab_wrp_info_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_obj_replace_.set_model_loader_service(services_.p3d_model_loader_service);
+            tab_obj_replace_.set_texture_loader_service(services_.lod_textures_loader_service);
         };
 
     rebuild_model_services(nullptr, nullptr);

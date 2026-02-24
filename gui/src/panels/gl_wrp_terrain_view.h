@@ -1,0 +1,116 @@
+#pragma once
+
+#include <gtkmm.h>
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <vector>
+
+#include <armatools/wrp.h>
+
+class GLWrpTerrainView : public Gtk::GLArea {
+public:
+    GLWrpTerrainView();
+    ~GLWrpTerrainView() override;
+
+    void clear_world();
+    void set_world_data(const armatools::wrp::WorldData& world);
+    void set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects);
+    void set_wireframe(bool on);
+    void set_show_objects(bool on);
+    void set_color_mode(int mode);
+    void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
+    void set_on_object_picked(std::function<void(size_t)> cb);
+
+private:
+    struct Vertex {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float h = 0.0f;
+        float m = 0.0f;
+        float t = 0.0f;
+        float sr = 0.3f;
+        float sg = 0.3f;
+        float sb = 0.3f;
+    };
+
+    // Input world subset used for rendering.
+    std::vector<float> heights_;
+    int grid_w_ = 0;
+    int grid_h_ = 0;
+    float cell_size_ = 1.0f;
+    float min_elevation_ = 0.0f;
+    float max_elevation_ = 1.0f;
+    std::vector<float> surface_classes_;
+    std::vector<float> texture_indices_;
+    std::vector<std::array<float, 3>> satellite_palette_;
+    std::vector<float> object_points_;
+    std::vector<float> object_positions_;
+
+    // Camera.
+    float pivot_[3] = {0.0f, 0.0f, 0.0f};
+    float azimuth_ = 0.5f;
+    float elevation_ = 0.8f;
+    float distance_ = 500.0f;
+    float drag_start_azimuth_ = 0.0f;
+    float drag_start_elevation_ = 0.0f;
+    float drag_start_pivot_[3] = {0.0f, 0.0f, 0.0f};
+
+    // Render flags.
+    bool wireframe_ = false;
+    bool show_objects_ = true;
+    int color_mode_ = 0; // 0=elevation, 1=surface mask, 2=texture index, 3=satellite
+    float texture_index_max_ = 1.0f;
+
+    // GL resources.
+    uint32_t prog_terrain_ = 0;
+    uint32_t prog_points_ = 0;
+    int loc_mvp_terrain_ = -1;
+    int loc_hmin_terrain_ = -1;
+    int loc_hmax_terrain_ = -1;
+    int loc_mode_terrain_ = -1;
+    int loc_tmax_terrain_ = -1;
+    int loc_mvp_points_ = -1;
+    uint32_t terrain_vao_ = 0;
+    uint32_t terrain_vbo_ = 0;
+    uint32_t terrain_ebo_ = 0;
+    int terrain_index_count_ = 0;
+    uint32_t points_vao_ = 0;
+    uint32_t points_vbo_ = 0;
+    int points_count_ = 0;
+
+    // Gesture controllers.
+    Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
+    Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
+    Glib::RefPtr<Gtk::EventControllerScroll> scroll_zoom_;
+    Glib::RefPtr<Gtk::GestureClick> click_select_;
+    Glib::RefPtr<Gtk::EventControllerKey> key_move_;
+    sigc::connection move_tick_conn_;
+    bool move_fwd_ = false;
+    bool move_back_ = false;
+    bool move_left_ = false;
+    bool move_right_ = false;
+    bool move_up_ = false;
+    bool move_down_ = false;
+    bool move_fast_ = false;
+    std::function<void(size_t)> on_object_picked_;
+    double click_press_x_ = 0.0;
+    double click_press_y_ = 0.0;
+
+    // Gtk::GLArea hooks.
+    void on_realize_gl();
+    void on_unrealize_gl();
+    bool on_render_gl(const Glib::RefPtr<Gdk::GLContext>& ctx);
+
+    // GL helpers.
+    void cleanup_gl();
+    uint32_t compile_shader(uint32_t type, const char* src);
+    uint32_t link_program(uint32_t vs, uint32_t fs);
+    void rebuild_terrain_buffers();
+    void rebuild_object_buffers();
+    void build_mvp(float* mvp) const;
+    void pick_object_at(double x, double y);
+    void move_camera_local(float forward, float right);
+    bool movement_tick();
+};

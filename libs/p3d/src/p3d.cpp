@@ -279,7 +279,8 @@ static LOD read_odol_lod(std::istream& r) {
     auto named_section_count = read_u32(r);
     lod.named_selections.resize(named_section_count);
     for (uint32_t i = 0; i < named_section_count; ++i) {
-        lod.named_selections[i] = read_asciiz(r);
+        auto name = read_asciiz(r);
+        lod.named_selections[i] = name;
 
         // faceIndices (compressed uint16 array)
         skip_compressed_array_v7(r, 2);
@@ -292,9 +293,40 @@ static LOD read_odol_lod(std::istream& r) {
         // faceSelectionIndices2 (compressed uint32 array)
         skip_compressed_array_v7(r, 4);
         // vertexIndices (compressed uint16 array)
-        skip_compressed_array_v7(r, 2);
+        auto [vertex_index_count, vertex_indices_data] =
+            read_compressed_array_v7_raw(r, 2);
         // vertexWeights (compressed uint8 array)
-        skip_compressed_array_v7(r, 1);
+        auto [vertex_weight_count, vertex_weights_data] =
+            read_compressed_array_v7_raw(r, 1);
+
+        std::vector<uint32_t> selected_vertices;
+        selected_vertices.reserve(vertex_index_count);
+        for (uint32_t vi = 0; vi < vertex_index_count; ++vi) {
+            uint16_t idx = 0;
+            std::memcpy(&idx, vertex_indices_data.data() + static_cast<size_t>(vi) * 2, 2);
+            if (vertex_weight_count == vertex_index_count &&
+                vi < vertex_weights_data.size() &&
+                vertex_weights_data[vi] == 0)
+                continue;
+            selected_vertices.push_back(static_cast<uint32_t>(idx));
+        }
+
+        if (!selected_vertices.empty()) {
+            auto& target = lod.named_selection_vertices[name];
+            target.insert(target.end(), selected_vertices.begin(), selected_vertices.end());
+            std::sort(target.begin(), target.end());
+            target.erase(std::unique(target.begin(), target.end()), target.end());
+        }
+    }
+    if (!lod.vertices.empty()) {
+        const auto max_vertex_index = static_cast<uint32_t>(lod.vertices.size());
+        for (auto& [_, indices] : lod.named_selection_vertices) {
+            indices.erase(std::remove_if(indices.begin(), indices.end(),
+                                         [max_vertex_index](uint32_t idx) {
+                                             return idx >= max_vertex_index;
+                                         }),
+                          indices.end());
+        }
     }
 
     // Named properties
@@ -391,12 +423,36 @@ static void read_mlod_taggs(std::istream& r, LOD& lod) {
             auto val = read_fixed_string(r, 64);
             lod.named_properties.push_back(NamedProperty{std::move(key), std::move(val)});
         } else {
-            // Named selections have tag names that don't start with '#'
-            if (!tag_name.empty() && tag_name[0] != '#')
+            // Named selections have tag names that don't start with '#'.
+            if (!tag_name.empty() && tag_name[0] != '#') {
                 lod.named_selections.push_back(tag_name);
-            // Skip tag data
-            if (tag_size > 0)
+                if (tag_size > 0) {
+                    std::vector<uint8_t> tag_data(static_cast<size_t>(tag_size));
+                    if (!r.read(reinterpret_cast<char*>(tag_data.data()),
+                                static_cast<std::streamsize>(tag_data.size())))
+                        throw std::runtime_error("mlod: failed to read named selection TAGG data");
+
+                    // MLOD named selection TAGG payload starts with per-vertex weights.
+                    auto vertex_count = static_cast<size_t>(std::max(lod.vertex_count, 0));
+                    auto vertex_span = std::min(vertex_count, tag_data.size());
+                    std::vector<uint32_t> selected_vertices;
+                    selected_vertices.reserve(vertex_span);
+                    for (size_t i = 0; i < vertex_span; ++i) {
+                        if (tag_data[i] != 0)
+                            selected_vertices.push_back(static_cast<uint32_t>(i));
+                    }
+                    if (!selected_vertices.empty()) {
+                        auto& target = lod.named_selection_vertices[tag_name];
+                        target.insert(target.end(),
+                                      selected_vertices.begin(),
+                                      selected_vertices.end());
+                        std::sort(target.begin(), target.end());
+                        target.erase(std::unique(target.begin(), target.end()), target.end());
+                    }
+                }
+            } else if (tag_size > 0) {
                 r.seekg(static_cast<std::streamoff>(tag_size), std::ios::cur);
+            }
         }
     }
 }
@@ -1027,6 +1083,8 @@ struct Odol28Ctx {
         int32_t face_lower_index = 0;
         int32_t face_upper_index = 0;
         int16_t texture_index = 0;
+        int32_t material_index = -1;
+        std::string material_inline;
     };
 
     // Read a Section structure.
@@ -1049,8 +1107,9 @@ struct Odol28Ctx {
         r.seekg(4, std::ios::cur);
         // materialIndex(i32)
         auto mat_idx = read_i32(r);
+        s.material_index = mat_idx;
         if (mat_idx == -1)
-            read_asciiz(r); // mat (asciiz)
+            s.material_inline = read_asciiz(r); // mat (asciiz)
 
         // v36+: nStages(u32) + areaOverTex(nStages x float)
         if (v >= 36) {
@@ -1069,8 +1128,8 @@ struct Odol28Ctx {
         return s;
     }
 
-    // Read a NamedSelection and return its name.
-    std::string read_named_selection() {
+    // Read a NamedSelection and return its name with selected vertices.
+    std::pair<std::string, std::vector<uint32_t>> read_named_selection() {
         auto name = read_asciiz(r);
 
         // SelectedFaces (compressed vertex index array)
@@ -1086,14 +1145,25 @@ struct Odol28Ctx {
         skip_compressed_array(4);
 
         // SelectedVertices (compressed vertex index array)
-        skip_compressed_vertex_index_array();
+        auto selected_vertices = read_compressed_vertex_index_array();
 
         // SelectedVerticesWeights: count(int32) + compressed(count bytes)
         auto expected_size = read_i32(r);
-        if (expected_size > 0)
-            read_compressed(static_cast<size_t>(expected_size));
+        if (expected_size > 0) {
+            auto weights = read_compressed(static_cast<size_t>(expected_size));
+            if (!selected_vertices.empty() &&
+                weights.size() >= selected_vertices.size()) {
+                std::vector<uint32_t> weighted_vertices;
+                weighted_vertices.reserve(selected_vertices.size());
+                for (size_t i = 0; i < selected_vertices.size(); ++i) {
+                    if (weights[i] != 0)
+                        weighted_vertices.push_back(selected_vertices[i]);
+                }
+                selected_vertices = std::move(weighted_vertices);
+            }
+        }
 
-        return name;
+        return {std::move(name), std::move(selected_vertices)};
     }
 
     // Read a single ODOL v28+ LOD.
@@ -1164,9 +1234,11 @@ struct Odol28Ctx {
 
         // Materials (EmbeddedMaterial array)
         auto n_materials = read_i32(r);
+        std::vector<std::string> raw_materials(static_cast<size_t>(std::max(0, n_materials)));
         std::set<std::string> mat_tex_seen;
         for (int32_t i = 0; i < n_materials; ++i) {
             auto [mat_name, stage_tex] = read_embedded_material();
+            raw_materials[static_cast<size_t>(i)] = mat_name;
             if (!mat_name.empty())
                 lod.materials.push_back(mat_name);
             for (auto& t : stage_tex) {
@@ -1220,8 +1292,16 @@ struct Odol28Ctx {
         // NamedSelections
         auto n_selections = read_i32(r);
         lod.named_selections.resize(static_cast<size_t>(n_selections));
-        for (int32_t i = 0; i < n_selections; ++i)
-            lod.named_selections[static_cast<size_t>(i)] = read_named_selection();
+        for (int32_t i = 0; i < n_selections; ++i) {
+            auto [name, vertices] = read_named_selection();
+            lod.named_selections[static_cast<size_t>(i)] = name;
+            if (!vertices.empty()) {
+                auto& target = lod.named_selection_vertices[name];
+                target.insert(target.end(), vertices.begin(), vertices.end());
+                std::sort(target.begin(), target.end());
+                target.erase(std::unique(target.begin(), target.end()), target.end());
+            }
+        }
 
         // NamedProperties
         auto n_props = read_u32(r);
@@ -1356,12 +1436,20 @@ struct Odol28Ctx {
                 if (vert_idx < lod.normals.size())
                     normal_idx_val = static_cast<int32_t>(vert_idx);
                 UV uv = {0.0f, 0.0f};
-                if (!lod.uv_sets.empty() && vert_idx < lod.uv_sets[0].size())
-                    uv = lod.uv_sets[0][vert_idx];
+                if (!lod.uv_sets.empty()) {
+                    if (vert_idx < lod.uv_sets[0].size()) {
+                        uv = lod.uv_sets[0][vert_idx];
+                    } else if (vert_idx < vertex_to_point.size()) {
+                        auto pi = vertex_to_point[vert_idx];
+                        if (pi < lod.uv_sets[0].size())
+                            uv = lod.uv_sets[0][pi];
+                    }
+                }
                 verts[i] = FaceVertex{vert_idx, normal_idx_val, uv};
             }
             // Find texture for this face from sections using byte offsets
             std::string texture;
+            std::string material;
             int32_t tex_idx = -1;
             auto byte_off = face_byte_offsets[face_idx];
             for (auto& s : sections) {
@@ -1370,11 +1458,30 @@ struct Odol28Ctx {
                     if (s.texture_index >= 0 &&
                         static_cast<size_t>(s.texture_index) < raw_textures.size())
                         texture = raw_textures[static_cast<size_t>(s.texture_index)];
+                    if (s.material_index >= 0 &&
+                        static_cast<size_t>(s.material_index) < raw_materials.size()) {
+                        material = raw_materials[static_cast<size_t>(s.material_index)];
+                    } else if (!s.material_inline.empty()) {
+                        material = s.material_inline;
+                    }
                     break;
                 }
             }
             lod.face_data.push_back(Face{
-                std::move(verts), 0, std::move(texture), std::string{}, tex_idx});
+                std::move(verts), 0, std::move(texture), std::move(material), tex_idx});
+        }
+
+        const uint32_t max_vertex_index = !lod.vertices.empty()
+            ? static_cast<uint32_t>(lod.vertices.size())
+            : static_cast<uint32_t>(std::max(lod.vertex_count, 0));
+        if (max_vertex_index > 0) {
+            for (auto& [_, indices] : lod.named_selection_vertices) {
+                indices.erase(std::remove_if(indices.begin(), indices.end(),
+                                             [max_vertex_index](uint32_t idx) {
+                                                 return idx >= max_vertex_index;
+                                             }),
+                              indices.end());
+            }
         }
 
         return lod;

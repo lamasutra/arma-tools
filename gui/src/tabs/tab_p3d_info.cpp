@@ -20,6 +20,15 @@ struct TabP3dInfo::ModelData {
 };
 
 TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
+    auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+    make_icon_button(browse_button_, "document-open-symbolic", "Browse P3D file");
+    make_icon_button(search_button_, "system-search-symbolic", "Search indexed PBOs for P3D");
+
     // Left panel
     left_box_.set_margin(8);
     left_box_.set_size_request(180, -1);
@@ -111,6 +120,7 @@ void TabP3dInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& s
 
 void TabP3dInfo::set_model_loader_service(
     const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_loader_service_ = service;
     model_panel_.set_model_loader_service(service);
 }
 
@@ -210,6 +220,55 @@ void TabP3dInfo::load_file(const std::string& path) {
     }
 }
 
+void TabP3dInfo::open_model_path(const std::string& model_path) {
+    if (model_path.empty()) return;
+    path_entry_.set_text(model_path);
+
+    detail_view_.get_buffer()->set_text("");
+    model_.reset();
+    model_path_.clear();
+    model_panel_.clear();
+    model_panel_.set_info_line("");
+    texture_header_.set_visible(false);
+    texture_scroll_.set_visible(false);
+    if (texture_preview_window_) {
+        texture_preview_window_->close();
+        texture_preview_window_.reset();
+    }
+
+    try {
+        model_ = std::make_shared<ModelData>();
+        if (model_loader_service_) {
+            model_->p3d = std::make_shared<armatools::p3d::P3DFile>(
+                model_loader_service_->load_p3d(model_path));
+        } else {
+            std::ifstream f(model_path, std::ios::binary);
+            if (!f.is_open()) {
+                model_panel_.set_info_line("Error: Cannot open file");
+                return;
+            }
+            model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(f));
+        }
+        model_path_ = model_path;
+
+        const auto& p = *model_->p3d;
+        std::ostringstream info;
+        info << "Format: " << p.format << " v" << p.version
+             << " | LODs: " << p.lods.size();
+        auto size_result = armatools::p3d::calculate_size(p);
+        if (size_result.info) {
+            auto& s = *size_result.info;
+            info << " | Size: " << s.dimensions[0] << "x"
+                 << s.dimensions[1] << "x" << s.dimensions[2] << "m";
+        }
+        model_panel_.set_info_line(info.str());
+        model_panel_.set_model_data(model_->p3d, model_path_);
+    } catch (const std::exception& e) {
+        model_panel_.set_info_line(std::string("Error: ") + e.what());
+        app_log(LogLevel::Error, "P3D load error: " + std::string(e.what()));
+    }
+}
+
 void TabP3dInfo::on_model_lod_changed(const armatools::p3d::LOD& lod, int idx) {
     if (!model_) return;
     // Update texture list UI
@@ -227,13 +286,6 @@ void TabP3dInfo::on_model_lod_changed(const armatools::p3d::LOD& lod, int idx) {
         detail << "Materials (" << lod.materials.size() << "):\n";
         for (const auto& m : lod.materials)
             detail << "  " << m << "\n";
-        detail << "\n";
-    }
-
-    if (!lod.named_selections.empty()) {
-        detail << "Named selections (" << lod.named_selections.size() << "):\n";
-        for (const auto& s : lod.named_selections)
-            detail << "  " << s << "\n";
         detail << "\n";
     }
 
