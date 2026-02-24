@@ -96,7 +96,9 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     right_box_.set_margin(8);
 
     file_info_label_.set_halign(Gtk::Align::START);
-    file_info_label_.set_wrap(true);
+    file_info_label_.set_wrap(false);
+    file_info_label_.set_single_line_mode(true);
+    file_info_label_.set_ellipsize(Pango::EllipsizeMode::MIDDLE);
     file_info_label_.set_selectable(true);
     right_box_.append(file_info_label_);
 
@@ -109,6 +111,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     preview_picture_.set_can_shrink(true);
     preview_picture_.set_content_fit(Gtk::ContentFit::CONTAIN);
     preview_scroll_.set_child(preview_picture_);
+    preview_scroll_.set_vexpand(true);
     preview_scroll_.set_visible(false);
     right_box_.append(preview_scroll_);
 
@@ -817,10 +820,10 @@ void TabAssetBrowser::on_row_activated(Gtk::ListBoxRow* row) {
 
 void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file) {
     std::ostringstream info;
-    info << "PBO: " << file.pbo_path << "\n"
-         << "Prefix: " << file.prefix << "\n"
-         << "File: " << file.file_path << "\n"
-         << "Data size: " << file.data_size << " bytes\n";
+    info << file.file_path
+         << " | " << file.data_size << " bytes"
+         << " | prefix: " << (file.prefix.empty() ? "-" : file.prefix)
+         << " | pbo: " << fs::path(file.pbo_path).filename().string();
 
     file_info_label_.set_text(info.str());
     info_view_.get_buffer()->set_text("");
@@ -877,11 +880,13 @@ void TabAssetBrowser::preview_paa(const armatools::pboindex::FindResult& file) {
         std::istringstream stream(str);
         auto [img, hdr] = armatools::paa::decode(stream);
 
-        std::ostringstream out;
-        out << "Format: " << hdr.format << "\n"
-            << "Dimensions: " << hdr.width << " x " << hdr.height << "\n"
-            << "Decoded: " << img.width << " x " << img.height << "\n";
-        info_view_.get_buffer()->set_text(out.str());
+        std::ostringstream info;
+        info << file.file_path
+             << " | " << file.data_size << " bytes"
+             << " | " << hdr.format
+             << " | " << hdr.width << "x" << hdr.height;
+        file_info_label_.set_text(info.str());
+        info_scroll_.set_visible(false);
 
         // Show image preview
         auto pixbuf = Gdk::Pixbuf::create_from_data(
@@ -894,7 +899,7 @@ void TabAssetBrowser::preview_paa(const armatools::pboindex::FindResult& file) {
         auto texture = Gdk::Texture::create_for_pixbuf(copy);
         preview_picture_.set_paintable(texture);
         preview_scroll_.set_visible(true);
-        preview_scroll_.set_size_request(-1, 256);
+        preview_scroll_.set_size_request(-1, 380);
     } catch (const std::exception& e) {
         info_view_.get_buffer()->set_text(std::string("PAA error: ") + e.what());
     }
