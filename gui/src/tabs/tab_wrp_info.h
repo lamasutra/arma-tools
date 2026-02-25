@@ -4,6 +4,7 @@
 #include "gl_wrp_terrain_view.h"
 #include "model_view_panel.h"
 #include "pbo_index_service.h"
+#include "lod_textures_loader.h"
 
 #include <armatools/wrp.h>
 
@@ -30,6 +31,20 @@ public:
     void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
     void set_on_open_p3d_info(std::function<void(const std::string&)> cb);
 
+    struct ClassEntry {
+        std::string category;
+        std::string model_name;
+        int count = 0;
+    };
+    struct ClassListSnapshot {
+        struct CategoryGroup {
+            std::string name;
+            std::vector<ClassEntry> entries;
+        };
+        std::vector<CategoryGroup> groups;
+        int total_objects = 0;
+    };
+
 private:
     Config* cfg_ = nullptr;
 
@@ -37,6 +52,7 @@ private:
     std::shared_ptr<PboIndexService> pbo_index_service_;
     std::shared_ptr<armatools::pboindex::DB> db_;
     std::shared_ptr<armatools::pboindex::Index> index_;
+    std::shared_ptr<LodTexturesLoaderService> texture_loader_service_;
 
     // Left panel: file list
     Gtk::Box list_box_{Gtk::Orientation::VERTICAL, 4};
@@ -87,12 +103,6 @@ private:
     std::unique_ptr<armatools::wrp::WorldData> world_data_;
     std::string loaded_wrp_path_;
 
-    // Class list data
-    struct ClassEntry {
-        std::string category;
-        std::string model_name;
-        int count = 0;
-    };
     std::vector<ClassEntry> class_entries_;
 
     std::string scan_dir_;
@@ -137,7 +147,7 @@ private:
     // New methods
     void on_class_selected(Gtk::ListBoxRow* row);
     void on_hm_export();
-    void populate_class_list();
+    void populate_class_list(const ClassListSnapshot& snapshot);
     void on_class_activated(Gtk::ListBoxRow* row);
     void load_p3d_preview(const std::string& model_path);
     void ensure_objects_loaded();

@@ -68,7 +68,9 @@ LodTexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::str
 }
 
 std::optional<LodTexturesLoaderService::TextureData> 
-LodTexturesLoaderService::load_single_texture(const std::string& tex_path, const std::string& model_path) {
+LodTexturesLoaderService::load_single_texture(const std::string& tex_path, 
+                                            const std::string& model_path) 
+                                            {
     auto try_decode_data = [&](const std::vector<uint8_t>& data)
         -> std::optional<TextureData> {
         if (data.empty()) return std::nullopt;
@@ -123,7 +125,7 @@ LodTexturesLoaderService::load_single_texture(const std::string& tex_path, const
     }
 
     // 3) Last fallback: disk
-    if (cfg && !cfg->drive_root.empty()) {
+    if (!model_path.empty() && cfg && !cfg->drive_root.empty()) {
         auto on_disk = armatools::armapath::to_os(tex_path);
         auto base_dir = std::filesystem::path(model_path).parent_path();
         std::vector<std::filesystem::path> candidates{
@@ -198,6 +200,7 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
         } catch (...) {
             return false;
         }
+        return false;
     };
     auto normalize = [](std::string p) {
         p = armatools::armapath::to_slash_lower(p);
@@ -514,4 +517,10 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
     app_log(LogLevel::Warning,
             "LodTextures: failed to load any rvmat texture for material '" + mat_used + "'");
     return std::nullopt;
+}
+
+std::optional<LodTexturesLoaderService::TextureData>
+LodTexturesLoaderService::load_texture(const std::string& texture_path) {
+    if (texture_path.empty()) return std::nullopt;
+    return load_single_texture(texture_path, "");
 }

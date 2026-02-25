@@ -842,6 +842,14 @@ static PBOIndexCounts index_single_pbo(
     if (pit != pbo_data.extensions.end())
         prefix = pit->second;
 
+    if (prefix.empty()) {
+        if (source == "ofp" || source == "arma1" || source == "arma2") {
+            std::string stem = std::filesystem::path(pbo_path).stem().string();
+            if (!stem.empty())
+                prefix = armapath::to_slash_lower(stem);
+        }
+    }
+
     int64_t pbo_id = insert_pbo(db, pbo_stmt, pbo_path, prefix,
                                 static_cast<int64_t>(fsize), mod_time, source);
 

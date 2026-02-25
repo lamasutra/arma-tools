@@ -4,9 +4,14 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
+#include <epoxy/gl.h>
+
 #include <armatools/wrp.h>
+
+class LodTexturesLoaderService;
 
 class GLWrpTerrainView : public Gtk::GLArea {
 public:
@@ -21,6 +26,7 @@ public:
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
+    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
 
 private:
     struct Vertex {
@@ -80,6 +86,25 @@ private:
     uint32_t points_vbo_ = 0;
     int points_count_ = 0;
 
+    std::shared_ptr<LodTexturesLoaderService> texture_loader_;
+    std::vector<armatools::wrp::TextureEntry> texture_entries_;
+    GLuint texture_atlas_ = 0;
+    std::vector<uint8_t> texture_atlas_pixels_;
+    int atlas_width_ = 0;
+    int atlas_height_ = 0;
+    std::vector<std::array<float, 4>> texture_lookup_uvs_;
+    GLuint texture_lookup_tex_ = 0;
+    int texture_lookup_size_ = 0;
+    float texture_world_scale_ = 32.0f;
+    bool has_texture_atlas_ = false;
+    bool has_texture_lookup_ = false;
+    int loc_texture_atlas_ = -1;
+    int loc_texture_lookup_ = -1;
+    int loc_texture_lookup_size_ = -1;
+    int loc_texture_world_scale_ = -1;
+    int loc_has_texture_atlas_ = -1;
+    int loc_has_texture_lookup_ = -1;
+    sigc::connection texture_rebuild_idle_;
     // Gesture controllers.
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
@@ -94,6 +119,7 @@ private:
     bool move_up_ = false;
     bool move_down_ = false;
     bool move_fast_ = false;
+    bool alt_pressed_ = false;
     std::function<void(size_t)> on_object_picked_;
     double click_press_x_ = 0.0;
     double click_press_y_ = 0.0;
@@ -113,4 +139,10 @@ private:
     void pick_object_at(double x, double y);
     void move_camera_local(float forward, float right);
     bool movement_tick();
+    void rebuild_texture_atlas(const std::vector<armatools::wrp::TextureEntry>& textures);
+    void schedule_texture_rebuild();
+    void upload_texture_atlas();
+    void upload_texture_lookup();
+    void cleanup_texture_atlas_gl();
+    void cleanup_texture_lookup_gl();
 };

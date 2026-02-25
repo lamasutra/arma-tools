@@ -41,6 +41,7 @@ public:
     };
 
     std::vector<TextureData> load_textures(armatools::p3d::LOD& lod, const std::string& model_path);
+    std::optional<TextureData> load_texture(const std::string& texture_path);
 
     LodTexturesLoaderService(const std::string& db_path_in,
                     Config* cfg_in,

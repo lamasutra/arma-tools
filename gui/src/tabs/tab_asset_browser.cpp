@@ -250,6 +250,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     search_entry_.signal_activate().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_search));
     source_combo_.signal_changed().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_source_changed));
     dir_list_.signal_row_activated().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_row_activated));
+    dir_list_.signal_row_selected().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_row_selected));
     extract_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_extract));
     extract_drive_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabAssetBrowser::on_extract_to_drive));
 }
@@ -843,6 +844,13 @@ void TabAssetBrowser::on_row_activated(Gtk::ListBoxRow* row) {
     } else if (!entry.files.empty()) {
         show_file_info(entry.files[0]);
     }
+}
+
+void TabAssetBrowser::on_row_selected(Gtk::ListBoxRow* row) {
+    if (!row) return;
+    armatools::pboindex::FindResult file;
+    if (!get_selected_file(file)) return;
+    show_file_info(file);
 }
 
 void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file) {

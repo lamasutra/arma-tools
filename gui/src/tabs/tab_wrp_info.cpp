@@ -205,7 +205,9 @@ void TabWrpInfo::set_model_loader_service(
 
 void TabWrpInfo::set_texture_loader_service(
     const std::shared_ptr<LodTexturesLoaderService>& service) {
+    texture_loader_service_ = service;
     model_panel_.set_texture_loader_service(service);
+    terrain3d_view_.set_texture_loader_service(service);
 }
 
 void TabWrpInfo::set_on_open_p3d_info(std::function<void(const std::string&)> cb) {
@@ -528,77 +530,82 @@ void TabWrpInfo::on_source_changed() {
     on_scan();
 }
 
-void TabWrpInfo::populate_class_list() {
-    // Clear existing rows
+namespace {
+TabWrpInfo::ClassListSnapshot build_class_list_snapshot(
+    const std::vector<armatools::wrp::ObjectRecord>& objects) {
+    TabWrpInfo::ClassListSnapshot snapshot;
+    snapshot.total_objects = static_cast<int>(objects.size());
+    if (objects.empty()) return snapshot;
+
+    std::map<std::string, std::map<std::string, int>> cat_models;
+    for (const auto& obj : objects) {
+        auto model = armatools::armapath::to_slash_lower(obj.model_name);
+        auto category = armatools::objcat::category(model);
+        cat_models[category][model]++;
+    }
+
+    snapshot.groups.reserve(cat_models.size());
+    for (auto& [category, models] : cat_models) {
+        TabWrpInfo::ClassListSnapshot::CategoryGroup group;
+        group.name = category;
+        std::vector<std::pair<std::string, int>> sorted_models(models.begin(), models.end());
+        std::sort(sorted_models.begin(), sorted_models.end(),
+                  [](const auto& a, const auto& b) {
+                      if (a.second != b.second) return a.second > b.second;
+                      return a.first < b.first;
+                  });
+        group.entries.reserve(sorted_models.size());
+        for (const auto& model_pair : sorted_models) {
+            group.entries.push_back(TabWrpInfo::ClassEntry{category,
+                                                          model_pair.first,
+                                                          model_pair.second});
+        }
+        snapshot.groups.push_back(std::move(group));
+    }
+    return snapshot;
+}
+} // namespace
+
+void TabWrpInfo::populate_class_list(const ClassListSnapshot& snapshot) {
     while (auto* row = class_list_.get_row_at_index(0)) {
         class_list_.remove(*row);
     }
     class_entries_.clear();
     model_panel_.clear();
 
-    if (!world_data_ || world_data_->objects.empty()) {
+    if (!world_data_ || snapshot.total_objects == 0) {
         class_status_label_.set_text("No objects in this WRP");
         return;
     }
 
-    // Build map<category, map<model_name, count>>
-    std::map<std::string, std::map<std::string, int>> cat_models;
-    for (const auto& obj : world_data_->objects) {
-        auto model = armatools::armapath::to_slash_lower(obj.model_name);
-        auto cat = armatools::objcat::category(model);
-        cat_models[cat][model]++;
-    }
+    for (const auto& group : snapshot.groups) {
+        auto* header_label = Gtk::make_managed<Gtk::Label>();
+        header_label->set_markup("<b>" + Glib::Markup::escape_text(group.name) + "</b>");
+        header_label->set_halign(Gtk::Align::START);
+        header_label->set_margin(4);
+        header_label->set_margin_top(8);
+        auto* header_row = Gtk::make_managed<Gtk::ListBoxRow>();
+        header_row->set_child(*header_label);
+        header_row->set_activatable(false);
+        header_row->set_selectable(false);
+        class_list_.append(*header_row);
 
-    // Flatten into class_entries_, sorted by category then count desc
-    int total_objects = 0;
-    std::set<std::string> categories;
-    for (const auto& [cat, models] : cat_models) {
-        categories.insert(cat);
-        // Sort models by count descending
-        std::vector<std::pair<std::string, int>> sorted_models(models.begin(), models.end());
-        std::sort(sorted_models.begin(), sorted_models.end(),
-                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (const auto& entry : group.entries) {
+            auto basename = fs::path(entry.model_name).filename().string();
+            auto row_text = "  " + basename + "  (" + std::to_string(entry.count) + ")";
 
-        for (const auto& [model, count] : sorted_models) {
-            class_entries_.push_back({cat, model, count});
-            total_objects += count;
+            auto* label = Gtk::make_managed<Gtk::Label>(row_text);
+            label->set_halign(Gtk::Align::START);
+            label->set_tooltip_text(entry.model_name);
+            class_list_.append(*label);
+            class_entries_.push_back(entry);
         }
-    }
-
-    // Populate the ListBox
-    std::string current_cat;
-    for (size_t i = 0; i < class_entries_.size(); ++i) {
-        const auto& entry = class_entries_[i];
-
-        // Section header for new category
-        if (entry.category != current_cat) {
-            current_cat = entry.category;
-            auto* header_label = Gtk::make_managed<Gtk::Label>();
-            header_label->set_markup("<b>" + Glib::Markup::escape_text(current_cat) + "</b>");
-            header_label->set_halign(Gtk::Align::START);
-            header_label->set_margin(4);
-            header_label->set_margin_top(8);
-            auto* header_row = Gtk::make_managed<Gtk::ListBoxRow>();
-            header_row->set_child(*header_label);
-            header_row->set_activatable(false);
-            header_row->set_selectable(false);
-            class_list_.append(*header_row);
-        }
-
-        // Model entry row
-        auto basename = fs::path(entry.model_name).filename().string();
-        auto row_text = "  " + basename + "  (" + std::to_string(entry.count) + ")";
-
-        auto* label = Gtk::make_managed<Gtk::Label>(row_text);
-        label->set_halign(Gtk::Align::START);
-        label->set_tooltip_text(entry.model_name);
-        class_list_.append(*label);
     }
 
     class_status_label_.set_text(
         std::to_string(class_entries_.size()) + " unique models, "
-        + std::to_string(total_objects) + " objects, "
-        + std::to_string(categories.size()) + " categories");
+        + std::to_string(snapshot.total_objects) + " objects, "
+        + std::to_string(static_cast<int>(snapshot.groups.size())) + " categories");
 }
 
 void TabWrpInfo::ensure_objects_loaded() {
@@ -642,8 +649,13 @@ void TabWrpInfo::ensure_objects_loaded() {
             err = e.what();
         }
 
+        TabWrpInfo::ClassListSnapshot class_snapshot;
+        if (wd_ptr && err.empty())
+            class_snapshot = build_class_list_snapshot(wd_ptr->objects);
+
         Glib::signal_idle().connect_once([this, wd_ptr = std::move(wd_ptr),
-                                          err = std::move(err), gen]() {
+                                          err = std::move(err), gen,
+                                          snapshot = std::move(class_snapshot)]() {
             if (gen != load_generation_.load()) return;
             objects_loading_ = false;
             if (!wd_ptr || !err.empty()) {
@@ -662,7 +674,7 @@ void TabWrpInfo::ensure_objects_loaded() {
             objects_loaded_ = true;
 
             terrain3d_view_.set_objects(world_data_->objects);
-            populate_class_list();
+            populate_class_list(snapshot);
         });
     });
 }

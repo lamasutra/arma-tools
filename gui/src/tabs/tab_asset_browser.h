@@ -120,6 +120,7 @@ private:
     void on_source_changed();
     void refresh_source_combo();
     void on_row_activated(Gtk::ListBoxRow* row);
+    void on_row_selected(Gtk::ListBoxRow* row);
     void on_extract();
     void on_extract_to_drive();
 
