@@ -163,6 +163,7 @@ int main(int argc, char* argv[]) {
 
     std::string input_path = positional[0];
     input_path = expand_user_path(input_path);
+    std::string input_display = fs::path(input_path).filename().string();
 
     // Derive terrain name from filename if not specified
     std::string terrain_name = name_flag;
@@ -171,9 +172,12 @@ int main(int argc, char* argv[]) {
         if (!terrain_name.empty()) {
             terrain_name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(terrain_name[0])));
         }
+    } else if (!input_display.empty()
+               && input_display.rfind("arma-tools-wrp-", 0) == 0) {
+        input_display = terrain_name + ".wrp";
     }
 
-    armatools::cli::log_verbose(std::format("Creating project for {} ({})", terrain_name, fs::path(input_path).filename().string()));
+    armatools::cli::log_verbose(std::format("Creating project for {} ({})", terrain_name, input_display));
 
     std::string layer_prefix = prefix_flag;
     if (layer_prefix.empty()) {
@@ -366,7 +370,7 @@ int main(int argc, char* argv[]) {
 
     // Summary
     armatools::cli::print(std::format("wrp2project: {} ({} v{})",
-                                       input_path, world.format.signature, world.format.version));
+                                       input_display, world.format.signature, world.format.version));
     armatools::cli::print(std::format("Terrain: {} (prefix: {})", terrain_name, layer_prefix));
     armatools::cli::print(std::format("Grid: {}x{} cells, cell size {:.0f}m",
                                        world.grid.cells_x, world.grid.cells_y, world.grid.cell_size));

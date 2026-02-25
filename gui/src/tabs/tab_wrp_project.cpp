@@ -4,6 +4,7 @@
 
 #include <armatools/armapath.h>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <format>
@@ -36,6 +37,18 @@ double parse_double_or_default(const Glib::ustring& text, double fallback) {
         if (!text.empty()) return std::stod(std::string(text));
     } catch (...) {}
     return fallback;
+}
+
+std::string sanitize_stem_for_filename(std::string stem) {
+    if (stem.empty()) return "wrp";
+    for (char& c : stem) {
+        const bool ok = (c >= 'a' && c <= 'z')
+                     || (c >= 'A' && c <= 'Z')
+                     || (c >= '0' && c <= '9')
+                     || c == '_' || c == '-';
+        if (!ok) c = '_';
+    }
+    return stem;
 }
 
 } // namespace
@@ -571,7 +584,23 @@ bool TabWrpProject::materialize_wrp_entry(const WrpFileEntry& entry,
 
     const auto key = entry.pbo_path + "|" + entry.entry_name;
     const auto hash = std::to_string(std::hash<std::string>{}(key));
-    auto tmp = fs::temp_directory_path() / ("arma-tools-wrp-" + hash + ".wrp");
+    const auto pbo_bucket = std::to_string(std::hash<std::string>{}(entry.pbo_path));
+    auto tmp_dir = fs::temp_directory_path() / "arma-tools-wrp" / pbo_bucket;
+    std::error_code mk_ec;
+    fs::create_directories(tmp_dir, mk_ec);
+    if (mk_ec) {
+        err = "cannot create temporary WRP directory";
+        return false;
+    }
+
+    std::string tmp_file_name = fs::path(entry.entry_name).filename().string();
+    if (tmp_file_name.empty()) tmp_file_name = "world.wrp";
+    auto tmp = tmp_dir / tmp_file_name;
+    if (fs::exists(tmp)) {
+        const auto stem = fs::path(tmp_file_name).stem().string();
+        const auto ext = fs::path(tmp_file_name).extension().string();
+        tmp = tmp_dir / (sanitize_stem_for_filename(stem) + "-" + hash + ext);
+    }
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
         err = "cannot create temporary WRP file";
@@ -680,6 +709,24 @@ void TabWrpProject::on_generate() {
     std::vector<std::string> args;
     args.push_back(wrp_input_path);
     args.push_back(output);
+    std::string terrain_name;
+    {
+        std::string src = selected_wrp_entry_.from_pbo
+            ? selected_wrp_entry_.entry_name
+            : selected_wrp_entry_.full_path;
+        terrain_name = fs::path(src).stem().string();
+        for (char& c : terrain_name) {
+            if (c == ' ' || c == '-' || c == '.') c = '_';
+        }
+        if (!terrain_name.empty()) {
+            terrain_name[0] = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(terrain_name[0])));
+        }
+    }
+    if (!terrain_name.empty()) {
+        args.push_back("--name");
+        args.push_back(terrain_name);
+    }
 
     auto ox = std::string(offset_x_entry_.get_text());
     auto oz = std::string(offset_z_entry_.get_text());
