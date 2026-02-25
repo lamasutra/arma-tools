@@ -235,6 +235,7 @@ void ModelViewPanel::apply_lod(const armatools::p3d::LOD& lod,
                                 const std::string& model_path) {
     current_model_path_ = model_path;
     current_named_selection_vertices_ = lod.named_selection_vertices;
+    cache_named_selection_geometry(lod);
     lods_btn_.set_label("LOD: " + lod.resolution_name);
     setup_named_selections_menu(lod);
     gl_view_.set_lod(lod);
@@ -255,9 +256,11 @@ void ModelViewPanel::clear() {
     active_lod_indices_.clear();
     active_named_selections_.clear();
     current_named_selection_vertices_.clear();
+    named_selection_face_geometry_.clear();
+    highlight_lod_vertices_.clear();
     while (auto* child = named_selections_box_.get_first_child())
         named_selections_box_.remove(*child);
-    gl_view_.set_highlight_vertices({});
+    gl_view_.set_highlight_geometry({}, GLModelView::HighlightMode::Points);
     p3d_file_.reset();
 }
 
@@ -404,6 +407,7 @@ void ModelViewPanel::render_active_lods(bool reset_camera) {
 
     const auto& primary = p3d_file_->lods[static_cast<size_t>(indices.front())];
     current_named_selection_vertices_ = primary.named_selection_vertices;
+    cache_named_selection_geometry(primary);
     setup_named_selections_menu(primary);
     update_named_selection_highlight();
 
@@ -475,12 +479,17 @@ void ModelViewPanel::setup_named_selections_menu(const armatools::p3d::LOD& lod)
         "SEL: " + std::to_string(lod.named_selections.size()));
 
     for (const auto& name : lod.named_selections) {
-        size_t count = 0;
-        auto it = lod.named_selection_vertices.find(name);
-        if (it != lod.named_selection_vertices.end())
-            count = it->second.size();
-        auto* check = Gtk::make_managed<Gtk::CheckButton>(
-            name + " (" + std::to_string(count) + ")");
+        size_t vertex_count = 0;
+        auto vit = lod.named_selection_vertices.find(name);
+        if (vit != lod.named_selection_vertices.end())
+            vertex_count = vit->second.size();
+        size_t face_count = 0;
+        auto fit = lod.named_selection_faces.find(name);
+        if (fit != lod.named_selection_faces.end())
+            face_count = fit->second.size();
+        auto label = name + " (F:" + std::to_string(face_count)
+                     + ", V:" + std::to_string(vertex_count) + ")";
+        auto* check = Gtk::make_managed<Gtk::CheckButton>(label);
         check->set_halign(Gtk::Align::START);
         check->signal_toggled().connect([this, name, check]() {
             if (check->get_active())
@@ -496,38 +505,101 @@ void ModelViewPanel::setup_named_selections_menu(const armatools::p3d::LOD& lod)
 void ModelViewPanel::update_named_selection_highlight() {
     if (active_named_selections_.empty()) {
         armatools::cli::log_debug("Named selection highlight: no active selections");
-        gl_view_.set_highlight_vertices({});
+        gl_view_.set_highlight_geometry({}, GLModelView::HighlightMode::Points);
         return;
     }
 
-    std::unordered_set<uint32_t> merged;
+    std::vector<float> highlight_lines;
+    std::unordered_set<uint32_t> merged_vertices;
     std::ostringstream dbg;
     dbg << "Named selection highlight: ";
     bool first = true;
     for (const auto& name : active_named_selections_) {
         if (!first) dbg << ", ";
         first = false;
-        auto it = current_named_selection_vertices_.find(name);
-        if (it == current_named_selection_vertices_.end()) {
-            dbg << name << "(missing)";
+        dbg << name;
+
+        auto face_it = named_selection_face_geometry_.find(name);
+        if (face_it != named_selection_face_geometry_.end() && !face_it->second.empty()) {
+            dbg << "(faces)";
+            highlight_lines.insert(highlight_lines.end(),
+                                   face_it->second.begin(), face_it->second.end());
             continue;
         }
-        dbg << name << "(" << it->second.size() << ")";
-        merged.insert(it->second.begin(), it->second.end());
-    }
-    std::vector<uint32_t> vertices(merged.begin(), merged.end());
-    std::sort(vertices.begin(), vertices.end());
-    dbg << " -> merged vertices: " << vertices.size();
-    if (!vertices.empty()) {
-        dbg << " [";
-        const size_t preview = std::min<size_t>(vertices.size(), 16);
-        for (size_t i = 0; i < preview; ++i) {
-            if (i > 0) dbg << ",";
-            dbg << vertices[i];
+
+        auto vert_it = current_named_selection_vertices_.find(name);
+        if (vert_it != current_named_selection_vertices_.end() && !vert_it->second.empty()) {
+            dbg << "(verts " << vert_it->second.size() << ")";
+            merged_vertices.insert(vert_it->second.begin(), vert_it->second.end());
+            continue;
         }
-        if (vertices.size() > preview) dbg << ",...";
-        dbg << "]";
+
+        dbg << "(missing)";
     }
+
+    if (!highlight_lines.empty()) {
+        dbg << " -> face edges: " << highlight_lines.size() / 6;
+        armatools::cli::log_debug(dbg.str());
+        gl_view_.set_highlight_geometry(highlight_lines, GLModelView::HighlightMode::Lines);
+        return;
+    }
+
+    std::vector<float> points;
+    if (!merged_vertices.empty() && !highlight_lod_vertices_.empty()) {
+        points.reserve(merged_vertices.size() * 3);
+        for (auto idx : merged_vertices) {
+            if (idx >= highlight_lod_vertices_.size()) continue;
+            const auto& p = highlight_lod_vertices_[static_cast<size_t>(idx)];
+            points.push_back(-p[0]);
+            points.push_back(p[1]);
+            points.push_back(p[2]);
+        }
+    }
+
+    if (!points.empty()) {
+        dbg << " -> vertices: " << points.size() / 3;
+        armatools::cli::log_debug(dbg.str());
+        gl_view_.set_highlight_geometry(points, GLModelView::HighlightMode::Points);
+        return;
+    }
+
+    dbg << " -> nothing to highlight";
     armatools::cli::log_debug(dbg.str());
-    gl_view_.set_highlight_vertices(vertices);
+    gl_view_.set_highlight_geometry({}, GLModelView::HighlightMode::Points);
+}
+
+void ModelViewPanel::cache_named_selection_geometry(const armatools::p3d::LOD& lod) {
+    highlight_lod_vertices_ = lod.vertices;
+    named_selection_face_geometry_.clear();
+    if (highlight_lod_vertices_.empty() || lod.named_selection_faces.empty()) return;
+
+    auto append_edge = [&](uint32_t a, uint32_t b, std::vector<float>& dest) {
+        if (a >= highlight_lod_vertices_.size() || b >= highlight_lod_vertices_.size())
+            return;
+        const auto& pa = highlight_lod_vertices_[static_cast<size_t>(a)];
+        const auto& pb = highlight_lod_vertices_[static_cast<size_t>(b)];
+        dest.push_back(-pa[0]);
+        dest.push_back(pa[1]);
+        dest.push_back(pa[2]);
+        dest.push_back(-pb[0]);
+        dest.push_back(pb[1]);
+        dest.push_back(pb[2]);
+    };
+
+    for (const auto& [name, face_indices] : lod.named_selection_faces) {
+        std::vector<float> geom;
+        geom.reserve(face_indices.size() * 6);
+        for (auto face_index : face_indices) {
+            if (face_index >= lod.faces.size()) continue;
+            const auto& face = lod.faces[face_index];
+            if (face.size() < 2) continue;
+            for (size_t i = 0; i < face.size(); ++i) {
+                auto curr = face[i];
+                auto next = face[(i + 1) % face.size()];
+                append_edge(curr, next, geom);
+            }
+        }
+        if (!geom.empty())
+            named_selection_face_geometry_.emplace(name, std::move(geom));
+    }
 }

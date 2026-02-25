@@ -44,8 +44,9 @@ public:
     // 5b. Background color
     void set_background_color(float r, float g, float b);
 
-    // Named selection vertex highlighting.
-    void set_highlight_vertices(const std::vector<uint32_t>& vertex_indices);
+    enum class HighlightMode { Points, Lines };
+    // Named selection highlight geometry.
+    void set_highlight_geometry(const std::vector<float>& positions, HighlightMode mode);
 
     // Camera state access (for synchronized views)
     struct CameraState {
@@ -123,8 +124,8 @@ private:
     float bg_color_[3] = {0.2f, 0.2f, 0.2f};
 
     // Named selection highlighting
-    std::vector<uint32_t> highlighted_vertices_;
-    std::vector<float> lod_vertex_positions_;
+    std::vector<float> highlight_geometry_;
+    HighlightMode highlight_mode_ = HighlightMode::Points;
     uint32_t highlight_vao_ = 0;
     uint32_t highlight_vbo_ = 0;
     int highlight_vertex_count_ = 0;

@@ -98,6 +98,8 @@ private:
     std::string current_model_path_;
     std::unordered_set<int> active_lod_indices_;
     std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_vertices_;
+    std::vector<armatools::p3d::Vector3P> highlight_lod_vertices_;
+    std::unordered_map<std::string, std::vector<float>> named_selection_face_geometry_;
     std::unordered_set<std::string> active_named_selections_;
     std::function<void(const armatools::p3d::LOD&, int)> on_lod_changed_;
 
@@ -113,4 +115,5 @@ private:
     void setup_lods_menu();
     void setup_named_selections_menu(const armatools::p3d::LOD& lod);
     void update_named_selection_highlight();
+    void cache_named_selection_geometry(const armatools::p3d::LOD& lod);
 };

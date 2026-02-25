@@ -861,18 +861,6 @@ void GLModelView::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
         }
     }
 
-    lod_vertex_positions_.clear();
-    if (!lods.empty()) {
-        const auto& primary = lods.front();
-        lod_vertex_positions_.reserve(primary.vertices.size() * 3);
-        for (const auto& p : primary.vertices) {
-            lod_vertex_positions_.push_back(-p[0]);
-            lod_vertex_positions_.push_back(p[1]);
-            lod_vertex_positions_.push_back(p[2]);
-        }
-    }
-    rebuild_highlight_vertex_buffer();
-
     has_geometry_ = !groups_.empty();
     debug_group_report_pending_ = true;
     app_log(LogLevel::Debug,
@@ -1024,12 +1012,6 @@ Glib::RefPtr<Gdk::Pixbuf> GLModelView::snapshot() const {
     return pixbuf->copy();
 }
 
-void GLModelView::set_highlight_vertices(const std::vector<uint32_t>& vertex_indices) {
-    highlighted_vertices_ = vertex_indices;
-    rebuild_highlight_vertex_buffer();
-    queue_render();
-}
-
 void GLModelView::set_normal_map(const std::string& key, int width, int height,
                                  const uint8_t* rgba_data) {
     make_current();
@@ -1129,40 +1111,40 @@ void GLModelView::rebuild_highlight_vertex_buffer() {
     if (highlight_vbo_) { glDeleteBuffers(1, &highlight_vbo_); highlight_vbo_ = 0; }
     highlight_vertex_count_ = 0;
 
-    if (highlighted_vertices_.empty() || lod_vertex_positions_.empty()) {
-        app_log(LogLevel::Debug, "Highlight buffer: empty input (selection or vertex positions)");
+    if (highlight_geometry_.empty()) {
+        app_log(LogLevel::Debug, "Highlight buffer: empty geometry");
         return;
     }
 
-    std::vector<float> points;
-    points.reserve(highlighted_vertices_.size() * 3);
-    const size_t vertex_count = lod_vertex_positions_.size() / 3;
-    for (auto idx : highlighted_vertices_) {
-        if (idx >= vertex_count) continue;
-        const size_t base = static_cast<size_t>(idx) * 3;
-        points.push_back(lod_vertex_positions_[base + 0]);
-        points.push_back(lod_vertex_positions_[base + 1]);
-        points.push_back(lod_vertex_positions_[base + 2]);
-    }
-    if (points.empty()) {
-        app_log(LogLevel::Debug, "Highlight buffer: all selected vertices out of range");
+    highlight_vertex_count_ = static_cast<int>(highlight_geometry_.size() / 3);
+    if (highlight_vertex_count_ == 0) {
+        app_log(LogLevel::Debug, "Highlight buffer: geometry data has no vertices");
         return;
     }
 
-    highlight_vertex_count_ = static_cast<int>(points.size() / 3);
     glGenVertexArrays(1, &highlight_vao_);
     glGenBuffers(1, &highlight_vbo_);
     glBindVertexArray(highlight_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, highlight_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(points.size() * sizeof(float)),
-                 points.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(highlight_geometry_.size() * sizeof(float)),
+                 highlight_geometry_.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
                           reinterpret_cast<void*>(0));
     glBindVertexArray(0);
     app_log(LogLevel::Debug,
-            "Highlight buffer rebuilt: selected=" + std::to_string(highlighted_vertices_.size()) +
-            " drawn=" + std::to_string(highlight_vertex_count_));
+            "Highlight buffer rebuilt: mode=" +
+            std::string(highlight_mode_ == HighlightMode::Lines ? "lines" : "points") +
+            " vertices=" + std::to_string(highlight_vertex_count_));
+}
+
+void GLModelView::set_highlight_geometry(const std::vector<float>& positions,
+                                         HighlightMode mode) {
+    highlight_geometry_ = positions;
+    highlight_mode_ = mode;
+    rebuild_highlight_vertex_buffer();
+    queue_render();
 }
 
 void GLModelView::build_matrices(float* mvp, float* normal_mat) {
@@ -1365,7 +1347,8 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         glBindVertexArray(highlight_vao_);
         glDisable(GL_DEPTH_TEST);
         if (is_desktop_gl_) glPointSize(6.0f);
-        glDrawArrays(GL_POINTS, 0, highlight_vertex_count_);
+        GLenum draw_mode = (highlight_mode_ == HighlightMode::Lines) ? GL_LINES : GL_POINTS;
+        glDrawArrays(draw_mode, 0, highlight_vertex_count_);
         if (is_desktop_gl_) glPointSize(1.0f);
         glEnable(GL_DEPTH_TEST);
     }
