@@ -69,7 +69,7 @@ struct StatsInfo {
     bool has_cell_flags = false;
 };
 
-struct Options { bool strict = false; bool no_objects = false; };
+struct Options { bool strict = false; bool no_objects = false; bool no_mapinfo = false; };
 
 struct WorldData {
     FormatInfo format;
@@ -92,6 +92,7 @@ struct WorldData {
     std::vector<uint8_t> cell_env_sounds;
     std::vector<uint16_t> cell_texture_indexes;
     std::vector<uint32_t> cell_ext_flags;
+    std::vector<uint8_t> map_info;
 };
 
 // read auto-detects format and parses a WRP file.

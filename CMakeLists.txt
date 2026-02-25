@@ -46,6 +46,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+# Find libpng for streaming writes
+find_package(PNG REQUIRED)
+
 # stb_image_write as a header-only interface library
 add_library(stb_image_write INTERFACE)
 target_include_directories(stb_image_write SYSTEM INTERFACE ${stb_SOURCE_DIR})

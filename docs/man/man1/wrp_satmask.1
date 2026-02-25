@@ -1,28 +1,36 @@
 .TH wrp_satmask 1 "February 2026" "arma-tools" "User Commands"
 .SH NAME
-wrp_satmask \- generate an RGB surface-mask GeoTIFF from WRP data
+wrp_satmask \- export satellite and mask tiles from modern WRP MapInfo
 .SH SYNOPSIS
 .B wrp_satmask
-.RI [ flags ]
-.I input.wrp output.tif
+.RI --db
+.I a3db.sqlite
+.RI [ --out <dir> ]
+.RI [ --dump-tiles ]
+.I input.wrp
 .SH DESCRIPTION
 .B wrp_satmask
-renders per-cell dominant material categories into an RGB GeoTIFF and writes materials metadata JSON.
+extracts sat_lco/mask_lco tiles listed in the WRP MapInfo block, mosaics them into PNG canvases, and writes
+.B _sat_lco.png
+(always) and
+.B _mask_lco.png
+(modern WRPs only). Legacy WRP v2/v3 files generate only the sat output. Tile assets are resolved through the supplied A3DB database.
 .SH OPTIONS
 .TP
-.B
---pretty
-Pretty-print materials JSON.
+.BI "--db " a3db.sqlite
+Path to the A3DB SQLite index used to resolve PBO contents. Required.
 .TP
-.BI "-offset-x " n
-X coordinate offset (default 200000).
+.BI "--out " dir
+Directory where outputs and diagnostics are written (default: input file directory).
 .TP
-.BI "-offset-z " n
-Z coordinate offset (default 0).
+.B --dump-tiles
+Print the extracted tile paths and parsed coordinates.
 .TP
-.BI "-materials " path
-Output path for
-.BR materials.json .
+.BI "--max-resolution " N
+Cap the largest output dimension to N (default: 0 for no cap).
+.TP
+.B -v
+Enable verbose logging.
 .TP
 .BR -h , " --help"
 Show help.

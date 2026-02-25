@@ -751,9 +751,12 @@ struct OprwModernParser {
         w.stats.object_count = static_cast<int>(w.objects.size());
 
         // 24. MapInfos: variable-length map display entries (infoType + MapData).
-        // Not object records — skip.
+        // Not object records — store if requested.
         if (size_of_map_info > 0) {
-            read_bytes(r, static_cast<size_t>(size_of_map_info));
+            auto map_info_bytes = read_bytes(r, static_cast<size_t>(size_of_map_info));
+            if (!opts.no_mapinfo) {
+                w.map_info = std::move(map_info_bytes);
+            }
         }
 
         return w;
