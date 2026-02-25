@@ -283,7 +283,17 @@ static LOD read_odol_lod(std::istream& r) {
         lod.named_selections[i] = name;
 
         // faceIndices (compressed uint16 array)
-        skip_compressed_array_v7(r, 2);
+        auto [face_index_count, face_indices_data] =
+            read_compressed_array_v7_raw(r, 2);
+        std::vector<uint32_t> selected_faces;
+        selected_faces.reserve(face_index_count);
+        for (uint32_t fi = 0; fi < face_index_count; ++fi) {
+            uint16_t idx = 0;
+            std::memcpy(&idx,
+                        face_indices_data.data() + static_cast<size_t>(fi) * 2,
+                        2);
+            selected_faces.push_back(static_cast<uint32_t>(idx));
+        }
         // faceWeights (compressed uint8 array)
         skip_compressed_array_v7(r, 1);
         // faceSelectionIndices (compressed uint32 array)
@@ -311,6 +321,12 @@ static LOD read_odol_lod(std::istream& r) {
             selected_vertices.push_back(static_cast<uint32_t>(idx));
         }
 
+        if (!selected_faces.empty()) {
+            auto& target_faces = lod.named_selection_faces[name];
+            target_faces.insert(target_faces.end(), selected_faces.begin(), selected_faces.end());
+            std::sort(target_faces.begin(), target_faces.end());
+            target_faces.erase(std::unique(target_faces.begin(), target_faces.end()), target_faces.end());
+        }
         if (!selected_vertices.empty()) {
             auto& target = lod.named_selection_vertices[name];
             target.insert(target.end(), selected_vertices.begin(), selected_vertices.end());
@@ -1128,12 +1144,17 @@ struct Odol28Ctx {
         return s;
     }
 
-    // Read a NamedSelection and return its name with selected vertices.
-    std::pair<std::string, std::vector<uint32_t>> read_named_selection() {
+    // Read a NamedSelection and return its name with selected faces / vertices.
+    struct NamedSelectionRecord {
+        std::string name;
+        std::vector<uint32_t> faces;
+        std::vector<uint32_t> vertices;
+    };
+    NamedSelectionRecord read_named_selection() {
         auto name = read_asciiz(r);
 
-        // SelectedFaces (compressed vertex index array)
-        skip_compressed_vertex_index_array();
+        // SelectedFaces (compressed index array)
+        auto selected_faces = read_compressed_vertex_index_array();
 
         // skip(int32)
         r.seekg(4, std::ios::cur);
@@ -1163,7 +1184,8 @@ struct Odol28Ctx {
             }
         }
 
-        return {std::move(name), std::move(selected_vertices)};
+        return {std::move(name), std::move(selected_faces),
+                std::move(selected_vertices)};
     }
 
     // Read a single ODOL v28+ LOD.
@@ -1293,13 +1315,21 @@ struct Odol28Ctx {
         auto n_selections = read_i32(r);
         lod.named_selections.resize(static_cast<size_t>(n_selections));
         for (int32_t i = 0; i < n_selections; ++i) {
-            auto [name, vertices] = read_named_selection();
+            auto record = read_named_selection();
+            auto& name = record.name;
             lod.named_selections[static_cast<size_t>(i)] = name;
-            if (!vertices.empty()) {
+            if (!record.vertices.empty()) {
                 auto& target = lod.named_selection_vertices[name];
-                target.insert(target.end(), vertices.begin(), vertices.end());
+                target.insert(target.end(), record.vertices.begin(), record.vertices.end());
                 std::sort(target.begin(), target.end());
                 target.erase(std::unique(target.begin(), target.end()), target.end());
+            }
+            if (!record.faces.empty()) {
+                auto& target_faces = lod.named_selection_faces[name];
+                target_faces.insert(target_faces.end(), record.faces.begin(), record.faces.end());
+                std::sort(target_faces.begin(), target_faces.end());
+                target_faces.erase(std::unique(target_faces.begin(), target_faces.end()),
+                                   target_faces.end());
             }
         }
 
@@ -1479,6 +1509,16 @@ struct Odol28Ctx {
                 indices.erase(std::remove_if(indices.begin(), indices.end(),
                                              [max_vertex_index](uint32_t idx) {
                                                  return idx >= max_vertex_index;
+                                             }),
+                              indices.end());
+            }
+        }
+        const uint32_t max_face_index = static_cast<uint32_t>(lod.faces.size());
+        if (max_face_index > 0) {
+            for (auto& [_, indices] : lod.named_selection_faces) {
+                indices.erase(std::remove_if(indices.begin(), indices.end(),
+                                             [max_face_index](uint32_t idx) {
+                                                 return idx >= max_face_index;
                                              }),
                               indices.end());
             }
