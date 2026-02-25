@@ -10,6 +10,8 @@
 #include <gtk/gtk.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -30,6 +32,25 @@ bool is_model_matched(const std::string& new_model) {
 
 bool is_model_multi_match(const std::string& new_model) {
     return new_model.find(';') != std::string::npos;
+}
+
+std::string trim_copy(std::string value) {
+    auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!value.empty() && is_space(static_cast<unsigned char>(value.front()))) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
+        value.pop_back();
+    }
+    return value;
+}
+
+void log_async_dialog_error(const std::string& action, const std::exception& e) {
+    app_log(LogLevel::Warning, "ObjReplace " + action + " failed: " + std::string(e.what()));
+}
+
+void log_async_dialog_error(const std::string& action) {
+    app_log(LogLevel::Warning, "ObjReplace " + action + " failed: unknown error");
 }
 
 struct TextureExtractStats {
@@ -60,6 +81,10 @@ TextureExtractStats extract_textures_to_drive(
         std::vector<armatools::pboindex::FindResult> results;
         try {
             results = db.find_files(pattern);
+        } catch (const std::exception& e) {
+            app_log(LogLevel::Debug, "ObjReplace texture lookup failed for " + tex + ": " + e.what());
+            stats.missing++;
+            continue;
         } catch (...) {
             stats.missing++;
             continue;
@@ -586,26 +611,28 @@ void TabObjReplace::check_unsaved_changes(std::function<void()> proceed_callback
 
     dialog->set_child(*vbox);
 
-    cancel_btn->signal_clicked().connect([dialog]() {
+    auto dialog_closed = std::make_shared<std::atomic<bool>>(false);
+    auto close_dialog = [dialog, dialog_closed]() {
+        if (dialog_closed->exchange(true)) return;
         dialog->close();
         Glib::signal_idle().connect_once([dialog]() { delete dialog; });
+    };
+    dialog->signal_close_request().connect([close_dialog]() {
+        close_dialog();
+        return false;
+    }, false);
+
+    cancel_btn->signal_clicked().connect(close_dialog);
+
+    discard_btn->signal_clicked().connect([close_dialog, proceed_callback]() {
+        close_dialog();
+        proceed_callback();
     });
 
-    discard_btn->signal_clicked().connect([dialog, proceed_callback]() {
-        dialog->close();
-        Glib::signal_idle().connect_once([dialog, proceed_callback]() {
-            delete dialog;
-            proceed_callback();
-        });
-    });
-
-    save_btn->signal_clicked().connect([this, dialog, proceed_callback]() {
-        dialog->close();
-        Glib::signal_idle().connect_once([this, dialog, proceed_callback]() {
-            delete dialog;
-            on_save();
-            proceed_callback();
-        });
+    save_btn->signal_clicked().connect([this, close_dialog, proceed_callback]() {
+        close_dialog();
+        on_save();
+        proceed_callback();
     });
 
     dialog->set_hide_on_close(true);
@@ -635,7 +662,11 @@ void TabObjReplace::on_repl_browse() {
                         repl_entry_.set_text(file->get_path());
                         load_replacement_file(file->get_path());
                     }
-                } catch (...) {}
+                } catch (const std::exception& e) {
+                    log_async_dialog_error("replacement file open", e);
+                } catch (...) {
+                    log_async_dialog_error("replacement file open");
+                }
             });
     };
 
@@ -671,7 +702,11 @@ void TabObjReplace::on_wrp_browse() {
                         wrp_entry_.set_text(file->get_path());
                         load_wrp_file(file->get_path());
                     }
-                } catch (...) {}
+                } catch (const std::exception& e) {
+                    log_async_dialog_error("WRP file open", e);
+                } catch (...) {
+                    log_async_dialog_error("WRP file open");
+                }
             });
     };
 
@@ -709,13 +744,8 @@ void TabObjReplace::load_replacement_file(const std::string& path) {
 
         ObjReplEntry entry;
         entry.id = next_entry_id();
-        entry.old_model = line.substr(0, tab);
-        entry.new_model = line.substr(tab + 1);
-
-        while (!entry.old_model.empty() && entry.old_model.back() == ' ')
-            entry.old_model.pop_back();
-        while (!entry.new_model.empty() && entry.new_model.back() == ' ')
-            entry.new_model.pop_back();
+        entry.old_model = trim_copy(line.substr(0, tab));
+        entry.new_model = trim_copy(line.substr(tab + 1));
 
         if (!entry.old_model.empty())
             entries_.push_back(std::move(entry));
@@ -799,7 +829,11 @@ void TabObjReplace::on_save_as() {
                 if (file) {
                     save_replacement_file(file->get_path());
                 }
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                log_async_dialog_error("replacement file save", e);
+            } catch (...) {
+                log_async_dialog_error("replacement file save");
+            }
         });
 }
 
@@ -926,16 +960,30 @@ void TabObjReplace::on_set_unmatched_to() {
 
     dialog->set_child(*vbox);
 
-    cancel_btn->signal_clicked().connect([dialog]() {
+    auto dialog_closed = std::make_shared<std::atomic<bool>>(false);
+    auto close_dialog = [dialog, dialog_closed]() {
+        if (dialog_closed->exchange(true)) return;
         dialog->close();
         Glib::signal_idle().connect_once([dialog]() { delete dialog; });
-    });
+    };
+    dialog->signal_close_request().connect([close_dialog]() {
+        close_dialog();
+        return false;
+    }, false);
 
-    apply_btn->signal_clicked().connect([this, dialog, entry]() {
-        auto new_value = std::string(entry->get_text());
+    cancel_btn->signal_clicked().connect(close_dialog);
+
+    apply_btn->signal_clicked().connect([this, close_dialog, entry]() {
+        auto new_value = trim_copy(std::string(entry->get_text()));
         if (new_value.empty()) {
-            dialog->close();
-            Glib::signal_idle().connect_once([dialog]() { delete dialog; });
+            close_dialog();
+            return;
+        }
+        if (new_value.find(';') != std::string::npos ||
+            new_value.find('\n') != std::string::npos ||
+            new_value.find('\r') != std::string::npos) {
+            app_log(LogLevel::Warning,
+                    "Set Unmatched: invalid model path (contains ';' or newline)");
             return;
         }
 
@@ -954,8 +1002,7 @@ void TabObjReplace::on_set_unmatched_to() {
             refresh_all();
         }
 
-        dialog->close();
-        Glib::signal_idle().connect_once([dialog]() { delete dialog; });
+        close_dialog();
     });
 
     dialog->set_hide_on_close(true);
@@ -1001,7 +1048,18 @@ void TabObjReplace::on_auto_match() {
     auto total_work = work.size();
     status_label_.set_text("Auto-matching 0/" + std::to_string(total_work) + "...");
 
-    worker_ = std::thread([this, work = std::move(work), total_work]() {
+    auto db = db_;
+    worker_ = std::thread([this, db = std::move(db), work = std::move(work), total_work]() {
+        if (!db) {
+            Glib::signal_idle().connect_once([this]() {
+                app_log(LogLevel::Warning, "Auto-Match cancelled: PBO index is not available");
+                auto_match_button_.set_sensitive(true);
+                loading_ = false;
+                update_status_label();
+            });
+            return;
+        }
+
         // Run all DB queries on the worker thread.
         // Each match is: entry_index -> semicolon-joined candidate paths.
         // Single match: stored directly. Multiple matches: joined with ";".
@@ -1029,7 +1087,22 @@ void TabObjReplace::on_auto_match() {
                     });
             }
 
-            auto results = db_->find_files("*" + w.filename);
+            std::vector<armatools::pboindex::FindResult> results;
+            try {
+                results = db->find_files("*" + w.filename);
+            } catch (const std::exception& e) {
+                auto msg = "Auto-Match: lookup failed for '" + w.filename + "': " + e.what();
+                Glib::signal_idle().connect_once([msg]() {
+                    app_log(LogLevel::Warning, msg);
+                });
+                continue;
+            } catch (...) {
+                auto msg = "Auto-Match: lookup failed for '" + w.filename + "'";
+                Glib::signal_idle().connect_once([msg]() {
+                    app_log(LogLevel::Warning, msg);
+                });
+                continue;
+            }
 
             // Collect all non-self candidates
             std::vector<std::string> candidates;
@@ -1190,9 +1263,16 @@ void TabObjReplace::start_auto_extract_worker(std::set<std::string> textures,
     if (auto_extract_thread_.joinable()) auto_extract_thread_.join();
 
     auto_extract_busy_ = true;
-    auto* db = db_.get();
-    auto_extract_thread_ = std::thread([this, db, drive_root = std::move(drive_root),
+    auto db = db_;
+    auto_extract_thread_ = std::thread([this, db = std::move(db), drive_root = std::move(drive_root),
                                         textures = std::move(textures)]() mutable {
+        if (!db) {
+            Glib::signal_idle().connect_once([this]() {
+                status_label_.set_text("Auto-extract skipped: A3DB not loaded.");
+                auto_extract_busy_ = false;
+            });
+            return;
+        }
         const auto stats = extract_textures_to_drive(*db, drive_root, textures);
         Glib::signal_idle().connect_once([this, stats, drive_root]() {
             std::set<std::string> pending;
@@ -1326,11 +1406,12 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
         std::vector<armatools::pboindex::DirEntry> dir_entries;
         std::vector<armatools::pboindex::FindResult> search_results;
         bool showing_search = false;
-        std::thread search_thread;
+        std::jthread nav_thread;
+        std::jthread search_thread;
         std::atomic<unsigned> search_gen{0};
         std::atomic<unsigned> nav_gen{0};
         std::atomic<unsigned> preview_gen{0};
-        bool alive = true; // set to false when dialog closes
+        std::atomic<bool> alive{true}; // set to false when dialog closes
     };
     auto state = std::make_shared<DialogState>();
 
@@ -1584,20 +1665,28 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
 
         auto db_path = cfg_->a3db_path;
         auto source = state->current_source;
-        std::thread([state, db_path, path, source, gen,
-                     populate_list, browser_status]() {
+        if (state->nav_thread.joinable()) {
+            state->nav_thread.request_stop();
+            state->nav_thread.detach();
+        }
+        state->nav_thread = std::jthread(
+            [state, db_path, path, source, gen,
+             populate_list, browser_status](std::stop_token st) {
+            if (st.stop_requested()) return;
             try {
                 auto db = armatools::pboindex::DB::open(db_path);
+                if (st.stop_requested()) return;
                 std::vector<armatools::pboindex::DirEntry> entries;
                 if (source.empty()) {
                     entries = db.list_dir(path);
                 } else {
                     entries = db.list_dir_for_source(path, source);
                 }
+                if (st.stop_requested()) return;
                 Glib::signal_idle().connect_once(
                     [state, entries = std::move(entries), gen,
                      populate_list, browser_status]() {
-                        if (!state->alive || gen != state->nav_gen.load()) return;
+                        if (!state->alive.load() || gen != state->nav_gen.load()) return;
                         state->dir_entries = std::move(entries);
                         populate_list();
                         browser_status->set_text(
@@ -1607,11 +1696,11 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
                 auto msg = std::string(e.what());
                 Glib::signal_idle().connect_once(
                     [state, gen, browser_status, msg]() {
-                        if (!state->alive || gen != state->nav_gen.load()) return;
+                        if (!state->alive.load() || gen != state->nav_gen.load()) return;
                         browser_status->set_text("Error: " + msg);
                     });
             }
-        }).detach();
+        });
     };
 
     // Preview a P3D file in the new model panel (async — extract+parse in background)
@@ -1623,7 +1712,7 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
         apply_btn->set_sensitive(true);
         unsigned gen = ++state->preview_gen;
         Glib::signal_idle().connect_once([state, gen, new_panel, full_path]() {
-            if (!state->alive || gen != state->preview_gen.load()) return;
+            if (!state->alive.load() || gen != state->preview_gen.load()) return;
             new_panel->load_p3d(full_path);
         });
     };
@@ -1665,7 +1754,7 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
     // Search for .p3d files
     auto dialog_search = [this, state, search_btn, browser_status,
                           show_search_results](const std::string& pattern) {
-        if (!db_ || pattern.empty()) return;
+        if (!db_ || !cfg_ || cfg_->a3db_path.empty() || pattern.empty()) return;
 
         // Ensure pattern searches for .p3d files
         std::string search_pattern = pattern;
@@ -1682,16 +1771,22 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
         search_btn->set_sensitive(false);
         browser_status->set_text("Searching...");
 
-        if (state->search_thread.joinable()) state->search_thread.detach();
+        if (state->search_thread.joinable()) {
+            state->search_thread.request_stop();
+            state->search_thread.detach();
+        }
 
         auto db_path = cfg_->a3db_path;
         auto source = state->current_source;
-        state->search_thread = std::thread(
+        state->search_thread = std::jthread(
             [state, db_path, search_pattern, source, gen,
-             search_btn, browser_status, show_search_results]() {
+             search_btn, browser_status, show_search_results](std::stop_token st) {
+                if (st.stop_requested()) return;
                 try {
                     auto db = armatools::pboindex::DB::open(db_path);
+                    if (st.stop_requested()) return;
                     auto results = db.find_files(search_pattern, source);
+                    if (st.stop_requested()) return;
                     Glib::signal_idle().connect_once(
                         [state, results = std::move(results), gen,
                          search_btn, browser_status, show_search_results]() {
@@ -1831,17 +1926,29 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
         });
 
     // === Action buttons ===
-    auto close_dialog = [dialog, state]() {
+    auto close_dialog_guard = std::make_shared<std::atomic<bool>>(false);
+    auto close_dialog = [dialog, state, close_dialog_guard]() {
+        if (close_dialog_guard->exchange(true)) return;
         // Mark dialog as dead so background threads stop posting to widgets
-        state->alive = false;
+        state->alive.store(false);
         ++state->search_gen;
         ++state->nav_gen;
         ++state->preview_gen;
-        if (state->search_thread.joinable())
+        if (state->nav_thread.joinable()) {
+            state->nav_thread.request_stop();
+            state->nav_thread.detach();
+        }
+        if (state->search_thread.joinable()) {
+            state->search_thread.request_stop();
             state->search_thread.detach();
+        }
         dialog->close();
         Glib::signal_idle().connect_once([dialog]() { delete dialog; });
     };
+    dialog->signal_close_request().connect([close_dialog]() {
+        close_dialog();
+        return false;
+    }, false);
 
     cancel_btn->signal_clicked().connect(close_dialog);
 
@@ -1882,7 +1989,7 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
             const std::string& model_path) {
         if (model_path.empty()) return;
         Glib::signal_idle().connect_once([state, panel, label, model_path]() {
-            if (!state->alive) return;
+            if (!state->alive.load()) return;
             panel->load_p3d(model_path);
             label->set_text(model_path);
         });
@@ -1921,7 +2028,18 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
             if (db_) {
                 auto normalized = armatools::armapath::to_slash_lower(c);
                 auto filename = fs::path(normalized).filename().string();
-                auto results = db_->find_files("*" + filename);
+                std::vector<armatools::pboindex::FindResult> results;
+                try {
+                    results = db_->find_files("*" + filename);
+                } catch (const std::exception& e) {
+                    app_log(LogLevel::Warning,
+                            "ObjReplace: candidate lookup failed for '" + filename + "': " + e.what());
+                    continue;
+                } catch (...) {
+                    app_log(LogLevel::Warning,
+                            "ObjReplace: candidate lookup failed for '" + filename + "'");
+                    continue;
+                }
                 bool found = false;
                 for (const auto& r : results) {
                     auto full = armatools::armapath::to_slash_lower(
@@ -1976,7 +2094,13 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
              dialog_preview_p3d]() {
                 auto id = std::string(match_combo->get_active_id());
                 if (id.empty()) return;
-                auto ci = static_cast<size_t>(std::stoul(id));
+                size_t ci = 0;
+                try {
+                    ci = static_cast<size_t>(std::stoul(id));
+                } catch (const std::exception&) {
+                    apply_btn->set_sensitive(false);
+                    return;
+                }
                 if (ci >= state->search_results.size()) return;
                 dialog_preview_p3d(state->search_results[ci]);
             });
