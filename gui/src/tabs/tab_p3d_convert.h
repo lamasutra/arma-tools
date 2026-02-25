@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "pbo_util.h"
 
 #include <thread>
 
@@ -35,6 +36,7 @@ private:
     void on_input_browse_dir();
     void on_output_browse();
     void on_convert();
+    void on_conversion_finished(SubprocessResult result);
 
     std::thread worker_;
 };

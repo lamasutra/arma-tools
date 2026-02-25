@@ -120,10 +120,10 @@ private:
     bool source_combo_updating_ = false;
     WrpFileEntry loaded_wrp_entry_;
     bool loaded_wrp_entry_valid_ = false;
-    std::thread worker_;
-    std::thread objects_worker_;
-    std::thread satellite_worker_;
-    std::thread scan_thread_;
+    std::jthread worker_;
+    std::jthread objects_worker_;
+    std::jthread satellite_worker_;
+    std::jthread scan_thread_;
     std::atomic<bool> loading_{false};
     std::atomic<bool> objects_loading_{false};
     std::atomic<bool> satellite_loading_{false};

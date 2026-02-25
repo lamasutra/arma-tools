@@ -1,4 +1,5 @@
 #include "tab_wrp_project.h"
+#include "log_panel.h"
 #include "pbo_util.h"
 
 #include <armatools/armapath.h>
@@ -293,7 +294,11 @@ void TabWrpProject::on_folder_browse() {
                     scan_dir_ = file->get_path();
                     on_scan();
                 }
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                app_log(LogLevel::Warning, "WrpProject: folder dialog failed: " + std::string(e.what()));
+            } catch (...) {
+                app_log(LogLevel::Warning, "WrpProject: folder dialog failed");
+            }
         });
 }
 
@@ -304,11 +309,15 @@ void TabWrpProject::on_scan() {
     const auto db_path = cfg_ ? cfg_->a3db_path : std::string();
     const unsigned gen = ++scan_generation_;
     status_label_.set_text("Scanning WRP files...");
-    if (scan_thread_.joinable()) scan_thread_.join();
-    scan_thread_ = std::thread([this, dir, source, db_path, gen]() {
+    if (scan_thread_.joinable()) {
+        scan_thread_.request_stop();
+        scan_thread_.join();
+    }
+    scan_thread_ = std::jthread([this, dir, source, db_path, gen](std::stop_token st) {
         std::vector<WrpFileEntry> files;
-        if (!db_path.empty()) {
-            try {
+        std::string err;
+        try {
+            if (!db_path.empty()) {
                 auto db = armatools::pboindex::DB::open(db_path);
                 auto results = db.find_files("*.wrp", source);
                 files.reserve(results.size());
@@ -323,13 +332,18 @@ void TabWrpProject::on_scan() {
                     e.source = source;
                     files.push_back(std::move(e));
                 }
-            } catch (...) {
             }
+        } catch (const std::exception& e) {
+            err = e.what();
+        } catch (...) {
+            err = "unknown error";
         }
+        if (st.stop_requested()) return;
         if (files.empty() && !dir.empty()) {
             std::error_code ec;
             for (auto& entry : fs::recursive_directory_iterator(
                      dir, fs::directory_options::skip_permission_denied, ec)) {
+                if (st.stop_requested()) return;
                 if (!entry.is_regular_file()) continue;
                 auto ext = entry.path().extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -341,10 +355,16 @@ void TabWrpProject::on_scan() {
                 files.push_back(std::move(e));
             }
         }
+        if (st.stop_requested()) return;
         std::sort(files.begin(), files.end(),
                   [](const auto& a, const auto& b) { return a.full_path < b.full_path; });
-        Glib::signal_idle().connect_once([this, files = std::move(files), gen]() mutable {
+        Glib::signal_idle().connect_once([this, files = std::move(files), gen, err = std::move(err)]() mutable {
             if (gen != scan_generation_.load()) return;
+            if (!err.empty()) {
+                status_label_.set_text("Scan failed: " + err);
+                app_log(LogLevel::Warning, "WrpProject scan failed: " + err);
+                return;
+            }
             wrp_files_ = std::move(files);
             on_filter_changed();
             status_label_.set_text("Ready");
@@ -440,15 +460,18 @@ void TabWrpProject::load_heightmap(const std::string& path) {
     hm_loading_ = true;
     hm_info_label_.set_text("Loading heightmap...");
 
-    if (hm_worker_.joinable())
+    if (hm_worker_.joinable()) {
+        hm_worker_.request_stop();
         hm_worker_.join();
+    }
 
-    hm_worker_ = std::thread([this, path]() {
+    hm_worker_ = std::jthread([this, path](std::stop_token st) {
         std::string info_text;
         std::vector<float> elevations;
         int grid_x = 0, grid_y = 0;
 
         try {
+            if (st.stop_requested()) return;
             std::ifstream f(path, std::ios::binary);
             if (f) {
                 armatools::wrp::Options opts;
@@ -472,6 +495,7 @@ void TabWrpProject::load_heightmap(const std::string& path) {
             info_text = std::string("Error: ") + e.what();
         }
 
+        if (st.stop_requested()) return;
         Glib::signal_idle().connect_once([this, info_text = std::move(info_text),
                                           elevations = std::move(elevations),
                                           grid_x, grid_y, path]() {
@@ -704,8 +728,10 @@ void TabWrpProject::on_generate() {
     log_view_.get_buffer()->set_text("Running: " + display_cmd + "\n\n");
 
     // Join previous worker if still running
-    if (worker_.joinable())
+    if (worker_.joinable()) {
+        worker_.request_stop();
         worker_.join();
+    }
 
     auto stream_consumer = [this](std::string chunk) {
         Glib::signal_idle().connect_once([this, chunk = std::move(chunk)]() {
@@ -714,8 +740,9 @@ void TabWrpProject::on_generate() {
         });
     };
 
-    worker_ = std::thread([this, tool, args, hm_scale, use_heightpipe, hp_preset, hp_seed,
-                           offset_x, offset_z, selected_wrp_path, output, stream_consumer]() mutable {
+    worker_ = std::jthread([this, tool, args, hm_scale, use_heightpipe, hp_preset, hp_seed,
+                           offset_x, offset_z, selected_wrp_path, output, stream_consumer](std::stop_token st) mutable {
+        if (st.stop_requested()) return;
         auto result = run_subprocess(tool, args, stream_consumer);
         std::string post_log;
 
@@ -727,6 +754,7 @@ void TabWrpProject::on_generate() {
             }
         }
 
+        if (st.stop_requested()) return;
         Glib::signal_idle().connect_once([this, result, post_log = std::move(post_log)]() {
             auto tbuf = log_view_.get_buffer();
             if (!post_log.empty()) {

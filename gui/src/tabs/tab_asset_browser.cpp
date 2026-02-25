@@ -260,7 +260,10 @@ TabAssetBrowser::~TabAssetBrowser() {
     if (scroll_value_conn_.connected()) scroll_value_conn_.disconnect();
     audio_stop_all();
     ++nav_generation_; // cancel any pending navigate
-    if (nav_thread_.joinable()) nav_thread_.join();
+    if (nav_thread_.joinable()) {
+        nav_thread_.request_stop();
+        nav_thread_.join();
+    }
 }
 
 void TabAssetBrowser::set_pbo_index_service(const std::shared_ptr<PboIndexService>& service) {
@@ -631,15 +634,20 @@ void TabAssetBrowser::load_next_search_page(unsigned gen, bool reset) {
     loading_more_results_ = true;
     status_label_.set_text(reset ? "Searching..." : "Loading more...");
 
-    if (nav_thread_.joinable()) nav_thread_.detach();
+    if (nav_thread_.joinable()) {
+        nav_thread_.request_stop();
+        nav_thread_.join();
+    }
 
     auto db_path = cfg_->a3db_path;
     auto source = current_source_;
     auto pattern = active_search_pattern_;
     auto offset = current_offset_;
-    nav_thread_ = std::thread([this, db_path, source, pattern, offset, gen, reset]() {
+    nav_thread_ = std::jthread([this, db_path, source, pattern, offset, gen, reset](std::stop_token st) {
+        if (st.stop_requested()) return;
         try {
             auto db = armatools::pboindex::DB::open(db_path);
+            if (st.stop_requested()) return;
             auto results = db.find_files(pattern, source, kPageSize, offset);
             Glib::signal_idle().connect_once(
                 [this, pattern, source, results = std::move(results), gen, reset]() mutable {
@@ -673,13 +681,17 @@ void TabAssetBrowser::load_next_directory_page(unsigned gen, bool reset) {
     loading_more_results_ = true;
     status_label_.set_text(reset ? "Loading..." : "Loading more...");
 
-    if (nav_thread_.joinable()) nav_thread_.detach();
+    if (nav_thread_.joinable()) {
+        nav_thread_.request_stop();
+        nav_thread_.join();
+    }
 
     auto db_path = cfg_->a3db_path;
     auto source = current_source_;
     auto path = current_path_;
     auto offset = current_offset_;
-    nav_thread_ = std::thread([this, db_path, source, path, offset, gen, reset]() {
+    nav_thread_ = std::jthread([this, db_path, source, path, offset, gen, reset](std::stop_token st) {
+        if (st.stop_requested()) return;
         try {
             auto db = armatools::pboindex::DB::open(db_path);
             std::vector<armatools::pboindex::DirEntry> entries;
@@ -688,6 +700,7 @@ void TabAssetBrowser::load_next_directory_page(unsigned gen, bool reset) {
             } else {
                 entries = db.list_dir_for_source(path, source, kPageSize, offset);
             }
+            if (st.stop_requested()) return;
             Glib::signal_idle().connect_once([this, entries = std::move(entries), gen, reset]() mutable {
                 if (gen != nav_generation_.load()) return;
                 append_directory_page(entries, reset);

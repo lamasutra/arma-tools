@@ -81,9 +81,9 @@ private:
     Gtk::TextView log_view_;
 
     // Worker threads
-    std::thread worker_;
-    std::thread hm_worker_;
-    std::thread scan_thread_;
+    std::jthread worker_;
+    std::jthread hm_worker_;
+    std::jthread scan_thread_;
     std::atomic<bool> hm_loading_{false};
     std::atomic<unsigned> scan_generation_{0};
     std::string hm_loaded_path_;

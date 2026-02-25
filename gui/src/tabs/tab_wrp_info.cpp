@@ -16,6 +16,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -184,13 +185,25 @@ TabWrpInfo::~TabWrpInfo() {
     if (pbo_index_service_) pbo_index_service_->unsubscribe(this);
     ++scan_generation_;
     ++load_generation_;
-    if (scan_thread_.joinable()) scan_thread_.join();
+    if (scan_thread_.joinable()) {
+        scan_thread_.request_stop();
+        scan_thread_.join();
+    }
     loading_ = false;
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable()) {
+        worker_.request_stop();
+        worker_.join();
+    }
     objects_loading_ = false;
-    if (objects_worker_.joinable()) objects_worker_.join();
+    if (objects_worker_.joinable()) {
+        objects_worker_.request_stop();
+        objects_worker_.join();
+    }
     satellite_loading_ = false;
-    if (satellite_worker_.joinable()) satellite_worker_.join();
+    if (satellite_worker_.joinable()) {
+        satellite_worker_.request_stop();
+        satellite_worker_.join();
+    }
 }
 
 void TabWrpInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& service) {
@@ -255,7 +268,11 @@ void TabWrpInfo::on_folder_browse() {
                     scan_dir_ = file->get_path();
                     on_scan();
                 }
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                app_log(LogLevel::Warning, "WrpInfo: folder dialog failed: " + std::string(e.what()));
+            } catch (...) {
+                app_log(LogLevel::Warning, "WrpInfo: folder dialog failed");
+            }
         });
 }
 
@@ -266,42 +283,60 @@ void TabWrpInfo::on_scan() {
     const auto source = current_source_;
     const unsigned gen = ++scan_generation_;
     class_status_label_.set_text("Scanning WRP files...");
-    if (scan_thread_.joinable()) scan_thread_.join();
-    scan_thread_ = std::thread([this, dir, db, source, gen]() {
+    if (scan_thread_.joinable()) {
+        scan_thread_.request_stop();
+        scan_thread_.join();
+    }
+    scan_thread_ = std::jthread([this, dir, db, source, gen](std::stop_token st) {
+        if (st.stop_requested()) return;
         std::vector<WrpFileEntry> files;
-        if (db) {
-            auto results = db->find_files("*.wrp", source);
-            files.reserve(results.size());
-            for (const auto& r : results) {
-                WrpFileEntry e;
-                e.from_pbo = true;
-                e.pbo_path = r.pbo_path;
-                e.entry_name = r.file_path;
-                e.full_path = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
-                e.display = fs::path(r.file_path).filename().string();
-                if (e.display.empty()) e.display = fs::path(e.full_path).filename().string();
-                e.source = source;
-                files.push_back(std::move(e));
+        std::string err;
+        try {
+            if (db) {
+                auto results = db->find_files("*.wrp", source);
+                files.reserve(results.size());
+                for (const auto& r : results) {
+                    WrpFileEntry e;
+                    e.from_pbo = true;
+                    e.pbo_path = r.pbo_path;
+                    e.entry_name = r.file_path;
+                    e.full_path = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
+                    e.display = fs::path(r.file_path).filename().string();
+                    if (e.display.empty()) e.display = fs::path(e.full_path).filename().string();
+                    e.source = source;
+                    files.push_back(std::move(e));
+                }
+            } else {
+                std::error_code ec;
+                for (auto& entry : fs::recursive_directory_iterator(
+                         dir, fs::directory_options::skip_permission_denied, ec)) {
+                    if (!entry.is_regular_file()) continue;
+                    auto ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext != ".wrp") continue;
+                    WrpFileEntry e;
+                    e.from_pbo = false;
+                    e.full_path = entry.path().string();
+                    e.display = entry.path().filename().string();
+                    files.push_back(std::move(e));
+                }
             }
-        } else {
-            std::error_code ec;
-            for (auto& entry : fs::recursive_directory_iterator(
-                     dir, fs::directory_options::skip_permission_denied, ec)) {
-                if (!entry.is_regular_file()) continue;
-                auto ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext != ".wrp") continue;
-                WrpFileEntry e;
-                e.from_pbo = false;
-                e.full_path = entry.path().string();
-                e.display = entry.path().filename().string();
-                files.push_back(std::move(e));
-            }
+        } catch (const std::exception& e) {
+            err = e.what();
+        } catch (...) {
+            err = "unknown error";
         }
+        if (st.stop_requested()) return;
         std::sort(files.begin(), files.end(),
                   [](const auto& a, const auto& b) { return a.full_path < b.full_path; });
-        Glib::signal_idle().connect_once([this, files = std::move(files), gen]() mutable {
+        Glib::signal_idle().connect_once([this, files = std::move(files),
+                                          gen, err = std::move(err)]() mutable {
             if (gen != scan_generation_.load()) return;
+            if (!err.empty()) {
+                class_status_label_.set_text("Scan failed: " + err);
+                app_log(LogLevel::Warning, "WrpInfo scan failed: " + err);
+                return;
+            }
             wrp_files_ = std::move(files);
             on_filter_changed();
             class_status_label_.set_text("Ready");
@@ -385,15 +420,25 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
     terrain3d_view_.clear_world();
     terrain3d_view_.set_satellite_palette({});
 
-    if (worker_.joinable()) worker_.join();
-    if (objects_worker_.joinable()) objects_worker_.join();
-    if (satellite_worker_.joinable()) satellite_worker_.join();
+    if (worker_.joinable()) {
+        worker_.request_stop();
+        worker_.join();
+    }
+    if (objects_worker_.joinable()) {
+        objects_worker_.request_stop();
+        objects_worker_.join();
+    }
+    if (satellite_worker_.joinable()) {
+        satellite_worker_.request_stop();
+        satellite_worker_.join();
+    }
 
-    worker_ = std::thread([this, entry, gen]() {
+    worker_ = std::jthread([this, entry, gen](std::stop_token st) {
         std::string info_text;
         std::shared_ptr<armatools::wrp::WorldData> wd_ptr;
 
         try {
+            if (st.stop_requested()) return;
             std::unique_ptr<std::istream> in;
             std::istringstream mem_stream;
             std::ifstream file_stream;
@@ -459,6 +504,7 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
             info_text = std::string("Error: ") + e.what();
         }
 
+        if (st.stop_requested()) return;
         Glib::signal_idle().connect_once([this, info_text = std::move(info_text),
                                           wd_ptr = std::move(wd_ptr), entry, gen]() {
             if (gen != load_generation_.load()) return;
@@ -617,11 +663,15 @@ void TabWrpInfo::ensure_objects_loaded() {
     objects_loading_ = true;
     class_status_label_.set_text("Loading objects...");
 
-    if (objects_worker_.joinable()) objects_worker_.join();
-    objects_worker_ = std::thread([this, entry, gen]() {
+    if (objects_worker_.joinable()) {
+        objects_worker_.request_stop();
+        objects_worker_.join();
+    }
+    objects_worker_ = std::jthread([this, entry, gen](std::stop_token st) {
         std::shared_ptr<armatools::wrp::WorldData> wd_ptr;
         std::string err;
         try {
+            if (st.stop_requested()) return;
             std::unique_ptr<std::istream> in;
             std::istringstream mem_stream;
             std::ifstream file_stream;
@@ -649,6 +699,7 @@ void TabWrpInfo::ensure_objects_loaded() {
             err = e.what();
         }
 
+        if (st.stop_requested()) return;
         TabWrpInfo::ClassListSnapshot class_snapshot;
         if (wd_ptr && err.empty())
             class_snapshot = build_class_list_snapshot(wd_ptr->objects);
@@ -691,8 +742,11 @@ void TabWrpInfo::ensure_satellite_palette_loaded() {
     const auto textures = world_data_->textures;
 
     satellite_loading_ = true;
-    if (satellite_worker_.joinable()) satellite_worker_.join();
-    satellite_worker_ = std::thread([this, gen, index, db, cfg, wrp_path, textures]() {
+    if (satellite_worker_.joinable()) {
+        satellite_worker_.request_stop();
+        satellite_worker_.join();
+    }
+    satellite_worker_ = std::jthread([this, gen, index, db, cfg, wrp_path, textures](std::stop_token st) {
         auto fallback_color = [](size_t idx) -> std::array<float, 3> {
             const float n = static_cast<float>(idx + 1);
             const float x = std::fmod(std::sin(n * 12.9898f) * 43758.5453f, 1.0f);
@@ -855,50 +909,68 @@ void TabWrpInfo::ensure_satellite_palette_loaded() {
             return resolved;
         };
 
+        if (st.stop_requested()) return;
         std::vector<std::array<float, 3>> palette(textures.size());
         for (size_t i = 0; i < palette.size(); ++i) palette[i] = fallback_color(i);
 
         size_t decoded_count = 0;
-        for (size_t i = 0; i < textures.size(); ++i) {
-            auto tex = textures[i].filename;
-            if (tex.empty()) continue;
-            const auto normalized = normalize_asset_path(tex);
-            std::array<float, 3> rgb{};
+        std::string err;
+        try {
+            for (size_t i = 0; i < textures.size(); ++i) {
+                if (st.stop_requested()) return;
+                auto tex = textures[i].filename;
+                if (tex.empty()) continue;
+                const auto normalized = normalize_asset_path(tex);
+                std::array<float, 3> rgb{};
 
-            auto try_paths = [&](const std::vector<std::string>& paths) -> bool {
-                for (const auto& p : paths) {
-                    auto data = load_asset_bytes(p);
-                    if (!data.empty() && try_decode(data, rgb)) return true;
-                }
-                return false;
-            };
+                auto try_paths = [&](const std::vector<std::string>& paths) -> bool {
+                    for (const auto& p : paths) {
+                        auto data = load_asset_bytes(p);
+                        if (!data.empty() && try_decode(data, rgb)) return true;
+                    }
+                    return false;
+                };
 
-            bool ok = false;
-            const auto ext = fs::path(normalized).extension().string();
-            if (ext == ".paa" || ext == ".pac") {
-                ok = try_paths({normalized});
-            } else {
-                auto mat_paths = std::vector<std::string>{normalized};
-                if (ext.empty()) mat_paths.push_back(normalized + ".rvmat");
-                for (const auto& mat : mat_paths) {
-                    auto mat_data = load_asset_bytes(mat);
-                    if (mat_data.empty()) continue;
-                    if (auto tex_path = extract_material_texture(mat, mat_data)) {
-                        auto ntex = normalize_asset_path(*tex_path);
-                        ok = try_paths({ntex, ntex + ".paa", ntex + ".pac"});
-                        if (ok) break;
+                bool ok = false;
+                const auto ext = fs::path(normalized).extension().string();
+                if (ext == ".paa" || ext == ".pac") {
+                    ok = try_paths({normalized});
+                } else {
+                    auto mat_paths = std::vector<std::string>{normalized};
+                    if (ext.empty()) mat_paths.push_back(normalized + ".rvmat");
+                    for (const auto& mat : mat_paths) {
+                        auto mat_data = load_asset_bytes(mat);
+                        if (mat_data.empty()) continue;
+                        if (auto tex_path = extract_material_texture(mat, mat_data)) {
+                            auto ntex = normalize_asset_path(*tex_path);
+                            ok = try_paths({ntex, ntex + ".paa", ntex + ".pac"});
+                            if (ok) break;
+                        }
                     }
                 }
+                if (ok) {
+                    palette[i] = rgb;
+                    decoded_count++;
+                }
             }
-            if (ok) {
-                palette[i] = rgb;
-                decoded_count++;
-            }
+        } catch (const std::exception& e) {
+            err = e.what();
+        } catch (...) {
+            err = "unknown";
         }
 
-        Glib::signal_idle().connect_once([this, gen, palette = std::move(palette), decoded_count]() {
+        Glib::signal_idle().connect_once([this, gen, palette = std::move(palette),
+                                          decoded_count, err = std::move(err)]() {
             if (gen != load_generation_.load()) return;
             satellite_loading_ = false;
+            if (!err.empty()) {
+                satellite_loaded_ = false;
+                terrain3d_status_label_.set_text(
+                    terrain3d_status_label_.get_text()
+                    + " | satellite palette failed (" + err + ")");
+                app_log(LogLevel::Warning, "WrpInfo: satellite palette build error: " + err);
+                return;
+            }
             satellite_loaded_ = true;
             satellite_palette_ = palette;
             terrain3d_view_.set_satellite_palette(satellite_palette_);

@@ -69,7 +69,7 @@ private:
     Gtk::ComboBoxText source_combo_;
     std::string current_source_; // "" = all, otherwise "arma3", "ofp", etc.
     bool source_combo_updating_ = false;
-    std::thread nav_thread_;
+    std::jthread nav_thread_;
     std::atomic<unsigned> nav_generation_{0};
     Gtk::Box search_box_{Gtk::Orientation::HORIZONTAL, 4};
     Gtk::Entry search_entry_;

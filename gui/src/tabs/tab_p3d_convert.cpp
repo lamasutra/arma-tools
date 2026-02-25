@@ -130,16 +130,19 @@ void TabP3dConvert::on_convert() {
 
     worker_ = std::thread([this, tool, args]() {
         auto result = run_subprocess(tool, args);
-
-        Glib::signal_idle().connect_once([this, result]() {
-            auto tbuf = log_view_.get_buffer();
-            tbuf->insert(tbuf->end(), result.output);
-            if (result.status == 0) {
-                status_label_.set_text("Conversion complete.");
-            } else {
-                status_label_.set_text("Conversion failed (exit " + std::to_string(result.status) + ").");
-            }
-            convert_button_.set_sensitive(true);
-        });
+        Glib::signal_idle().connect_once(
+            sigc::bind(sigc::mem_fun(*this, &TabP3dConvert::on_conversion_finished),
+                       result));
     });
+}
+
+void TabP3dConvert::on_conversion_finished(SubprocessResult result) {
+    auto tbuf = log_view_.get_buffer();
+    tbuf->insert(tbuf->end(), result.output);
+    if (result.status == 0) {
+        status_label_.set_text("Conversion complete.");
+    } else {
+        status_label_.set_text("Conversion failed (exit " + std::to_string(result.status) + ").");
+    }
+    convert_button_.set_sensitive(true);
 }
