@@ -12,6 +12,7 @@ public:
     AssetProvider(std::shared_ptr<armatools::pboindex::Index> index,
                   std::shared_ptr<armatools::pboindex::DB> db);
 
+    bool exists(const std::string& virtual_path) const;
     std::optional<std::vector<uint8_t>> read(const std::string& virtual_path) const;
 
 private:

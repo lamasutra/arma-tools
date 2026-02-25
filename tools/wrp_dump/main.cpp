@@ -34,6 +34,7 @@ static json build_world_json(const armatools::wrp::WorldData& w) {
     for (size_t i = 0; i < w.textures.size(); i++) {
         json t = {{"index", static_cast<int>(i)}, {"filename", w.textures[i].filename}};
         if (w.textures[i].color != 0) t["color"] = w.textures[i].color;
+        if (!w.textures[i].filenames.empty()) t["filenames"] = w.textures[i].filenames;
         textures.push_back(std::move(t));
     }
 

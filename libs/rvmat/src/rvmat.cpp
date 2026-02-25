@@ -127,6 +127,11 @@ Material parse(const std::filesystem::path& path) {
     std::ostringstream buf;
     buf << f.rdbuf();
     auto data = buf.str();
+    return parse_bytes(data);
+}
+
+Material parse_bytes(std::string_view data_view) {
+    std::string data(data_view);
     std::istringstream ss(data, std::ios::binary);
 
     config::Config cfg;

@@ -88,6 +88,11 @@ private:
     Gtk::Paned rvmat_paned_{Gtk::Orientation::HORIZONTAL};
     Gtk::ScrolledWindow rvmat_info_scroll_;
     Gtk::TextView rvmat_info_view_;
+    Gtk::Box rvmat_preview_box_{Gtk::Orientation::VERTICAL, 4};
+    Gtk::Box rvmat_preview_toolbar_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::ToggleButton rvmat_shape_sphere_;
+    Gtk::ToggleButton rvmat_shape_tile_;
+    bool rvmat_shape_updating_ = false;
     GLRvmatPreview rvmat_preview_;
     ModelViewPanel model_panel_;
 

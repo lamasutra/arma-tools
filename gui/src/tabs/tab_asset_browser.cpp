@@ -132,7 +132,52 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     rvmat_info_scroll_.set_hexpand(true);
     rvmat_info_scroll_.set_vexpand(true);
     rvmat_paned_.set_start_child(rvmat_info_scroll_);
-    rvmat_paned_.set_end_child(rvmat_preview_);
+    auto make_icon_toggle = [](Gtk::ToggleButton& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
+
+    make_icon_toggle(rvmat_shape_sphere_, "media-record-symbolic", "Sphere preview");
+    make_icon_toggle(rvmat_shape_tile_, "view-grid-symbolic", "Tile preview");
+    rvmat_shape_sphere_.signal_toggled().connect([this]() {
+        if (rvmat_shape_updating_) return;
+        rvmat_shape_updating_ = true;
+        if (rvmat_shape_sphere_.get_active()) {
+            rvmat_shape_tile_.set_active(false);
+            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+        } else if (!rvmat_shape_tile_.get_active()) {
+            rvmat_shape_tile_.set_active(true);
+            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Tile);
+        }
+        rvmat_shape_updating_ = false;
+    });
+    rvmat_shape_tile_.signal_toggled().connect([this]() {
+        if (rvmat_shape_updating_) return;
+        rvmat_shape_updating_ = true;
+        if (rvmat_shape_tile_.get_active()) {
+            rvmat_shape_sphere_.set_active(false);
+            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Tile);
+        } else if (!rvmat_shape_sphere_.get_active()) {
+            rvmat_shape_sphere_.set_active(true);
+            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+        }
+        rvmat_shape_updating_ = false;
+    });
+
+    rvmat_shape_updating_ = true;
+    rvmat_shape_sphere_.set_active(true);
+    rvmat_shape_tile_.set_active(false);
+    rvmat_shape_updating_ = false;
+    rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+
+    rvmat_preview_toolbar_.append(rvmat_shape_sphere_);
+    rvmat_preview_toolbar_.append(rvmat_shape_tile_);
+    rvmat_preview_box_.append(rvmat_preview_toolbar_);
+    rvmat_preview_box_.append(rvmat_preview_);
+    rvmat_preview_box_.set_vexpand(true);
+    rvmat_paned_.set_end_child(rvmat_preview_box_);
     rvmat_paned_.set_resize_start_child(true);
     rvmat_paned_.set_resize_end_child(true);
     rvmat_paned_.set_shrink_start_child(false);

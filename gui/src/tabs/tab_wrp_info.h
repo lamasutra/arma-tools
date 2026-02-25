@@ -100,6 +100,8 @@ private:
     Gtk::Overlay terrain3d_overlay_;
     GLWrpTerrainView terrain3d_view_;
     Gtk::Label terrain3d_debug_overlay_;
+    bool allow_texture_mode_ = true;
+    bool allow_satellite_mode_ = true;
 
     // Cached WRP data
     std::unique_ptr<armatools::wrp::WorldData> world_data_;
@@ -154,5 +156,6 @@ private:
     void load_p3d_preview(const std::string& model_path);
     void ensure_objects_loaded();
     void ensure_satellite_palette_loaded();
+    void update_terrain3d_mode_options(bool allow_texture, bool allow_satellite);
     std::function<void(const std::string&)> on_open_p3d_info_;
 };

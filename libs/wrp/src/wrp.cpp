@@ -5,10 +5,12 @@
 #include <armatools/lzo.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -37,6 +39,16 @@ static void skip_quad_tree(std::istream& r);
 
 static void read_1wvr_nets(std::istream& r, WorldData& w);
 
+static void debug_log(const Options& opts, const std::string& msg) {
+    if (opts.debug) std::cerr << msg << '\n';
+}
+
+static long long stream_offset(std::istream& r) {
+    auto pos = r.tellg();
+    if (pos == std::streampos(-1)) return -1;
+    return static_cast<long long>(pos);
+}
+
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
@@ -54,6 +66,170 @@ static double clamp_val(double v, double lo, double hi) {
 static std::istringstream make_stream(const std::vector<uint8_t>& data) {
     std::string s(reinterpret_cast<const char*>(data.data()), data.size());
     return std::istringstream(std::move(s), std::ios::binary);
+}
+
+static bool is_material_path_start(int c) {
+    if (c == std::char_traits<char>::eof()) return false;
+    unsigned char uc = static_cast<unsigned char>(c);
+    if (std::isalnum(uc)) return true;
+    switch (c) {
+    case '\\':
+    case '/':
+    case '_':
+    case '-':
+    case '.':
+        return true;
+    default:
+        return false;
+    }
+}
+
+static std::string read_asciiz_limited(std::istream& r, size_t max_bytes, size_t& bytes_read) {
+    std::string s;
+    for (;;) {
+        if (bytes_read >= max_bytes) {
+            throw std::runtime_error("material entry exceeds maximum size");
+        }
+        uint8_t b = read_u8(r);
+        bytes_read++;
+        if (b == 0) return s;
+        s.push_back(static_cast<char>(b));
+    }
+}
+
+static std::vector<std::string> read_material_entry(std::istream& r, const Options& opts, size_t index) {
+    constexpr size_t kMaxEntryBytes = 256 * 1024;
+    constexpr size_t kMaxEntryStrings = 256;
+    size_t bytes_read = 0;
+    long long start_off = stream_offset(r);
+    std::vector<std::string> out;
+    out.push_back(read_asciiz_limited(r, kMaxEntryBytes, bytes_read));
+
+    for (;;) {
+        if (out.size() >= kMaxEntryStrings) {
+            throw std::runtime_error("material entry exceeds maximum string count");
+        }
+        int next = r.peek();
+        if (next == std::char_traits<char>::eof()) break;
+        if (next == 0) {
+            if (bytes_read >= kMaxEntryBytes) {
+                throw std::runtime_error("material entry exceeds maximum size");
+            }
+            read_u8(r); // consume terminator
+            bytes_read++;
+            break;
+        }
+        if (!is_material_path_start(next)) {
+            break;
+        }
+        auto s = read_asciiz_limited(r, kMaxEntryBytes, bytes_read);
+        if (s.empty()) break;
+        out.push_back(std::move(s));
+    }
+
+    if (opts.debug) {
+        std::string first = out.empty() ? "" : out.front();
+        if (first.size() > 64) first.resize(64);
+        debug_log(opts, std::format("MatNames[{}] bytes={} strings={} start_off={} first='{}'",
+                                    index, bytes_read, out.size(), start_off, first));
+    }
+
+    return out;
+}
+
+static std::array<std::array<float, 2>, 4> read_bounds_4x2(std::istream& r) {
+    std::array<std::array<float, 2>, 4> bounds{};
+    for (size_t i = 0; i < bounds.size(); i++) {
+        for (size_t j = 0; j < bounds[i].size(); j++) {
+            bounds[i][j] = read_f32(r);
+        }
+    }
+    return bounds;
+}
+
+static std::vector<MapInfoEntry> parse_map_info_entries(const std::vector<uint8_t>& bytes,
+                                                        std::vector<Warning>& warnings) {
+    std::vector<MapInfoEntry> entries;
+    if (bytes.empty()) return entries;
+
+    auto s = make_stream(bytes);
+    try {
+        for (;;) {
+            if (s.peek() == std::char_traits<char>::eof()) break;
+
+            uint32_t type = read_u32(s);
+            switch (type) {
+            case 0: case 1: case 2: case 10: case 11: case 13: case 14: case 15:
+            case 16: case 17: case 22: case 23: case 26: case 27: case 30: {
+                MapInfoType1 data;
+                data.object_id = read_u32(s);
+                data.x = read_f32(s);
+                data.z = read_f32(s);
+                entries.push_back({type, data});
+                break;
+            }
+            case 24: case 31: case 32: {
+                MapInfoType2 data;
+                data.object_id = read_u32(s);
+                data.bounds = read_bounds_4x2(s);
+                entries.push_back({type, data});
+                break;
+            }
+            case 25: case 33: {
+                MapInfoType3 data;
+                data.color = read_u32(s);
+                data.indicator = read_u32(s);
+                for (auto& v : data.values) v = read_f32(s);
+                entries.push_back({type, data});
+                break;
+            }
+            case 3: case 4: case 8: case 9: case 18: case 19: case 20: case 21:
+            case 28: case 29: {
+                MapInfoType4 data;
+                data.object_id = read_u32(s);
+                data.bounds = read_bounds_4x2(s);
+                for (auto& c : data.color) c = read_u8(s);
+                entries.push_back({type, data});
+                break;
+            }
+            case 34: {
+                MapInfoType5 data;
+                data.object_id = read_u32(s);
+                for (auto& point : data.line) {
+                    point[0] = read_f32(s);
+                    point[1] = read_f32(s);
+                }
+                entries.push_back({type, data});
+                break;
+            }
+            case 35: {
+                MapInfoType35 data;
+                data.object_id = read_u32(s);
+                for (auto& point : data.line) {
+                    point[0] = read_f32(s);
+                    point[1] = read_f32(s);
+                }
+                data.unknown = read_u8(s);
+                entries.push_back({type, data});
+                break;
+            }
+            default: {
+                warnings.push_back({
+                    "MAPINFO_UNKNOWN_TYPE",
+                    std::format("mapinfo type {} unsupported", type)
+                });
+                return entries;
+            }
+            }
+        }
+    } catch (const std::exception& e) {
+        warnings.push_back({
+            "MAPINFO_PARSE_ERROR",
+            std::format("mapinfo parse failed: {}", e.what())
+        });
+    }
+
+    return entries;
 }
 
 static CellFlagsInfo compute_cell_flags(const std::vector<uint32_t>& flags) {
@@ -283,6 +459,9 @@ static WorldData read_oprw_legacy(std::istream& r, int ver, Options opts) {
         for (uint32_t i = 0; i < n_tex; i++) {
             w.textures[i].filename = read_asciiz(r);
             w.textures[i].color = read_u8(r);
+            if (!w.textures[i].filename.empty()) {
+                w.textures[i].filenames = {w.textures[i].filename};
+            }
         }
         w.stats.texture_count = static_cast<int>(n_tex);
     }
@@ -551,6 +730,7 @@ struct OprwModernParser {
 
     WorldData parse() {
         w.format = {"OPRW", version};
+        debug_log(opts, std::format("OPRW v{} parse start at offset {}", version, stream_offset(r)));
 
         // 1. AppID (v>=25)
         if (version >= 25) {
@@ -575,9 +755,13 @@ struct OprwModernParser {
 
         int land_cells = land_range_x * land_range_y;
         int terrain_cells = terrain_range_x * terrain_range_y;
+        debug_log(opts, std::format("Grid land={}x{} terrain={}x{} cellSize={} offset={}",
+                                    land_range_x, land_range_y, terrain_range_x, terrain_range_y,
+                                    cell_size, stream_offset(r)));
 
         // 3. Geography QuadTree (int16, elemSize=2)
         {
+            debug_log(opts, std::format("Geography quadtree at offset {}", stream_offset(r)));
             auto geo_data = read_quad_tree(r, land_range_x, land_range_y, 2);
             auto s = make_stream(geo_data);
             auto geo_flags = read_u16_slice(s, static_cast<size_t>(land_cells));
@@ -591,10 +775,12 @@ struct OprwModernParser {
         w.stats.has_cell_flags = true;
 
         // 4. SoundMap QuadTree (byte, elemSize=1)
+        debug_log(opts, std::format("SoundMap quadtree at offset {}", stream_offset(r)));
         w.cell_env_sounds = read_quad_tree(r, land_range_x, land_range_y, 1);
 
         // 5. Mountains: count(int32) + Vector3P[]
         {
+            debug_log(opts, std::format("Mountains at offset {}", stream_offset(r)));
             int32_t n_peaks = read_i32(r);
             w.stats.peak_count = static_cast<int>(n_peaks);
             if (n_peaks > 0) {
@@ -608,6 +794,7 @@ struct OprwModernParser {
 
         // 6. Materials QuadTree (uint16, elemSize=2)
         {
+            debug_log(opts, std::format("Materials quadtree at offset {}", stream_offset(r)));
             auto mat_data = read_quad_tree(r, land_range_x, land_range_y, 2);
             auto s = make_stream(mat_data);
             w.cell_texture_indexes = read_u16_slice(s, static_cast<size_t>(land_cells));
@@ -615,21 +802,25 @@ struct OprwModernParser {
 
         // 7. Random (v<21): compressed (LandRange*2 bytes)
         if (version < 21) {
+            debug_log(opts, std::format("Random bytes at offset {}", stream_offset(r)));
             read_compressed(static_cast<size_t>(land_cells) * 2);
         }
 
         // 8. GrassApprox (v>=18): compressed (TerrainRange bytes)
         if (version >= 18) {
+            debug_log(opts, std::format("GrassApprox bytes at offset {}", stream_offset(r)));
             read_compressed(static_cast<size_t>(terrain_cells));
         }
 
         // 9. PrimTexIndex (v>=22): compressed (TerrainRange bytes)
         if (version >= 22) {
+            debug_log(opts, std::format("PrimTexIndex bytes at offset {}", stream_offset(r)));
             read_compressed(static_cast<size_t>(terrain_cells));
         }
 
         // 10. Elevation: compressed float32[TerrainRange]
         {
+            debug_log(opts, std::format("Elevation bytes at offset {}", stream_offset(r)));
             auto elev_data = read_compressed(static_cast<size_t>(terrain_cells) * 4);
             auto s = make_stream(elev_data);
             w.elevations = read_f32_slice(s, static_cast<size_t>(terrain_cells));
@@ -639,20 +830,42 @@ struct OprwModernParser {
         w.bounds.world_size_x = static_cast<double>(land_range_x) * static_cast<double>(cell_size);
         w.bounds.world_size_y = static_cast<double>(land_range_y) * static_cast<double>(cell_size);
 
-        // 11. MatNames: count(int32) + (asciiz + byte)[]
+        // 11. MatNames: count(int32) + (asciiz list [+ optional byte])[ ]
         {
+            debug_log(opts, std::format("MatNames at offset {}", stream_offset(r)));
             int32_t n_materials = read_i32(r);
+            debug_log(opts, std::format("MatNames count {}", n_materials));
             w.textures.resize(static_cast<size_t>(n_materials));
             for (size_t i = 0; i < static_cast<size_t>(n_materials); i++) {
-                w.textures[i].filename = read_asciiz(r);
-                w.textures[i].color = read_u8(r);
+                if (version >= 25) {
+                    w.textures[i].filename = read_asciiz(r);
+                    if (!w.textures[i].filename.empty()) {
+                        w.textures[i].filenames = {w.textures[i].filename};
+                    }
+                    w.textures[i].color = read_u8(r);
+                    if (opts.debug && i < 5) {
+                        std::string sample = w.textures[i].filename;
+                        if (sample.size() > 64) sample.resize(64);
+                        debug_log(opts, std::format("MatNames[{}] v25 name='{}' color={}",
+                                                    i, sample, w.textures[i].color));
+                    }
+                } else {
+                    auto entries = read_material_entry(r, opts, i);
+                    w.textures[i].filenames = std::move(entries);
+                    if (!w.textures[i].filenames.empty()) {
+                        w.textures[i].filename = w.textures[i].filenames.front();
+                    }
+                    w.textures[i].color = 0;
+                }
             }
             w.stats.texture_count = static_cast<int>(n_materials);
         }
 
         // 12. Models: count(int32) + asciiz[]
         {
+            debug_log(opts, std::format("Models at offset {}", stream_offset(r)));
             int32_t n_models = read_i32(r);
+            debug_log(opts, std::format("Models count {}", n_models));
             w.models.resize(static_cast<size_t>(n_models));
             for (size_t i = 0; i < static_cast<size_t>(n_models); i++) {
                 w.models[i] = read_asciiz(r);
@@ -660,43 +873,60 @@ struct OprwModernParser {
             w.stats.model_count = static_cast<int>(n_models);
         }
 
-        // 13. EntityInfos (v>=15)
+        // 13. ClassedModels (v>=15)
         if (version >= 15) {
+            debug_log(opts, std::format("ClassedModels at offset {}", stream_offset(r)));
             int32_t n_entities = read_i32(r);
+            debug_log(opts, std::format("ClassedModels count {}", n_entities));
+            w.classed_models.reserve(static_cast<size_t>(std::max(0, n_entities)));
             for (int i = 0; i < n_entities; i++) {
-                read_asciiz(r); // className
-                read_asciiz(r); // shapeName
-                read_bytes(r, 12); // Vector3P
-                read_i32(r); // ObjectID
+                ClassedModel entry;
+                entry.class_name = read_asciiz(r);
+                entry.model_path = read_asciiz(r);
+                auto floats = read_f32_slice(r, 3);
+                entry.position = {floats[0], floats[1], floats[2]};
+                entry.unknown = static_cast<uint32_t>(read_u32(r));
+                w.classed_models.push_back(std::move(entry));
             }
         }
 
         // 14. ObjectOffsets QuadTree
+        debug_log(opts, std::format("ObjectOffsets quadtree at offset {}", stream_offset(r)));
         skip_quad_tree(r);
 
         // 15. SizeOfObjects (int32)
+        debug_log(opts, std::format("SizeOfObjects at offset {}", stream_offset(r)));
         int32_t size_of_objects = read_i32(r);
+        debug_log(opts, std::format("SizeOfObjects value {}", size_of_objects));
 
         // 16. MapObjectOffsets QuadTree
+        debug_log(opts, std::format("MapObjectOffsets quadtree at offset {}", stream_offset(r)));
         skip_quad_tree(r);
 
         // 17. SizeOfMapInfo (int32)
+        debug_log(opts, std::format("SizeOfMapInfo at offset {}", stream_offset(r)));
         int32_t size_of_map_info = read_i32(r);
+        debug_log(opts, std::format("SizeOfMapInfo value {}", size_of_map_info));
 
         // 18. Persistent: compressed (LandRange bytes)
+        debug_log(opts, std::format("Persistent bytes at offset {}", stream_offset(r)));
         read_compressed(static_cast<size_t>(land_cells));
 
         // 19. SubDivHints: compressed (TerrainRange bytes)
+        debug_log(opts, std::format("SubDivHints bytes at offset {}", stream_offset(r)));
         read_compressed(static_cast<size_t>(terrain_cells));
 
         // 20. MaxObjectId (int32)
+        debug_log(opts, std::format("MaxObjectId at offset {}", stream_offset(r)));
         read_i32(r);
 
         // 21. RoadNetSize (int32)
+        debug_log(opts, std::format("RoadNetSize at offset {}", stream_offset(r)));
         read_i32(r);
 
         // 22. RoadNet: per-cell arrays of RoadLink[]
         {
+            debug_log(opts, std::format("RoadNet at offset {}", stream_offset(r)));
             w.road_links.resize(static_cast<size_t>(land_cells));
             int total_road_links = 0;
             for (size_t i = 0; i < static_cast<size_t>(land_cells); i++) {
@@ -713,6 +943,7 @@ struct OprwModernParser {
         }
 
         // 23. Objects: 60-byte records (SizeOfObjects/60 entries)
+        debug_log(opts, std::format("Objects at offset {}", stream_offset(r)));
         int n_objects = static_cast<int>(size_of_objects) / 60;
         if (!opts.no_objects) {
             w.objects.reserve(static_cast<size_t>(n_objects));
@@ -753,9 +984,11 @@ struct OprwModernParser {
         // 24. MapInfos: variable-length map display entries (infoType + MapData).
         // Not object records — store if requested.
         if (size_of_map_info > 0) {
+            debug_log(opts, std::format("MapInfo bytes at offset {}", stream_offset(r)));
             auto map_info_bytes = read_bytes(r, static_cast<size_t>(size_of_map_info));
             if (!opts.no_mapinfo) {
                 w.map_info = std::move(map_info_bytes);
+                w.map_info_entries = parse_map_info_entries(w.map_info, w.warnings);
             }
         }
 
@@ -808,7 +1041,9 @@ static WorldData read_4wvr(std::istream& r, Options opts) {
     w.textures.reserve(512);
     for (int i = 0; i < 512; i++) {
         auto name = read_fixed_string(r, 32);
-        w.textures.push_back({name, 0});
+        TextureEntry entry{name, 0};
+        if (!name.empty()) entry.filenames = {name};
+        w.textures.push_back(std::move(entry));
     }
 
     {
@@ -971,7 +1206,9 @@ static WorldData read_1wvr(std::istream& r, Options opts) {
     w.textures.reserve(256);
     for (int i = 0; i < 256; i++) {
         auto name = read_fixed_string(r, 32);
-        w.textures.push_back({name, 0});
+        TextureEntry entry{name, 0};
+        if (!name.empty()) entry.filenames = {name};
+        w.textures.push_back(std::move(entry));
     }
 
     {

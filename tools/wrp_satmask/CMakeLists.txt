@@ -11,6 +11,7 @@ target_link_libraries(wrp_satmask PRIVATE
     armatools::paa
     armatools::pbo
     armatools::pboindex
+    armatools::rvmat
     armatools::wrp
     stb_image_write
     PNG::PNG

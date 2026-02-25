@@ -38,6 +38,11 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
     grid_btn_.set_size_request(26, 26);
     grid_btn_.set_active(true);
 
+    camera_mode_btn_.set_has_frame(false);
+    camera_mode_btn_.add_css_class("p3d-toggle-icon");
+    camera_mode_btn_.set_size_request(26, 26);
+    camera_mode_btn_.set_active(true);
+
     reset_cam_btn_.set_icon_name("view-refresh-symbolic");
     reset_cam_btn_.set_tooltip_text("Reset Camera");
     reset_cam_btn_.set_has_frame(false);
@@ -62,6 +67,7 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
     toolbar_right_.append(wireframe_btn_);
     toolbar_right_.append(texture_btn_);
     toolbar_right_.append(grid_btn_);
+    toolbar_right_.append(camera_mode_btn_);
     toolbar_right_.append(reset_cam_btn_);
     toolbar_right_.append(screenshot_btn_);
 
@@ -129,6 +135,24 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
     grid_btn_.signal_toggled().connect([this]() {
         gl_view_.set_show_grid(grid_btn_.get_active());
     });
+    auto update_camera_mode_button = [this]() {
+        if (camera_mode_btn_.get_active()) {
+            camera_mode_btn_.set_icon_name("object-rotate-right-symbolic");
+            camera_mode_btn_.set_tooltip_text(
+                "Orbit camera (click to switch to first person)");
+        } else {
+            camera_mode_btn_.set_icon_name("input-keyboard-symbolic");
+            camera_mode_btn_.set_tooltip_text(
+                "First-person camera (click to switch to orbit)");
+        }
+    };
+    camera_mode_btn_.signal_toggled().connect([this, update_camera_mode_button]() {
+        gl_view_.set_camera_mode(camera_mode_btn_.get_active()
+                                     ? GLModelView::CameraMode::Orbit
+                                     : GLModelView::CameraMode::FirstPerson);
+        update_camera_mode_button();
+    });
+    update_camera_mode_button();
     reset_cam_btn_.signal_clicked().connect([this]() {
         gl_view_.reset_camera();
     });

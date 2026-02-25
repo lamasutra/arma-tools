@@ -23,6 +23,8 @@ public:
     void set_diffuse_texture(int width, int height, const uint8_t* rgba_data);
     void set_normal_texture(int width, int height, const uint8_t* rgba_data);
     void set_specular_texture(int width, int height, const uint8_t* rgba_data);
+    enum class Shape { Sphere, Tile };
+    void set_shape(Shape shape);
 
 private:
     struct Vertex {
@@ -50,10 +52,14 @@ private:
     int loc_mat_specular_ = -1;
     int loc_mat_spec_power_ = -1;
 
-    uint32_t vao_ = 0;
-    uint32_t vbo_ = 0;
-    uint32_t ebo_ = 0;
-    int index_count_ = 0;
+    uint32_t vao_sphere_ = 0;
+    uint32_t vbo_sphere_ = 0;
+    uint32_t ebo_sphere_ = 0;
+    int index_count_sphere_ = 0;
+    uint32_t vao_tile_ = 0;
+    uint32_t vbo_tile_ = 0;
+    uint32_t ebo_tile_ = 0;
+    int index_count_tile_ = 0;
 
     uint32_t tex_diff_ = 0;
     uint32_t tex_nrm_ = 0;
@@ -61,7 +67,21 @@ private:
     bool has_diff_ = false;
     bool has_nrm_ = false;
     bool has_spec_ = false;
+    Shape shape_ = Shape::Sphere;
     MaterialParams mat_;
+
+    float azimuth_ = 0.3f;
+    float elevation_ = 0.2f;
+    float distance_ = 2.6f;
+    float pivot_[3] = {0.0f, 0.0f, 0.0f};
+    double drag_start_x_ = 0.0;
+    double drag_start_y_ = 0.0;
+    float drag_start_azimuth_ = 0.0f;
+    float drag_start_elevation_ = 0.0f;
+    float drag_start_pivot_[3] = {0.0f, 0.0f, 0.0f};
+    Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
+    Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
+    Glib::RefPtr<Gtk::EventControllerScroll> scroll_zoom_;
 
     void on_realize_gl();
     void on_unrealize_gl();
@@ -71,4 +91,5 @@ private:
     uint32_t link_program(uint32_t vs, uint32_t fs);
     void upload_texture(uint32_t& tex, int width, int height, const uint8_t* rgba_data);
     void build_sphere_mesh();
+    void build_tile_mesh();
 };

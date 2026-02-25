@@ -4,6 +4,7 @@
 
 #include <array>
 #include <filesystem>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,9 @@ struct Material {
 
 // parse reads an RVMAT file from disk (rapified or text).
 Material parse(const std::filesystem::path& path);
+
+// parse_bytes reads an RVMAT from an in-memory buffer (rapified or text).
+Material parse_bytes(std::string_view data);
 
 // parse extracts material fields from a parsed config tree.
 Material parse(const armatools::config::Config& cfg);

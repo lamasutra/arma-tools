@@ -4,13 +4,67 @@
 #include <cstdint>
 #include <istream>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace armatools::wrp {
 
 struct Rotation { double yaw = 0, pitch = 0, roll = 0; };
 
-struct TextureEntry { std::string filename; uint8_t color = 0; };
+struct TextureEntry {
+    std::string filename;
+    uint8_t color = 0;
+    std::vector<std::string> filenames;
+};
+
+struct ClassedModel {
+    std::string class_name;
+    std::string model_path;
+    std::array<float, 3> position{};
+    uint32_t unknown = 0;
+};
+
+struct MapInfoType1 {
+    uint32_t object_id = 0;
+    float x = 0;
+    float z = 0;
+};
+
+struct MapInfoType2 {
+    uint32_t object_id = 0;
+    std::array<std::array<float, 2>, 4> bounds{};
+};
+
+struct MapInfoType3 {
+    uint32_t color = 0;
+    uint32_t indicator = 0;
+    std::array<float, 4> values{};
+};
+
+struct MapInfoType4 {
+    uint32_t object_id = 0;
+    std::array<std::array<float, 2>, 4> bounds{};
+    std::array<uint8_t, 4> color{};
+};
+
+struct MapInfoType5 {
+    uint32_t object_id = 0;
+    std::array<std::array<float, 2>, 2> line{};
+};
+
+struct MapInfoType35 {
+    uint32_t object_id = 0;
+    std::array<std::array<float, 2>, 3> line{};
+    uint8_t unknown = 0;
+};
+
+using MapInfoData = std::variant<MapInfoType1, MapInfoType2, MapInfoType3,
+                                 MapInfoType4, MapInfoType5, MapInfoType35>;
+
+struct MapInfoEntry {
+    uint32_t type = 0;
+    MapInfoData data;
+};
 
 struct ObjectRecord {
     uint32_t object_id = 0;
@@ -69,7 +123,7 @@ struct StatsInfo {
     bool has_cell_flags = false;
 };
 
-struct Options { bool strict = false; bool no_objects = false; bool no_mapinfo = false; };
+struct Options { bool strict = false; bool no_objects = false; bool no_mapinfo = false; bool debug = false; };
 
 struct WorldData {
     FormatInfo format;
@@ -80,6 +134,7 @@ struct WorldData {
 
     std::vector<TextureEntry> textures;
     std::vector<std::string> models;
+    std::vector<ClassedModel> classed_models;
     std::vector<ObjectRecord> objects;
     std::vector<RoadNet> roads;
 
@@ -93,6 +148,7 @@ struct WorldData {
     std::vector<uint16_t> cell_texture_indexes;
     std::vector<uint32_t> cell_ext_flags;
     std::vector<uint8_t> map_info;
+    std::vector<MapInfoEntry> map_info_entries;
 };
 
 // read auto-detects format and parses a WRP file.

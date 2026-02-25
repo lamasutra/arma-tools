@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cmath>
 #include <cstring>
@@ -56,16 +55,22 @@ uniform vec3 uMatSpecular;
 uniform float uMatSpecPower;
 out vec4 FragColor;
 void main() {
+    vec2 uv = vUV;
     vec3 baseN = normalize(vNormal);
     vec3 t = normalize(vTangent - dot(vTangent, baseN) * baseN);
     vec3 b = normalize(cross(baseN, t));
+    if (!gl_FrontFacing) {
+        baseN = -baseN;
+        t = -t;
+        b = -b;
+    }
     vec3 n = baseN;
     if (uHasNormal) {
-        vec3 nTex = texture(uTexNormal, vUV).xyz * 2.0 - 1.0;
+        vec3 nTex = texture(uTexNormal, uv).xyz * 2.0 - 1.0;
         n = normalize(mat3(t, b, baseN) * nTex);
     }
 
-    vec3 baseColor = uHasDiffuse ? texture(uTexDiffuse, vUV).rgb : vec3(0.7);
+    vec3 baseColor = uHasDiffuse ? texture(uTexDiffuse, uv).rgb : vec3(0.7);
     vec3 ambient = clamp(uMatAmbient, 0.0, 1.0);
     vec3 diffuseC = clamp(uMatDiffuse, 0.0, 1.0);
     vec3 emissive = clamp(uMatEmissive, 0.0, 1.0);
@@ -78,7 +83,7 @@ void main() {
     vec3 h = normalize(uLightDir + v);
     float spec = pow(max(dot(n, h), 0.0), sp);
     float specMask = 1.0;
-    if (uHasSpec) specMask = dot(texture(uTexSpec, vUV).rgb, vec3(0.3333));
+    if (uHasSpec) specMask = dot(texture(uTexSpec, uv).rgb, vec3(0.3333));
 
     vec3 lit = baseColor * (ambient * 0.25 + diffuseC * min(1.0, diff + backFill))
              + specC * spec * specMask * 0.35
@@ -154,10 +159,54 @@ GLRvmatPreview::GLRvmatPreview() {
     set_hexpand(true);
     set_vexpand(true);
     set_size_request(320, 320);
+    set_focusable(true);
 
     signal_realize().connect(sigc::mem_fun(*this, &GLRvmatPreview::on_realize_gl), false);
     signal_unrealize().connect(sigc::mem_fun(*this, &GLRvmatPreview::on_unrealize_gl), false);
     signal_render().connect(sigc::mem_fun(*this, &GLRvmatPreview::on_render_gl), false);
+
+    drag_orbit_ = Gtk::GestureDrag::create();
+    drag_orbit_->set_button(GDK_BUTTON_PRIMARY);
+    drag_orbit_->signal_drag_begin().connect([this](double x, double y) {
+        drag_start_x_ = x;
+        drag_start_y_ = y;
+        drag_start_azimuth_ = azimuth_;
+        drag_start_elevation_ = elevation_;
+    });
+    drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
+        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
+        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
+        elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
+        queue_render();
+    });
+    add_controller(drag_orbit_);
+
+    drag_pan_ = Gtk::GestureDrag::create();
+    drag_pan_->set_button(GDK_BUTTON_MIDDLE);
+    drag_pan_->signal_drag_begin().connect([this](double, double) {
+        std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+    });
+    drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
+        float scale = distance_ * 0.002f;
+        float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
+        float rx = ca, rz = -sa;
+        float uy = 1.0f;
+        pivot_[0] = drag_start_pivot_[0] - static_cast<float>(dx) * scale * rx;
+        pivot_[1] = drag_start_pivot_[1] + static_cast<float>(dy) * scale * uy;
+        pivot_[2] = drag_start_pivot_[2] - static_cast<float>(dx) * scale * rz;
+        queue_render();
+    });
+    add_controller(drag_pan_);
+
+    scroll_zoom_ = Gtk::EventControllerScroll::create();
+    scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
+    scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
+        distance_ *= (dy > 0) ? 1.1f : 0.9f;
+        distance_ = std::max(distance_, 0.25f);
+        queue_render();
+        return true;
+    }, false);
+    add_controller(scroll_zoom_);
 }
 
 GLRvmatPreview::~GLRvmatPreview() = default;
@@ -196,6 +245,11 @@ void GLRvmatPreview::set_specular_texture(int width, int height, const uint8_t* 
     queue_render();
 }
 
+void GLRvmatPreview::set_shape(Shape shape) {
+    shape_ = shape;
+    queue_render();
+}
+
 void GLRvmatPreview::on_realize_gl() {
     make_current();
     if (has_error()) return;
@@ -224,6 +278,7 @@ void GLRvmatPreview::on_realize_gl() {
     loc_mat_spec_power_ = glGetUniformLocation(prog_, "uMatSpecPower");
 
     build_sphere_mesh();
+    build_tile_mesh();
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -239,27 +294,27 @@ void GLRvmatPreview::on_unrealize_gl() {
 bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glClearColor(0.16f, 0.17f, 0.19f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    if (!prog_ || !vao_ || index_count_ <= 0) return true;
+    const bool draw_tile = (shape_ == Shape::Tile);
+    const uint32_t vao = draw_tile ? vao_tile_ : vao_sphere_;
+    const int index_count = draw_tile ? index_count_tile_ : index_count_sphere_;
+    if (!prog_ || !vao || index_count <= 0) return true;
 
     const float aspect = static_cast<float>(std::max(1, get_width()))
                        / static_cast<float>(std::max(1, get_height()));
     float proj[16], view[16], model[16], vp[16], mvp[16];
     mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.1f, 100.0f);
-    const float eye[3] = {0.0f, 0.0f, 2.6f};
-    const float center[3] = {0.0f, 0.0f, 0.0f};
+    float ce = std::cos(elevation_), se = std::sin(elevation_);
+    float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
+    const float eye[3] = {
+        pivot_[0] + distance_ * ce * sa,
+        pivot_[1] + distance_ * se,
+        pivot_[2] + distance_ * ce * ca
+    };
+    const float center[3] = {pivot_[0], pivot_[1], pivot_[2]};
     const float up[3] = {0.0f, 1.0f, 0.0f};
     mat4_look_at(view, eye, center, up);
 
     mat4_identity(model);
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    const double td = static_cast<double>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now).count()) / 1000.0;
-    const float t = static_cast<float>(td);
-    const float a = t * 0.45f;
-    model[0] = std::cos(a);
-    model[2] = -std::sin(a);
-    model[8] = std::sin(a);
-    model[10] = std::cos(a);
 
     mat4_mul(vp, proj, view);
     mat4_mul(mvp, vp, model);
@@ -304,26 +359,36 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         glBindTexture(GL_TEXTURE_2D, tex_spec_);
     }
 
-    glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, index_count_, GL_UNSIGNED_INT, nullptr);
+    if (draw_tile) {
+        glDisable(GL_CULL_FACE);
+    } else {
+        glEnable(GL_CULL_FACE);
+    }
+
+    glBindVertexArray(vao);
+    glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 
-    queue_render();
     return true;
 }
 
 void GLRvmatPreview::cleanup_gl() {
-    if (vao_) glDeleteVertexArrays(1, &vao_);
-    if (vbo_) glDeleteBuffers(1, &vbo_);
-    if (ebo_) glDeleteBuffers(1, &ebo_);
+    if (vao_sphere_) glDeleteVertexArrays(1, &vao_sphere_);
+    if (vbo_sphere_) glDeleteBuffers(1, &vbo_sphere_);
+    if (ebo_sphere_) glDeleteBuffers(1, &ebo_sphere_);
+    if (vao_tile_) glDeleteVertexArrays(1, &vao_tile_);
+    if (vbo_tile_) glDeleteBuffers(1, &vbo_tile_);
+    if (ebo_tile_) glDeleteBuffers(1, &ebo_tile_);
     if (tex_diff_) glDeleteTextures(1, &tex_diff_);
     if (tex_nrm_) glDeleteTextures(1, &tex_nrm_);
     if (tex_spec_) glDeleteTextures(1, &tex_spec_);
     if (prog_) glDeleteProgram(prog_);
-    vao_ = vbo_ = ebo_ = 0;
+    vao_sphere_ = vbo_sphere_ = ebo_sphere_ = 0;
+    vao_tile_ = vbo_tile_ = ebo_tile_ = 0;
     tex_diff_ = tex_nrm_ = tex_spec_ = 0;
     prog_ = 0;
-    index_count_ = 0;
+    index_count_sphere_ = 0;
+    index_count_tile_ = 0;
     has_diff_ = has_nrm_ = has_spec_ = false;
 }
 
@@ -421,14 +486,14 @@ void GLRvmatPreview::build_sphere_mesh() {
         }
     }
 
-    glGenVertexArrays(1, &vao_);
-    glGenBuffers(1, &vbo_);
-    glGenBuffers(1, &ebo_);
-    glBindVertexArray(vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glGenVertexArrays(1, &vao_sphere_);
+    glGenBuffers(1, &vbo_sphere_);
+    glGenBuffers(1, &ebo_sphere_);
+    glBindVertexArray(vao_sphere_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_sphere_);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Vertex)),
                  verts.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_sphere_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(idx.size() * sizeof(uint32_t)),
                  idx.data(), GL_STATIC_DRAW);
 
@@ -446,5 +511,41 @@ void GLRvmatPreview::build_sphere_mesh() {
                           reinterpret_cast<void*>(offsetof(Vertex, t)));
     glBindVertexArray(0);
 
-    index_count_ = static_cast<int>(idx.size());
+    index_count_sphere_ = static_cast<int>(idx.size());
+}
+
+void GLRvmatPreview::build_tile_mesh() {
+    std::array<Vertex, 4> verts{};
+    verts[0] = {{-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[1] = {{1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[2] = {{-1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[3] = {{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
+    std::array<uint32_t, 6> idx = {0, 1, 2, 2, 1, 3};
+
+    glGenVertexArrays(1, &vao_tile_);
+    glGenBuffers(1, &vbo_tile_);
+    glGenBuffers(1, &ebo_tile_);
+    glBindVertexArray(vao_tile_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_tile_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Vertex)),
+                 verts.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_tile_);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(idx.size() * sizeof(uint32_t)),
+                 idx.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, p)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, n)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, uv)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, t)));
+    glBindVertexArray(0);
+
+    index_count_tile_ = static_cast<int>(idx.size());
 }

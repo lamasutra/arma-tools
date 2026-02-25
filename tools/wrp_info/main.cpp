@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -27,7 +28,7 @@ static double round3(double v) {
     return std::round(v * 1000) / 1000;
 }
 
-static json build_world_json(const armatools::wrp::WorldData& w) {
+static json build_world_json(const armatools::wrp::WorldData& w, bool include_textures) {
     json warnings = json::array();
     for (const auto& wn : w.warnings) {
         json wj = {{"code", wn.code}, {"message", wn.message}};
@@ -55,7 +56,27 @@ static json build_world_json(const armatools::wrp::WorldData& w) {
         };
     }
 
-    return {
+    int textures_with_files = 0;
+    int textures_with_multiple = 0;
+    size_t max_files_per_texture = 0;
+    for (const auto& tex : w.textures) {
+        if (!tex.filenames.empty()) {
+            textures_with_files++;
+            if (tex.filenames.size() > 1) textures_with_multiple++;
+            max_files_per_texture = std::max(max_files_per_texture, tex.filenames.size());
+        }
+    }
+
+    std::map<int, int> mapinfo_types;
+    for (const auto& entry : w.map_info_entries) {
+        mapinfo_types[static_cast<int>(entry.type)]++;
+    }
+    json mapinfo_types_json = json::array();
+    for (const auto& [type, count] : mapinfo_types) {
+        mapinfo_types_json.push_back({{"type", type}, {"count", count}});
+    }
+
+    json doc = {
         {"schemaVersion", 1},
         {"format", {{"signature", w.format.signature}, {"version", w.format.version}}},
         {"grid", {{"cellsX", w.grid.cells_x}, {"cellsY", w.grid.cells_y},
@@ -63,8 +84,27 @@ static json build_world_json(const armatools::wrp::WorldData& w) {
         {"bounds", {{"minElevation", w.bounds.min_elevation}, {"maxElevation", w.bounds.max_elevation},
                     {"worldSizeX", w.bounds.world_size_x}, {"worldSizeY", w.bounds.world_size_y}}},
         {"stats", stats},
+        {"texturesSummary", {{"withFiles", textures_with_files},
+                             {"withMultipleFiles", textures_with_multiple},
+                             {"maxFilesPerEntry", static_cast<int>(max_files_per_texture)}}},
+        {"classedModelCount", static_cast<int>(w.classed_models.size())},
+        {"mapInfoBytes", w.map_info.size()},
+        {"mapInfoEntryCount", static_cast<int>(w.map_info_entries.size())},
+        {"mapInfoTypes", mapinfo_types_json},
         {"warnings", warnings},
     };
+    if (include_textures) {
+        json textures = json::array();
+        for (size_t i = 0; i < w.textures.size(); i++) {
+            json t = {{"index", static_cast<int>(i)}, {"filename", w.textures[i].filename}};
+            if (w.textures[i].color != 0) t["color"] = w.textures[i].color;
+            if (!w.textures[i].filenames.empty()) t["filenames"] = w.textures[i].filenames;
+            textures.push_back(std::move(t));
+        }
+        doc["textures"] = std::move(textures);
+    }
+
+    return doc;
 }
 
 static void write_json_file(const std::string& path, const json& doc, bool pretty) {
@@ -158,6 +198,18 @@ static void write_tml(const armatools::wrp::WorldData& w, const std::string& dir
     armatools::tb::write_tml(f, "WRP_Objects", models, nullptr, armatools::tb::default_style());
 }
 
+static void write_textures_json(const armatools::wrp::WorldData& w, const std::string& dir, bool pretty) {
+    json textures = json::array();
+    for (size_t i = 0; i < w.textures.size(); i++) {
+        json t = {{"index", static_cast<int>(i)}, {"filename", w.textures[i].filename}};
+        if (w.textures[i].color != 0) t["color"] = w.textures[i].color;
+        if (!w.textures[i].filenames.empty()) t["filenames"] = w.textures[i].filenames;
+        textures.push_back(std::move(t));
+    }
+    json doc = {{"schemaVersion", 1}, {"textures", textures}};
+    write_json_file((fs::path(dir) / "textures.json").string(), doc, pretty);
+}
+
 static void write_roads_geojson(const armatools::wrp::WorldData& w, const std::string& dir, bool pretty) {
     json features = json::array();
     for (const auto& net : w.roads) {
@@ -177,10 +229,10 @@ static void write_roads_geojson(const armatools::wrp::WorldData& w, const std::s
 }
 
 static void write_outputs(const armatools::wrp::WorldData& w, const std::string& dir,
-                           bool pretty, double offset_x, double offset_z) {
+                           bool pretty, double offset_x, double offset_z, bool dump_textures) {
     fs::create_directories(dir);
 
-    auto doc = build_world_json(w);
+    auto doc = build_world_json(w, false);
     write_json_file((fs::path(dir) / "world.json").string(), doc, pretty);
 
     if (!w.objects.empty()) {
@@ -193,6 +245,9 @@ static void write_outputs(const armatools::wrp::WorldData& w, const std::string&
 
     if (!w.roads.empty()) {
         write_roads_geojson(w, dir, pretty);
+    }
+    if (dump_textures) {
+        write_textures_json(w, dir, pretty);
     }
 }
 
@@ -276,6 +331,7 @@ static void print_usage() {
     armatools::cli::print("Flags:");
     armatools::cli::print("  --pretty       Pretty-print JSON output");
     armatools::cli::print("  --json         Write world.json to stdout instead of files");
+    armatools::cli::print("  --dump-textures  Write textures.json with MatNames entries");
     armatools::cli::print("  --strict       Fail on unexpected data");
     armatools::cli::print("  --no-objects   Skip objects output (faster)");
     armatools::cli::print("  -v, --verbose  Enable verbose logging");
@@ -289,6 +345,7 @@ int main(int argc, char* argv[]) {
     bool json_stdout = false;
     bool strict = false;
     bool no_objects = false;
+    bool dump_textures = false;
     double offset_x = 200000;
     double offset_z = 0;
     int verbosity = 0;
@@ -299,6 +356,7 @@ int main(int argc, char* argv[]) {
         else if (std::strcmp(argv[i], "--json") == 0) json_stdout = true;
         else if (std::strcmp(argv[i], "--strict") == 0) strict = true;
         else if (std::strcmp(argv[i], "--no-objects") == 0) no_objects = true;
+        else if (std::strcmp(argv[i], "--dump-textures") == 0) dump_textures = true;
         else if (std::strcmp(argv[i], "-offset-x") == 0 && i + 1 < argc) offset_x = std::stod(argv[++i]);
         else if (std::strcmp(argv[i], "-offset-z") == 0 && i + 1 < argc) offset_z = std::stod(argv[++i]);
         else if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--verbose") == 0)
@@ -346,7 +404,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    armatools::wrp::Options opts{.strict = strict, .no_objects = no_objects || json_stdout};
+    armatools::wrp::Options opts{
+        .strict = strict,
+        .no_objects = no_objects || json_stdout,
+        .debug = armatools::cli::debug_enabled()
+    };
 
     armatools::wrp::WorldData world;
     try {
@@ -357,7 +419,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (json_stdout) {
-        auto doc = build_world_json(world);
+        auto doc = build_world_json(world, dump_textures);
         armatools::cli::log_verbose("Writing JSON to stdout");
         if (pretty) std::cout << std::setw(2) << doc << '\n';
         else std::cout << doc << '\n';
@@ -366,20 +428,53 @@ int main(int argc, char* argv[]) {
 
     try {
         armatools::cli::log_verbose("Writing outputs to", output_dir);
-        write_outputs(world, output_dir, pretty, offset_x, offset_z);
+        write_outputs(world, output_dir, pretty, offset_x, offset_z, dump_textures);
     } catch (const std::exception& e) {
         armatools::cli::log_error("writing output:", e.what());
         return 1;
+    }
+
+    int textures_with_files = 0;
+    int textures_with_multiple = 0;
+    size_t max_files_per_texture = 0;
+    for (const auto& tex : world.textures) {
+        if (!tex.filenames.empty()) {
+            textures_with_files++;
+            if (tex.filenames.size() > 1) textures_with_multiple++;
+            max_files_per_texture = std::max(max_files_per_texture, tex.filenames.size());
+        }
+    }
+    std::map<int, int> mapinfo_types;
+    for (const auto& entry : world.map_info_entries) {
+        mapinfo_types[static_cast<int>(entry.type)]++;
     }
 
     if (armatools::cli::verbose_enabled()) {
         armatools::cli::log_verbose("Textures:", world.stats.texture_count,
                                      "Models:", world.stats.model_count,
                                      "Objects:", world.stats.object_count);
+        if (!world.map_info.empty()) {
+            armatools::cli::log_verbose("MapInfo bytes:", world.map_info.size());
+        }
     }
     if (armatools::cli::debug_enabled()) {
         armatools::cli::log_debug("Road nets:", world.stats.road_net_count,
-                                  "Warnings:", world.warnings.size());
+                                  "Warnings:", world.warnings.size(),
+                                  "MapInfo bytes:", world.map_info.size());
+        armatools::cli::log_debug("Texture entries with files:", textures_with_files,
+                                  "Multiple files:", textures_with_multiple,
+                                  "Max files per entry:", max_files_per_texture);
+        if (!world.map_info_entries.empty()) {
+            std::ostringstream type_list;
+            bool first = true;
+            for (const auto& [type, count] : mapinfo_types) {
+                if (!first) type_list << ", ";
+                first = false;
+                type_list << type << ":" << count;
+            }
+            armatools::cli::log_debug("MapInfo entries:", world.map_info_entries.size(),
+                                      "Types:", type_list.str());
+        }
         if (!world.warnings.empty()) {
             for (const auto& warning : world.warnings) {
                 armatools::cli::log_debug("Warning", warning.code, warning.message);
@@ -397,6 +492,28 @@ int main(int argc, char* argv[]) {
     armatools::cli::log_plain("Textures:", world.stats.texture_count,
                               "Models:", world.stats.model_count,
                               "Objects:", world.stats.object_count);
+    if (!world.classed_models.empty()) {
+        armatools::cli::log_plain("Classed models:", world.classed_models.size());
+    }
+    if (textures_with_multiple > 0) {
+        armatools::cli::log_plain("Texture entries with multiple files:",
+                                  textures_with_multiple,
+                                  "Max files per entry:", max_files_per_texture);
+    }
+    if (!world.map_info.empty()) {
+        armatools::cli::log_plain("MapInfo bytes:", world.map_info.size());
+    }
+    if (!world.map_info_entries.empty()) {
+        std::ostringstream type_list;
+        bool first = true;
+        for (const auto& [type, count] : mapinfo_types) {
+            if (!first) type_list << ", ";
+            first = false;
+            type_list << type << ":" << count;
+        }
+        armatools::cli::log_plain("MapInfo entries:", world.map_info_entries.size(),
+                                  "Types:", type_list.str());
+    }
     if (world.stats.road_net_count > 0) {
         armatools::cli::log_plain("Road nets:", world.stats.road_net_count);
     }

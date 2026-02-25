@@ -355,10 +355,15 @@ GLModelView::GLModelView() {
     scroll_zoom_ = Gtk::EventControllerScroll::create();
     scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
     scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
-        distance_ *= (dy > 0) ? 1.1f : 0.9f;
-        distance_ = std::max(distance_, 0.01f);
-        queue_render();
-        if (!suppress_camera_signal_) signal_camera_changed_.emit();
+        if (camera_mode_ == CameraMode::Orbit) {
+            distance_ *= (dy > 0) ? 1.1f : 0.9f;
+            distance_ = std::max(distance_, 0.01f);
+            queue_render();
+            if (!suppress_camera_signal_) signal_camera_changed_.emit();
+        } else {
+            float step = std::max(0.02f, distance_ * 0.08f);
+            move_camera_local((dy > 0) ? -step : step, 0.0f, 0.0f);
+        }
         return true;
     }, false);
     add_controller(scroll_zoom_);
@@ -373,6 +378,7 @@ GLModelView::GLModelView() {
     key_move_ = Gtk::EventControllerKey::create();
     key_move_->signal_key_pressed().connect(
         [this](guint keyval, guint, Gdk::ModifierType state) -> bool {
+            if (camera_mode_ != CameraMode::FirstPerson) return false;
             bool handled = true;
             switch (keyval) {
             case GDK_KEY_w:
@@ -417,6 +423,7 @@ GLModelView::GLModelView() {
         }, false);
     key_move_->signal_key_released().connect(
         [this](guint keyval, guint, Gdk::ModifierType state) {
+            if (camera_mode_ != CameraMode::FirstPerson) return;
             switch (keyval) {
             case GDK_KEY_w:
             case GDK_KEY_W: move_fwd_ = false; break;
@@ -939,26 +946,72 @@ void GLModelView::set_texture(const std::string& key, int width, int height,
 }
 
 void GLModelView::reset_camera() {
-    azimuth_ = 0.4f;
-    elevation_ = 0.3f;
-    pivot_[0] = 0.0f;
-    pivot_[1] = 0.0f;
-    pivot_[2] = 0.0f;
-    distance_ = 5.0f;
+    if (has_default_camera_) {
+        azimuth_ = default_azimuth_;
+        elevation_ = default_elevation_;
+        distance_ = default_distance_;
+        if (camera_mode_ == CameraMode::Orbit) {
+            pivot_[0] = default_center_[0];
+            pivot_[1] = default_center_[1];
+            pivot_[2] = default_center_[2];
+        } else {
+            const float ce = std::cos(elevation_);
+            const float se = std::sin(elevation_);
+            const float ca = std::cos(azimuth_);
+            const float sa = std::sin(azimuth_);
+            pivot_[0] = default_center_[0] + distance_ * ce * sa;
+            pivot_[1] = default_center_[1] + distance_ * se;
+            pivot_[2] = default_center_[2] + distance_ * ce * ca;
+        }
+    } else {
+        azimuth_ = 0.4f;
+        elevation_ = 0.3f;
+        distance_ = 5.0f;
+        pivot_[0] = 0.0f;
+        pivot_[1] = 0.0f;
+        pivot_[2] = 0.0f;
+    }
+    drag_start_x_ = 0.0;
+    drag_start_y_ = 0.0;
+    drag_start_azimuth_ = azimuth_;
+    drag_start_elevation_ = elevation_;
+    std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+    move_fwd_ = false;
+    move_back_ = false;
+    move_left_ = false;
+    move_right_ = false;
+    move_up_ = false;
+    move_down_ = false;
+    move_fast_ = false;
+    move_tick_conn_.disconnect();
     queue_render();
 }
 
 void GLModelView::set_camera_from_bounds(float cx, float cy, float cz, float radius) {
-    distance_ = std::max(radius * 2.0f, 0.5f);
-    azimuth_ = 0.4f;
-    elevation_ = 0.3f;
-    const float ce = std::cos(elevation_);
-    const float se = std::sin(elevation_);
-    const float ca = std::cos(azimuth_);
-    const float sa = std::sin(azimuth_);
-    pivot_[0] = cx + distance_ * ce * sa;
-    pivot_[1] = cy + distance_ * se;
-    pivot_[2] = cz + distance_ * ce * ca;
+    default_center_[0] = cx;
+    default_center_[1] = cy;
+    default_center_[2] = cz;
+    has_default_center_ = true;
+    default_distance_ = std::max(radius * 2.0f, 0.5f);
+    default_azimuth_ = 0.4f;
+    default_elevation_ = 0.3f;
+    has_default_camera_ = true;
+    distance_ = default_distance_;
+    azimuth_ = default_azimuth_;
+    elevation_ = default_elevation_;
+    if (camera_mode_ == CameraMode::Orbit) {
+        pivot_[0] = cx;
+        pivot_[1] = cy;
+        pivot_[2] = cz;
+    } else {
+        const float ce = std::cos(elevation_);
+        const float se = std::sin(elevation_);
+        const float ca = std::cos(azimuth_);
+        const float sa = std::sin(azimuth_);
+        pivot_[0] = cx + distance_ * ce * sa;
+        pivot_[1] = cy + distance_ * se;
+        pivot_[2] = cz + distance_ * ce * ca;
+    }
     queue_render();
 }
 
@@ -1005,6 +1058,81 @@ void GLModelView::set_background_color(float r, float g, float b) {
     bg_color_[1] = g;
     bg_color_[2] = b;
     queue_render();
+}
+
+void GLModelView::set_camera_mode(CameraMode mode) {
+    if (camera_mode_ == mode) return;
+    const float ce = std::cos(elevation_);
+    const float se = std::sin(elevation_);
+    const float ca = std::cos(azimuth_);
+    const float sa = std::sin(azimuth_);
+    const float dir[3] = {ce * sa, se, ce * ca};
+    float eye[3];
+    float target[3];
+
+    if (camera_mode_ == CameraMode::Orbit) {
+        target[0] = pivot_[0];
+        target[1] = pivot_[1];
+        target[2] = pivot_[2];
+        eye[0] = pivot_[0] + dir[0] * distance_;
+        eye[1] = pivot_[1] + dir[1] * distance_;
+        eye[2] = pivot_[2] + dir[2] * distance_;
+    } else {
+        eye[0] = pivot_[0];
+        eye[1] = pivot_[1];
+        eye[2] = pivot_[2];
+        target[0] = eye[0] - dir[0];
+        target[1] = eye[1] - dir[1];
+        target[2] = eye[2] - dir[2];
+    }
+
+    camera_mode_ = mode;
+    if (camera_mode_ == CameraMode::Orbit) {
+        const float center[3] = {
+            has_default_center_ ? default_center_[0] : target[0],
+            has_default_center_ ? default_center_[1] : target[1],
+            has_default_center_ ? default_center_[2] : target[2],
+        };
+        pivot_[0] = center[0];
+        pivot_[1] = center[1];
+        pivot_[2] = center[2];
+        float dx = eye[0] - center[0];
+        float dy = eye[1] - center[1];
+        float dz = eye[2] - center[2];
+        distance_ = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 0.01f);
+        azimuth_ = std::atan2(dx, dz);
+        elevation_ = std::asin(std::clamp(dy / distance_, -1.0f, 1.0f));
+    } else {
+        pivot_[0] = eye[0];
+        pivot_[1] = eye[1];
+        pivot_[2] = eye[2];
+        float dx = eye[0] - target[0];
+        float dy = eye[1] - target[1];
+        float dz = eye[2] - target[2];
+        distance_ = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 0.01f);
+    }
+
+    // Reset transient input state after a mode switch.
+    drag_start_x_ = 0.0;
+    drag_start_y_ = 0.0;
+    drag_start_azimuth_ = azimuth_;
+    drag_start_elevation_ = elevation_;
+    std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+    move_fwd_ = false;
+    move_back_ = false;
+    move_left_ = false;
+    move_right_ = false;
+    move_up_ = false;
+    move_down_ = false;
+    move_fast_ = false;
+    move_tick_conn_.disconnect();
+
+    queue_render();
+    if (!suppress_camera_signal_) signal_camera_changed_.emit();
+}
+
+GLModelView::CameraMode GLModelView::camera_mode() const {
+    return camera_mode_;
 }
 
 Glib::RefPtr<Gdk::Pixbuf> GLModelView::snapshot() const {
@@ -1180,14 +1308,22 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
     float eye[3];
     float ce = std::cos(elevation_), se = std::sin(elevation_);
     float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-    eye[0] = pivot_[0];
-    eye[1] = pivot_[1];
-    eye[2] = pivot_[2];
-    float center[3] = {
-        eye[0] - ce * sa,
-        eye[1] - se,
-        eye[2] - ce * ca,
-    };
+    float center[3];
+    if (camera_mode_ == CameraMode::Orbit) {
+        eye[0] = pivot_[0] + distance_ * ce * sa;
+        eye[1] = pivot_[1] + distance_ * se;
+        eye[2] = pivot_[2] + distance_ * ce * ca;
+        center[0] = pivot_[0];
+        center[1] = pivot_[1];
+        center[2] = pivot_[2];
+    } else {
+        eye[0] = pivot_[0];
+        eye[1] = pivot_[1];
+        eye[2] = pivot_[2];
+        center[0] = eye[0] - ce * sa;
+        center[1] = eye[1] - se;
+        center[2] = eye[2] - ce * ca;
+    }
 
     float up[3] = {0, 1, 0};
 

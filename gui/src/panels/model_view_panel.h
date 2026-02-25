@@ -71,6 +71,7 @@ private:
     Gtk::ToggleButton wireframe_btn_;
     Gtk::ToggleButton texture_btn_;
     Gtk::ToggleButton grid_btn_;
+    Gtk::ToggleButton camera_mode_btn_;
     Gtk::Button reset_cam_btn_;
     Gtk::Button screenshot_btn_;
     Gtk::MenuButton bg_color_btn_;

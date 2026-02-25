@@ -696,6 +696,21 @@ struct Odol28Ctx {
         return result;
     }
 
+    // Read a compressed int32 array.
+    std::vector<int32_t> read_compressed_i32_array() {
+        auto count = read_i32(r);
+        if (count <= 0)
+            return {};
+        auto data = read_compressed(static_cast<size_t>(count) * 4);
+        std::vector<int32_t> result(static_cast<size_t>(count));
+        for (size_t i = 0; i < static_cast<size_t>(count); ++i) {
+            int32_t val;
+            std::memcpy(&val, data.data() + i * 4, 4);
+            result[i] = val;
+        }
+        return result;
+    }
+
     // Read condensed raw data. Returns (count, data).
     std::pair<int32_t, std::vector<uint8_t>> read_condensed_raw(int elem_size) {
         auto count = read_i32(r);
@@ -1149,6 +1164,8 @@ struct Odol28Ctx {
         std::string name;
         std::vector<uint32_t> faces;
         std::vector<uint32_t> vertices;
+        std::vector<int32_t> sections;
+        bool is_sectional = false;
     };
     NamedSelectionRecord read_named_selection() {
         auto name = read_asciiz(r);
@@ -1160,10 +1177,10 @@ struct Odol28Ctx {
         r.seekg(4, std::ios::cur);
 
         // IsSectional (bool)
-        r.seekg(1, std::ios::cur);
+        bool is_sectional = read_u8(r) != 0;
 
         // Sections (compressed int32 array)
-        skip_compressed_array(4);
+        auto sections = read_compressed_i32_array();
 
         // SelectedVertices (compressed vertex index array)
         auto selected_vertices = read_compressed_vertex_index_array();
@@ -1185,7 +1202,7 @@ struct Odol28Ctx {
         }
 
         return {std::move(name), std::move(selected_faces),
-                std::move(selected_vertices)};
+                std::move(selected_vertices), std::move(sections), is_sectional};
     }
 
     // Read a single ODOL v28+ LOD.
@@ -1310,6 +1327,20 @@ struct Odol28Ctx {
         std::vector<Section28> sections(static_cast<size_t>(n_sections));
         for (int32_t i = 0; i < n_sections; ++i)
             sections[static_cast<size_t>(i)] = read_section();
+        std::vector<std::vector<uint32_t>> section_face_indices;
+        if (!sections.empty() && !face_byte_offsets.empty()) {
+            section_face_indices.resize(sections.size());
+            for (uint32_t fi = 0; fi < static_cast<uint32_t>(face_byte_offsets.size()); ++fi) {
+                auto byte_off = face_byte_offsets[fi];
+                for (size_t si = 0; si < sections.size(); ++si) {
+                    const auto& s = sections[si];
+                    if (byte_off >= s.face_lower_index && byte_off < s.face_upper_index) {
+                        section_face_indices[si].push_back(fi);
+                        break;
+                    }
+                }
+            }
+        }
 
         // NamedSelections
         auto n_selections = read_i32(r);
@@ -1318,18 +1349,33 @@ struct Odol28Ctx {
             auto record = read_named_selection();
             auto& name = record.name;
             lod.named_selections[static_cast<size_t>(i)] = name;
+            std::vector<uint32_t> combined_faces;
+            if (!record.faces.empty())
+                combined_faces.insert(combined_faces.end(),
+                                      record.faces.begin(), record.faces.end());
+            if (record.is_sectional && !record.sections.empty()
+                && !section_face_indices.empty()) {
+                for (auto sec_idx : record.sections) {
+                    if (sec_idx < 0) continue;
+                    const auto si = static_cast<size_t>(sec_idx);
+                    if (si >= section_face_indices.size()) continue;
+                    const auto& faces = section_face_indices[si];
+                    combined_faces.insert(combined_faces.end(), faces.begin(), faces.end());
+                }
+            }
+            if (!combined_faces.empty()) {
+                auto& target_faces = lod.named_selection_faces[name];
+                target_faces.insert(target_faces.end(),
+                                    combined_faces.begin(), combined_faces.end());
+                std::sort(target_faces.begin(), target_faces.end());
+                target_faces.erase(std::unique(target_faces.begin(), target_faces.end()),
+                                   target_faces.end());
+            }
             if (!record.vertices.empty()) {
                 auto& target = lod.named_selection_vertices[name];
                 target.insert(target.end(), record.vertices.begin(), record.vertices.end());
                 std::sort(target.begin(), target.end());
                 target.erase(std::unique(target.begin(), target.end()), target.end());
-            }
-            if (!record.faces.empty()) {
-                auto& target_faces = lod.named_selection_faces[name];
-                target_faces.insert(target_faces.end(), record.faces.begin(), record.faces.end());
-                std::sort(target_faces.begin(), target_faces.end());
-                target_faces.erase(std::unique(target_faces.begin(), target_faces.end()),
-                                   target_faces.end());
             }
         }
 

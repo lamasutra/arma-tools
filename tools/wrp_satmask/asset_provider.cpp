@@ -19,6 +19,27 @@ AssetProvider::AssetProvider(std::shared_ptr<armatools::pboindex::Index> index,
                              std::shared_ptr<armatools::pboindex::DB> db)
     : index_(std::move(index)), db_(std::move(db)) {}
 
+bool AssetProvider::exists(const std::string& virtual_path) const {
+    if (virtual_path.empty()) return false;
+    if (!index_ && !db_) return false;
+
+    auto normalized = normalize_path(virtual_path);
+
+    if (index_) {
+        armatools::pboindex::ResolveResult rr;
+        if (index_->resolve(normalized, rr)) {
+            return true;
+        }
+    }
+
+    if (db_) {
+        auto hits = db_->find_files(normalized, "", 1);
+        if (!hits.empty()) return true;
+    }
+
+    return false;
+}
+
 std::optional<std::vector<uint8_t>> AssetProvider::read(const std::string& virtual_path) const {
     if (virtual_path.empty()) return std::nullopt;
     if (!index_ && !db_) return std::nullopt;

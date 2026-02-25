@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -112,11 +113,7 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     // Page 4: Terrain 3D
     terrain3d_toolbar_.set_margin(4);
-    terrain3d_mode_combo_.append("elevation", "Elevation");
-    terrain3d_mode_combo_.append("surface", "Surface Mask");
-    terrain3d_mode_combo_.append("texture", "Texture Index");
-    terrain3d_mode_combo_.append("satellite", "Satellite");
-    terrain3d_mode_combo_.set_active_id("elevation");
+    update_terrain3d_mode_options(true, true);
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
     terrain3d_status_label_.set_halign(Gtk::Align::START);
@@ -168,6 +165,14 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     });
     terrain3d_mode_combo_.signal_changed().connect([this]() {
         auto id = std::string(terrain3d_mode_combo_.get_active_id());
+        if (id == "texture" && !allow_texture_mode_) {
+            terrain3d_mode_combo_.set_active_id("elevation");
+            return;
+        }
+        if (id == "satellite" && !allow_satellite_mode_) {
+            terrain3d_mode_combo_.set_active_id("elevation");
+            return;
+        }
         if (id == "surface") terrain3d_view_.set_color_mode(1);
         else if (id == "texture") terrain3d_view_.set_color_mode(2);
         else if (id == "satellite") {
@@ -200,6 +205,26 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
         if (page_num == 1) ensure_objects_loaded();
     });
+}
+
+void TabWrpInfo::update_terrain3d_mode_options(bool allow_texture, bool allow_satellite) {
+    allow_texture_mode_ = allow_texture;
+    allow_satellite_mode_ = allow_satellite;
+    const auto prev = std::string(terrain3d_mode_combo_.get_active_id());
+
+    terrain3d_mode_combo_.remove_all();
+    terrain3d_mode_combo_.append("elevation", "Elevation");
+    terrain3d_mode_combo_.append("surface", "Surface Mask");
+    if (allow_texture_mode_) terrain3d_mode_combo_.append("texture", "Texture Index");
+    if (allow_satellite_mode_) terrain3d_mode_combo_.append("satellite", "Satellite");
+
+    std::string next = "elevation";
+    if (!prev.empty()) {
+        if (prev == "surface" || prev == "elevation") next = prev;
+        else if (prev == "texture" && allow_texture_mode_) next = prev;
+        else if (prev == "satellite" && allow_satellite_mode_) next = prev;
+    }
+    terrain3d_mode_combo_.set_active_id(next);
 }
 
 TabWrpInfo::~TabWrpInfo() {
@@ -544,6 +569,24 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
                 loaded_wrp_path_ = entry.from_pbo ? std::string() : entry.full_path;
                 loaded_wrp_entry_ = entry;
                 loaded_wrp_entry_valid_ = true;
+
+                auto normalize_sig = [](std::string sig) {
+                    auto trim = [](std::string& s) {
+                        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
+                            s.erase(s.begin());
+                        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+                            s.pop_back();
+                    };
+                    trim(sig);
+                    for (auto& c : sig) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    return sig;
+                };
+                const std::string sig = normalize_sig(world_data_->format.signature);
+                // Temporary: disable texture index + satellite for OPRW v17+ until satmask rebuild is understood.
+                const bool disable_texture_satellite =
+                    (sig == "OPRW" && world_data_->format.version >= 17);
+                update_terrain3d_mode_options(!disable_texture_satellite,
+                                              !disable_texture_satellite);
 
                 terrain3d_view_.set_world_data(*world_data_);
                 if (std::string(terrain3d_mode_combo_.get_active_id()) == "satellite")

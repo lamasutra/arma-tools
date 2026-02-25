@@ -44,6 +44,10 @@ public:
     // 5b. Background color
     void set_background_color(float r, float g, float b);
 
+    enum class CameraMode { Orbit, FirstPerson };
+    void set_camera_mode(CameraMode mode);
+    CameraMode camera_mode() const;
+
     enum class HighlightMode { Points, Lines };
     // Named selection highlight geometry.
     void set_highlight_geometry(const std::vector<float>& positions, HighlightMode mode);
@@ -105,6 +109,13 @@ private:
     float elevation_ = 0.3f;
     float distance_ = 5.0f;
     float pivot_[3] = {0, 0, 0};
+    CameraMode camera_mode_ = CameraMode::Orbit;
+    float default_center_[3] = {0, 0, 0};
+    bool has_default_center_ = false;
+    float default_azimuth_ = 0.4f;
+    float default_elevation_ = 0.3f;
+    float default_distance_ = 5.0f;
+    bool has_default_camera_ = false;
 
     // Rendering mode
     bool wireframe_ = false;
