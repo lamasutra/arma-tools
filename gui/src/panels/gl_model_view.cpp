@@ -59,8 +59,8 @@ void main() {
         n = normalize(mat3(t, b, n) * nt);
     }
     vec3 v = vec3(0.0, 0.0, 1.0);
-    float diff = max(dot(n, uLightDir), 0.0);
-    float back_fill = max(dot(n, -uLightDir), 0.0);
+    float diff = max(dot(n, -uLightDir), 0.0);
+    float back_fill = max(dot(n, uLightDir), 0.0);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
     if (uShaderMode == 3 && baseColor.a < 0.35) discard;
 
@@ -70,7 +70,7 @@ void main() {
     vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
     float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
 
-    vec3 h = normalize(uLightDir + v);
+    vec3 h = normalize(-uLightDir + v);
     float spec = pow(max(dot(n, h), 0.0), sp);
     if (uHasSpecularMap)
         spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
@@ -149,8 +149,8 @@ void main() {
         n = normalize(mat3(t, b, n) * nt);
     }
     vec3 v = vec3(0.0, 0.0, 1.0);
-    float diff = max(dot(n, uLightDir), 0.0);
-    float back_fill = max(dot(n, -uLightDir), 0.0);
+    float diff = max(dot(n, -uLightDir), 0.0);
+    float back_fill = max(dot(n, uLightDir), 0.0);
     vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
     if (uShaderMode == 3 && baseColor.a < 0.35) discard;
 
@@ -160,7 +160,7 @@ void main() {
     vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
     float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
 
-    vec3 h = normalize(uLightDir + v);
+    vec3 h = normalize(-uLightDir + v);
     float spec = pow(max(dot(n, h), 0.0), sp);
     if (uHasSpecularMap)
         spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
@@ -292,7 +292,7 @@ GLModelView::GLModelView() {
     signal_unrealize().connect(sigc::mem_fun(*this, &GLModelView::on_unrealize_gl), false);
     signal_render().connect(sigc::mem_fun(*this, &GLModelView::on_render_gl), false);
 
-    // Orbit drag (button 1)
+    // Look drag (button 1) - rotate view in place around current eye.
     drag_orbit_ = Gtk::GestureDrag::create();
     drag_orbit_->set_button(GDK_BUTTON_PRIMARY);
     drag_orbit_->signal_drag_begin().connect([this](double x, double y) {
@@ -302,13 +302,32 @@ GLModelView::GLModelView() {
         drag_start_elevation_ = elevation_;
     });
     drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
-        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.01f;
-        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.01f;
+        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
+        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
         elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
         queue_render();
         if (!suppress_camera_signal_) signal_camera_changed_.emit();
     });
     add_controller(drag_orbit_);
+
+    // Look drag (button 3 / right) - same behavior as primary mouse look.
+    drag_look_ = Gtk::GestureDrag::create();
+    drag_look_->set_button(GDK_BUTTON_SECONDARY);
+    drag_look_->signal_drag_begin().connect([this](double x, double y) {
+        drag_start_x_ = x;
+        drag_start_y_ = y;
+        drag_start_azimuth_ = azimuth_;
+        drag_start_elevation_ = elevation_;
+    });
+    drag_look_->signal_drag_update().connect([this](double dx, double dy) {
+        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
+        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
+        elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
+
+        queue_render();
+        if (!suppress_camera_signal_) signal_camera_changed_.emit();
+    });
+    add_controller(drag_look_);
 
     // Pan drag (button 2 / middle)
     drag_pan_ = Gtk::GestureDrag::create();
@@ -345,7 +364,7 @@ GLModelView::GLModelView() {
     add_controller(scroll_zoom_);
 
     click_focus_ = Gtk::GestureClick::create();
-    click_focus_->set_button(GDK_BUTTON_PRIMARY);
+    click_focus_->set_button(0);
     click_focus_->signal_pressed().connect([this](int, double, double) {
         grab_focus();
     });
@@ -922,16 +941,24 @@ void GLModelView::set_texture(const std::string& key, int width, int height,
 void GLModelView::reset_camera() {
     azimuth_ = 0.4f;
     elevation_ = 0.3f;
+    pivot_[0] = 0.0f;
+    pivot_[1] = 0.0f;
+    pivot_[2] = 0.0f;
+    distance_ = 5.0f;
     queue_render();
 }
 
 void GLModelView::set_camera_from_bounds(float cx, float cy, float cz, float radius) {
-    pivot_[0] = cx;
-    pivot_[1] = cy;
-    pivot_[2] = cz;
     distance_ = std::max(radius * 2.0f, 0.5f);
     azimuth_ = 0.4f;
     elevation_ = 0.3f;
+    const float ce = std::cos(elevation_);
+    const float se = std::sin(elevation_);
+    const float ca = std::cos(azimuth_);
+    const float sa = std::sin(azimuth_);
+    pivot_[0] = cx + distance_ * ce * sa;
+    pivot_[1] = cy + distance_ * se;
+    pivot_[2] = cz + distance_ * ce * ca;
     queue_render();
 }
 
@@ -1069,15 +1096,19 @@ void GLModelView::set_material_params(const std::string& key,
     queue_render();
 }
 
-void GLModelView::move_camera_local(float forward, float right) {
+void GLModelView::move_camera_local(float forward, float right, float up) {
+    const float ce = std::cos(elevation_);
+    const float se = std::sin(elevation_);
     const float ca = std::cos(azimuth_);
     const float sa = std::sin(azimuth_);
-    const float fx = -sa;
-    const float fz = -ca;
+    const float fx = -ce * sa;
+    const float fy = -se;
+    const float fz = -ce * ca;
     const float rx = ca;
     const float rz = -sa;
 
     pivot_[0] += fx * forward + rx * right;
+    pivot_[1] += fy * forward + up;
     pivot_[2] += fz * forward + rz * right;
     queue_render();
     if (!suppress_camera_signal_) signal_camera_changed_.emit();
@@ -1097,9 +1128,7 @@ bool GLModelView::movement_tick() {
 
     float step = std::max(0.01f, distance_ * 0.006f);
     if (move_fast_) step *= 3.0f;
-    move_camera_local(forward * step, right * step);
-    pivot_[1] += vertical * step;
-    queue_render();
+    move_camera_local(forward * step, right * step, vertical * step);
     return true;
 }
 
@@ -1151,14 +1180,19 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
     float eye[3];
     float ce = std::cos(elevation_), se = std::sin(elevation_);
     float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-    eye[0] = pivot_[0] + distance_ * ce * sa;
-    eye[1] = pivot_[1] + distance_ * se;
-    eye[2] = pivot_[2] + distance_ * ce * ca;
+    eye[0] = pivot_[0];
+    eye[1] = pivot_[1];
+    eye[2] = pivot_[2];
+    float center[3] = {
+        eye[0] - ce * sa,
+        eye[1] - se,
+        eye[2] - ce * ca,
+    };
 
     float up[3] = {0, 1, 0};
 
     float view[16];
-    mat4_look_at(view, eye, pivot_, up);
+    mat4_look_at(view, eye, center, up);
 
     int w = get_width();
     int h = get_height();

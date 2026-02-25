@@ -13,6 +13,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 
 struct TabP3dInfo::ModelData {
@@ -49,6 +50,14 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     search_button_.set_visible(false);
     path_box_.append(search_button_);
     left_box_.append(path_box_);
+
+    source_combo_.set_tooltip_text("Filter by A3DB source");
+    source_combo_.append("", "All");
+    source_combo_.set_active_id("");
+    source_box_.append(source_label_);
+    source_box_.append(source_combo_);
+    source_box_.set_visible(false);
+    left_box_.append(source_box_);
 
     // Search results (PBO mode only)
     search_results_.set_selection_mode(Gtk::SelectionMode::SINGLE);
@@ -99,6 +108,7 @@ TabP3dInfo::TabP3dInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     });
     pbo_switch_.property_active().signal_changed().connect(
         sigc::mem_fun(*this, &TabP3dInfo::on_pbo_mode_changed));
+    source_combo_.signal_changed().connect(sigc::mem_fun(*this, &TabP3dInfo::on_source_changed));
     search_button_.signal_clicked().connect(sigc::mem_fun(*this, &TabP3dInfo::on_search));
     search_results_.signal_row_selected().connect(
         sigc::mem_fun(*this, &TabP3dInfo::on_search_result_selected));
@@ -142,6 +152,7 @@ void TabP3dInfo::set_config(Config* cfg) {
         db_ = snap.db;
         index_ = snap.index;
         model_panel_.set_pboindex(db_.get(), index_.get());
+        refresh_source_combo();
     });
 }
 
@@ -184,6 +195,13 @@ void TabP3dInfo::load_file(const std::string& path) {
     if (texture_preview_window_) {
         texture_preview_window_->close();
         texture_preview_window_.reset();
+    }
+
+    if (model_loader_service_) {
+        model_ = std::make_shared<ModelData>();
+        model_path_ = path;
+        model_panel_.load_p3d(path);
+        return;
     }
 
     try {
@@ -236,19 +254,21 @@ void TabP3dInfo::open_model_path(const std::string& model_path) {
         texture_preview_window_.reset();
     }
 
+    if (model_loader_service_) {
+        model_ = std::make_shared<ModelData>();
+        model_path_ = model_path;
+        model_panel_.load_p3d(model_path);
+        return;
+    }
+
     try {
         model_ = std::make_shared<ModelData>();
-        if (model_loader_service_) {
-            model_->p3d = std::make_shared<armatools::p3d::P3DFile>(
-                model_loader_service_->load_p3d(model_path));
-        } else {
-            std::ifstream f(model_path, std::ios::binary);
-            if (!f.is_open()) {
-                model_panel_.set_info_line("Error: Cannot open file");
-                return;
-            }
-            model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(f));
+        std::ifstream f(model_path, std::ios::binary);
+        if (!f.is_open()) {
+            model_panel_.set_info_line("Error: Cannot open file");
+            return;
         }
+        model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(f));
         model_path_ = model_path;
 
         const auto& p = *model_->p3d;
@@ -457,13 +477,46 @@ void TabP3dInfo::on_pbo_mode_changed() {
         path_entry_.set_placeholder_text("Search in PBO...");
         browse_button_.set_visible(false);
         search_button_.set_visible(true);
+        source_box_.set_visible(true);
         search_scroll_.set_visible(true);
     } else {
         path_entry_.set_placeholder_text("P3D file path...");
         browse_button_.set_visible(true);
         search_button_.set_visible(false);
+        source_box_.set_visible(false);
         search_scroll_.set_visible(false);
     }
+}
+
+void TabP3dInfo::refresh_source_combo() {
+    source_combo_updating_ = true;
+    source_combo_.remove_all();
+    source_combo_.append("", "All");
+
+    if (db_) {
+        static const std::unordered_map<std::string, std::string> source_labels = {
+            {"arma3", "Arma 3"},
+            {"workshop", "Workshop"},
+            {"ofp", "OFP/CWA"},
+            {"arma1", "Arma 1"},
+            {"arma2", "Arma 2"},
+            {"custom", "Custom"},
+        };
+        auto sources = db_->query_sources();
+        for (const auto& src : sources) {
+            auto it = source_labels.find(src);
+            source_combo_.append(src, it != source_labels.end() ? it->second : src);
+        }
+    }
+
+    source_combo_.set_active_id(current_source_);
+    source_combo_updating_ = false;
+}
+
+void TabP3dInfo::on_source_changed() {
+    if (source_combo_updating_) return;
+    current_source_ = std::string(source_combo_.get_active_id());
+    if (pbo_mode_) on_search();
 }
 
 void TabP3dInfo::on_search() {
@@ -474,7 +527,11 @@ void TabP3dInfo::on_search() {
         search_results_.remove(*row);
     search_results_data_.clear();
 
-    auto results = db_->find_files("*" + query + "*.p3d");
+    std::vector<armatools::pboindex::FindResult> results;
+    if (current_source_.empty())
+        results = db_->find_files("*" + query + "*.p3d");
+    else
+        results = db_->find_files("*" + query + "*.p3d", current_source_);
     search_results_data_ = results;
 
     for (const auto& r : results) {
@@ -494,12 +551,6 @@ void TabP3dInfo::on_search_result_selected(Gtk::ListBoxRow* row) {
 }
 
 void TabP3dInfo::load_from_pbo(const armatools::pboindex::FindResult& r) {
-    auto data = extract_from_pbo(r.pbo_path, r.file_path);
-    if (data.empty()) {
-        model_panel_.set_info_line("Error: Could not extract from PBO");
-        return;
-    }
-
     // Clear
     detail_view_.get_buffer()->set_text("");
     model_.reset();
@@ -513,12 +564,26 @@ void TabP3dInfo::load_from_pbo(const armatools::pboindex::FindResult& r) {
         texture_preview_window_.reset();
     }
 
+    const auto model_path = r.prefix + "/" + r.file_path;
+    if (model_loader_service_) {
+        model_ = std::make_shared<ModelData>();
+        model_path_ = model_path;
+        model_panel_.load_p3d(model_path_);
+        return;
+    }
+
+    auto data = extract_from_pbo(r.pbo_path, r.file_path);
+    if (data.empty()) {
+        model_panel_.set_info_line("Error: Could not extract from PBO");
+        return;
+    }
+
     try {
         std::string str(data.begin(), data.end());
         std::istringstream stream(str);
         model_ = std::make_shared<ModelData>();
         model_->p3d = std::make_shared<armatools::p3d::P3DFile>(armatools::p3d::read(stream));
-        model_path_ = r.prefix + "/" + r.file_path;
+        model_path_ = model_path;
 
         const auto& p = *model_->p3d;
 

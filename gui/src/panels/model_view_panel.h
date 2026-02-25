@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gtkmm.h>
+#include <sigc++/connection.h>
 #include "gl_model_view.h"
 #include "p3d_model_loader.h"
 #include "lod_textures_loader.h"
@@ -10,8 +11,11 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_set>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 
 struct Config;
@@ -80,6 +84,10 @@ private:
     Gtk::Box lods_box_{Gtk::Orientation::VERTICAL, 2};
     Gtk::ScrolledWindow named_selections_scroll_;
     Gtk::Box named_selections_box_{Gtk::Orientation::VERTICAL, 2};
+    Gtk::Overlay gl_overlay_;
+    Gtk::Box loading_overlay_box_{Gtk::Orientation::VERTICAL, 6};
+    Gtk::Spinner loading_spinner_;
+    Gtk::Label loading_label_{"Loading model..."};
 
     // GL view
     GLModelView gl_view_;
@@ -98,9 +106,34 @@ private:
     std::string current_model_path_;
     std::unordered_set<int> active_lod_indices_;
     std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_vertices_;
+    std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_faces_;
     std::vector<armatools::p3d::Vector3P> highlight_lod_vertices_;
+    const std::vector<std::vector<uint32_t>>* highlight_lod_faces_ = nullptr;
     std::unordered_map<std::string, std::vector<float>> named_selection_face_geometry_;
     std::unordered_set<std::string> active_named_selections_;
+    struct FaceGeometryJob {
+        std::string name;
+        std::vector<uint32_t> face_indices;
+        size_t next_face = 0;
+        std::vector<float> buffer;
+    };
+    std::unordered_map<std::string, FaceGeometryJob> face_geometry_jobs_;
+    sigc::connection face_geometry_idle_conn_;
+    struct AsyncLoadResult {
+        uint64_t request_id = 0;
+        std::string model_path;
+        std::shared_ptr<armatools::p3d::P3DFile> model;
+        std::string info_line;
+        std::string error;
+    };
+    struct AsyncLoadQueue {
+        std::mutex mutex;
+        std::deque<AsyncLoadResult> results;
+    };
+    std::shared_ptr<AsyncLoadQueue> async_load_queue_ = std::make_shared<AsyncLoadQueue>();
+    sigc::connection load_poll_conn_;
+    uint64_t current_load_request_id_ = 0;
+    bool loading_model_ = false;
     std::function<void(const armatools::p3d::LOD&, int)> on_lod_changed_;
 
     void apply_lod(const armatools::p3d::LOD& lod, const std::string& model_path);
@@ -114,6 +147,14 @@ private:
     void on_screenshot();
     void setup_lods_menu();
     void setup_named_selections_menu(const armatools::p3d::LOD& lod);
-    void update_named_selection_highlight();
     void cache_named_selection_geometry(const armatools::p3d::LOD& lod);
+    void update_named_selection_highlight();
+    void reset_named_selection_cache(const armatools::p3d::LOD& lod, int lod_index);
+    void start_face_geometry_job(const std::string& name);
+    void process_face_geometry_jobs_chunk();
+    void schedule_face_geometry_idle();
+    bool on_face_geometry_idle();
+    void set_loading_state(bool loading);
+    bool on_load_poll();
+    int resolve_lod_index(const armatools::p3d::LOD& lod) const;
 };

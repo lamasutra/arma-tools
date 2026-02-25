@@ -34,6 +34,9 @@ private:
     // Left panel: LOD list
     Gtk::Box left_box_{Gtk::Orientation::VERTICAL, 4};
     Gtk::Box path_box_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Box source_box_{Gtk::Orientation::HORIZONTAL, 4};
+    Gtk::Label source_label_{"Source:"};
+    Gtk::ComboBoxText source_combo_;
     Gtk::Entry path_entry_;
     Gtk::Button browse_button_{"Browse..."};
 
@@ -72,6 +75,8 @@ private:
     Gtk::ListBox search_results_;
     std::vector<armatools::pboindex::FindResult> search_results_data_;
     bool pbo_mode_ = false;
+    bool source_combo_updating_ = false;
+    std::string current_source_;
 
     void on_browse();
     void load_file(const std::string& path);
@@ -80,6 +85,8 @@ private:
     void on_texture_clicked(const std::string& texture_path);
 
     void on_pbo_mode_changed();
+    void refresh_source_combo();
+    void on_source_changed();
     void on_search();
     void on_search_result_selected(Gtk::ListBoxRow* row);
     void load_from_pbo(const armatools::pboindex::FindResult& r);

@@ -76,7 +76,7 @@ template <typename... Args>
 void log_warning(Args&&... args) {
     auto& stream = std::cerr;
     if (supports_utf())
-        stream << "[⚠️] ";
+        stream << "⚠️ ";
     else
         stream << "[WARN] ";
     if constexpr (sizeof...(Args) > 0) {
@@ -89,7 +89,7 @@ template <typename... Args>
 void log_error(Args&&... args) {
     auto& stream = std::cerr;
     if (supports_utf())
-        stream << "[❌] ";
+        stream << "❌ ";
     else
         stream << "[ERROR] ";
     if constexpr (sizeof...(Args) > 0) {

@@ -145,6 +145,7 @@ private:
 
     // Gesture controllers
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
+    Glib::RefPtr<Gtk::GestureDrag> drag_look_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
     Glib::RefPtr<Gtk::EventControllerScroll> scroll_zoom_;
     Glib::RefPtr<Gtk::GestureClick> click_focus_;
@@ -171,6 +172,6 @@ private:
     void build_grid_and_axis();
     void draw_grid_and_axis(const float* mvp);
     void rebuild_highlight_vertex_buffer();
-    void move_camera_local(float forward, float right);
+    void move_camera_local(float forward, float right, float up);
     bool movement_tick();
 };

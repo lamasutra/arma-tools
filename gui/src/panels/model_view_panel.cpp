@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 #include "cli_logger.h"
 
@@ -101,7 +102,22 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
     gl_view_.set_vexpand(true);
     gl_view_.set_hexpand(true);
     gl_view_.set_size_request(-1, 200);
-    append(gl_view_);
+    gl_overlay_.set_vexpand(true);
+    gl_overlay_.set_hexpand(true);
+    gl_overlay_.set_child(gl_view_);
+    loading_overlay_box_.set_halign(Gtk::Align::CENTER);
+    loading_overlay_box_.set_valign(Gtk::Align::CENTER);
+    loading_overlay_box_.set_margin(10);
+    loading_overlay_box_.add_css_class("card");
+    loading_spinner_.set_halign(Gtk::Align::CENTER);
+    loading_spinner_.set_valign(Gtk::Align::CENTER);
+    loading_spinner_.set_size_request(48, 48);
+    loading_label_.set_halign(Gtk::Align::CENTER);
+    loading_overlay_box_.append(loading_spinner_);
+    loading_overlay_box_.append(loading_label_);
+    loading_overlay_box_.set_visible(false);
+    gl_overlay_.add_overlay(loading_overlay_box_);
+    append(gl_overlay_);
 
     // Signals
     wireframe_btn_.signal_toggled().connect([this]() {
@@ -122,6 +138,8 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
 
 ModelViewPanel::~ModelViewPanel() {
     realize_connection_.disconnect();
+    face_geometry_idle_conn_.disconnect();
+    load_poll_conn_.disconnect();
 }
 
 void ModelViewPanel::set_config(Config* cfg) {
@@ -198,24 +216,43 @@ void ModelViewPanel::load_p3d(const std::string& model_path) {
         return;
     }
 
-    try {
-        auto model = std::make_shared<armatools::p3d::P3DFile>(
-            model_loader_shared_->load_p3d(model_path));
+    ++current_load_request_id_;
+    const uint64_t request_id = current_load_request_id_;
+    set_loading_state(true);
+    set_info_line("Loading model...");
 
-        std::ostringstream info;
-        info << "Format: " << model->format << " v" << model->version
-             << " | LODs: " << model->lods.size();
-        auto size_result = armatools::p3d::calculate_size(*model);
-        if (size_result.info) {
-            const auto& s = *size_result.info;
-            info << " | Size: " << s.dimensions[0] << "x"
-                 << s.dimensions[1] << "x" << s.dimensions[2] << "m";
+    auto queue = async_load_queue_;
+    auto loader = model_loader_shared_;
+    std::thread([queue, loader, model_path, request_id]() {
+        AsyncLoadResult result;
+        result.request_id = request_id;
+        result.model_path = model_path;
+        try {
+            result.model = std::make_shared<armatools::p3d::P3DFile>(loader->load_p3d(model_path));
+            std::ostringstream info;
+            info << "Format: " << result.model->format << " v" << result.model->version
+                 << " | LODs: " << result.model->lods.size();
+            auto size_result = armatools::p3d::calculate_size(*result.model);
+            if (size_result.info) {
+                const auto& s = *size_result.info;
+                info << " | Size: " << s.dimensions[0] << "x"
+                     << s.dimensions[1] << "x" << s.dimensions[2] << "m";
+            }
+            result.info_line = info.str();
+        } catch (const std::exception& e) {
+            result.error = e.what();
+        } catch (...) {
+            result.error = "Unknown error";
         }
-        set_info_line(info.str());
+        {
+            std::lock_guard<std::mutex> lock(queue->mutex);
+            queue->results.push_back(std::move(result));
+        }
+    }).detach();
 
-        set_model_data(model, model_path);
-    } catch (const std::exception& e) {
-        armatools::cli::log_error("Error loading P3D: " + std::string(e.what()));
+    if (!load_poll_conn_.connected()) {
+        load_poll_conn_ = Glib::signal_timeout().connect(
+            sigc::mem_fun(*this, &ModelViewPanel::on_load_poll), 16);
     }
 }
 
@@ -262,6 +299,47 @@ void ModelViewPanel::clear() {
         named_selections_box_.remove(*child);
     gl_view_.set_highlight_geometry({}, GLModelView::HighlightMode::Points);
     p3d_file_.reset();
+}
+
+void ModelViewPanel::set_loading_state(bool loading) {
+    loading_model_ = loading;
+    loading_overlay_box_.set_visible(loading);
+    if (loading) {
+        loading_spinner_.start();
+    } else {
+        loading_spinner_.stop();
+    }
+}
+
+bool ModelViewPanel::on_load_poll() {
+    std::deque<AsyncLoadResult> results;
+    {
+        std::lock_guard<std::mutex> lock(async_load_queue_->mutex);
+        if (!async_load_queue_->results.empty()) {
+            results.swap(async_load_queue_->results);
+        }
+    }
+
+    for (auto& result : results) {
+        if (result.request_id != current_load_request_id_) {
+            continue;
+        }
+        if (!result.error.empty()) {
+            set_info_line("Error: " + result.error);
+            armatools::cli::log_error("Error loading P3D `" + result.model_path + "`: " + result.error);
+            set_loading_state(false);
+            continue;
+        }
+        set_info_line(result.info_line);
+        set_model_data(result.model, result.model_path);
+        set_loading_state(false);
+    }
+
+    if (!loading_model_) {
+        load_poll_conn_.disconnect();
+        return false;
+    }
+    return true;
 }
 
 GLModelView& ModelViewPanel::gl_view() {
