@@ -97,7 +97,9 @@ private:
     Gtk::CheckButton terrain3d_wireframe_btn_{"Wireframe"};
     Gtk::CheckButton terrain3d_objects_btn_{"Objects"};
     Gtk::Label terrain3d_status_label_;
+    Gtk::Overlay terrain3d_overlay_;
     GLWrpTerrainView terrain3d_view_;
+    Gtk::Label terrain3d_debug_overlay_;
 
     // Cached WRP data
     std::unique_ptr<armatools::wrp::WorldData> world_data_;

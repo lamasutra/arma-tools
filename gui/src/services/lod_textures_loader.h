@@ -32,6 +32,7 @@ public:
         std::string path;
         armatools::paa::Header header;
         armatools::paa::Image image;
+        bool resolved_from_material = false;
         bool has_material = false;
         MaterialParams material;
         bool has_normal_map = false;
@@ -42,6 +43,7 @@ public:
 
     std::vector<TextureData> load_textures(armatools::p3d::LOD& lod, const std::string& model_path);
     std::optional<TextureData> load_texture(const std::string& texture_path);
+    std::optional<TextureData> load_terrain_texture_entry(const std::string& entry_path);
 
     LodTexturesLoaderService(const std::string& db_path_in,
                     Config* cfg_in,

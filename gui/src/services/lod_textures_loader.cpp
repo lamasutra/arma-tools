@@ -48,7 +48,7 @@ LodTexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::str
                 armatools::paa::Header hdr;
                 hdr.width = img->width;
                 hdr.height = img->height;
-                add_if_loaded(TextureData{tex_path, hdr, *img, false, {}, false, {}, false, {}});
+                add_if_loaded(TextureData{tex_path, hdr, *img, false, false, {}, false, {}, false, {}});
             }
             continue;
         }
@@ -79,7 +79,7 @@ LodTexturesLoaderService::load_single_texture(const std::string& tex_path,
             std::istringstream stream(str);
             auto [img, hdr] = armatools::paa::decode(stream);
             if (img.width > 0 && img.height > 0)
-                return TextureData{tex_path, hdr, img, false, {}, false, {}, false, {}};
+                return TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}};
         } catch (...) {}
         return std::nullopt;
     };
@@ -93,7 +93,7 @@ LodTexturesLoaderService::load_single_texture(const std::string& tex_path,
         try {
             auto [img, hdr] = armatools::paa::decode(f);
             if (img.width > 0 && img.height > 0)
-                return TextureData{tex_path, hdr, img, false, {}, false, {}, false, {}};
+                return TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}};
         } catch (...) {}
         return std::nullopt;
     };
@@ -267,7 +267,7 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
             std::istringstream stream(str);
             auto [img, hdr] = armatools::paa::decode(stream);
             if (img.width > 0 && img.height > 0)
-                return TextureData{key, hdr, img, false, {}, false, {}, false, {}};
+                return TextureData{key, hdr, img, false, false, {}, false, {}, false, {}};
         } catch (...) {}
         return std::nullopt;
     };
@@ -446,6 +446,7 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
                 "LodTextures: try rvmat texture stage='" + c + "' resolved='" + tex + "'");
         if (auto out = decode_texture_bytes(load_bytes(tex), mat_norm)) {
             out->has_material = material_result.has_material;
+            out->resolved_from_material = true;
             out->material = material_result.material;
             if (!best_nrm.empty()) {
                 auto nrm = resolve_relative(mat_used, best_nrm);
@@ -472,6 +473,7 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
         if (std::filesystem::path(tex).extension().empty()) {
             if (auto out = decode_texture_bytes(load_bytes(tex + ".paa"), mat_norm)) {
                 out->has_material = material_result.has_material;
+                out->resolved_from_material = true;
                 out->material = material_result.material;
                 if (!best_nrm.empty()) {
                     auto nrm = resolve_relative(mat_used, best_nrm);
@@ -493,6 +495,7 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
             }
             if (auto out = decode_texture_bytes(load_bytes(tex + ".pac"), mat_norm)) {
                 out->has_material = material_result.has_material;
+                out->resolved_from_material = true;
                 out->material = material_result.material;
                 if (!best_nrm.empty()) {
                     auto nrm = resolve_relative(mat_used, best_nrm);
@@ -523,4 +526,24 @@ std::optional<LodTexturesLoaderService::TextureData>
 LodTexturesLoaderService::load_texture(const std::string& texture_path) {
     if (texture_path.empty()) return std::nullopt;
     return load_single_texture(texture_path, "");
+}
+
+std::optional<LodTexturesLoaderService::TextureData>
+LodTexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path) {
+    if (entry_path.empty()) return std::nullopt;
+    auto normalized = armatools::armapath::to_slash_lower(entry_path);
+    const auto ext = std::filesystem::path(normalized).extension().string();
+
+    if (ext == ".rvmat") return load_single_material(entry_path, "");
+    if (ext == ".paa" || ext == ".pac") return load_single_texture(entry_path, "");
+
+    if (auto from_mat = load_single_material(entry_path, "")) return from_mat;
+    if (auto from_tex = load_single_texture(entry_path, "")) return from_tex;
+
+    if (ext.empty()) {
+        if (auto from_mat = load_single_material(entry_path + ".rvmat", "")) return from_mat;
+        if (auto from_tex = load_single_texture(entry_path + ".paa", "")) return from_tex;
+        if (auto from_tex = load_single_texture(entry_path + ".pac", "")) return from_tex;
+    }
+    return std::nullopt;
 }

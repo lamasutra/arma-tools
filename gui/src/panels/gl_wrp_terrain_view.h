@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <epoxy/gl.h>
@@ -26,6 +27,7 @@ public:
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
+    void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
 
 private:
@@ -35,7 +37,6 @@ private:
         float z = 0.0f;
         float h = 0.0f;
         float m = 0.0f;
-        float t = 0.0f;
         float sr = 0.3f;
         float sg = 0.3f;
         float sb = 0.3f;
@@ -76,7 +77,6 @@ private:
     int loc_hmin_terrain_ = -1;
     int loc_hmax_terrain_ = -1;
     int loc_mode_terrain_ = -1;
-    int loc_tmax_terrain_ = -1;
     int loc_mvp_points_ = -1;
     uint32_t terrain_vao_ = 0;
     uint32_t terrain_vbo_ = 0;
@@ -95,16 +95,30 @@ private:
     std::vector<std::array<float, 4>> texture_lookup_uvs_;
     GLuint texture_lookup_tex_ = 0;
     int texture_lookup_size_ = 0;
+    GLuint texture_index_tex_ = 0;
+    int texture_index_tex_w_ = 0;
+    int texture_index_tex_h_ = 0;
     float texture_world_scale_ = 32.0f;
     bool has_texture_atlas_ = false;
     bool has_texture_lookup_ = false;
+    bool has_texture_index_ = false;
     int loc_texture_atlas_ = -1;
     int loc_texture_lookup_ = -1;
+    int loc_texture_index_ = -1;
     int loc_texture_lookup_size_ = -1;
     int loc_texture_world_scale_ = -1;
+    int loc_texture_cell_size_ = -1;
+    int loc_texture_grid_w_ = -1;
+    int loc_texture_grid_h_ = -1;
     int loc_has_texture_atlas_ = -1;
     int loc_has_texture_lookup_ = -1;
+    int loc_has_texture_index_ = -1;
+    int loc_camera_xz_ = -1;
+    int loc_near_texture_distance_ = -1;
+    float near_texture_distance_ = 1500.0f;
     sigc::connection texture_rebuild_idle_;
+    std::vector<uint32_t> terrain_visible_indices_;
+    int terrain_visible_index_count_ = 0;
     // Gesture controllers.
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
@@ -121,6 +135,8 @@ private:
     bool move_fast_ = false;
     bool alt_pressed_ = false;
     std::function<void(size_t)> on_object_picked_;
+    std::function<void(const std::string&)> on_texture_debug_info_;
+    std::string last_texture_debug_info_;
     double click_press_x_ = 0.0;
     double click_press_y_ = 0.0;
 
@@ -136,6 +152,7 @@ private:
     void rebuild_terrain_buffers();
     void rebuild_object_buffers();
     void build_mvp(float* mvp) const;
+    void update_visible_terrain_indices(const float* mvp, const float* eye);
     void pick_object_at(double x, double y);
     void move_camera_local(float forward, float right);
     bool movement_tick();
@@ -143,6 +160,8 @@ private:
     void schedule_texture_rebuild();
     void upload_texture_atlas();
     void upload_texture_lookup();
+    void upload_texture_index();
     void cleanup_texture_atlas_gl();
     void cleanup_texture_lookup_gl();
+    void cleanup_texture_index_gl();
 };

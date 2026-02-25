@@ -14,6 +14,7 @@
 #include <limits>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -23,19 +24,16 @@ static constexpr const char* TERRAIN_VERT = R"(
 layout(location=0) in vec3 aPos;
 layout(location=1) in float aHeight;
 layout(location=2) in float aMask;
-layout(location=3) in float aTex;
-layout(location=4) in vec3 aSat;
+layout(location=3) in vec3 aSat;
 uniform mat4 uMVP;
 out float vHeight;
 out float vMask;
-out float vTex;
 out vec3 vSat;
 out vec2 vWorldXZ;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
     vHeight = aHeight;
     vMask = aMask;
-    vTex = aTex;
     vSat = aSat;
     vWorldXZ = vec2(aPos.x, aPos.z);
 }
@@ -45,19 +43,24 @@ static constexpr const char* TERRAIN_FRAG = R"(
 #version 330 core
 in float vHeight;
 in float vMask;
-in float vTex;
 in vec3 vSat;
 in vec2 vWorldXZ;
 uniform float uMinH;
 uniform float uMaxH;
 uniform int uMode;
-uniform float uTexMax;
 uniform sampler2D uTextureAtlas;
 uniform sampler2D uTextureLookup;
+uniform sampler2D uTextureIndex;
 uniform int uTextureLookupSize;
 uniform float uTextureWorldScale;
+uniform float uTextureCellSize;
+uniform int uTextureGridW;
+uniform int uTextureGridH;
 uniform bool uHasTextureAtlas;
 uniform bool uHasTextureLookup;
+uniform bool uHasTextureIndex;
+uniform vec2 uCameraXZ;
+uniform float uNearTextureDistance;
 out vec4 FragColor;
 vec3 hash_color(float n) {
     uint h = uint(max(n, 0.0));
@@ -78,9 +81,18 @@ void main() {
     } else if (uMode == 2) {
         vec3 tex_color = vec3(0.0);
         bool has_texture = false;
-        if (uHasTextureAtlas && uHasTextureLookup && uTextureLookupSize > 0) {
-            int desired = int(floor(vTex + 0.5));
-            desired = clamp(desired, 0, uTextureLookupSize - 1);
+        int desired = -1;
+        float camera_dist = distance(vWorldXZ, uCameraXZ);
+        if (uHasTextureIndex && uTextureGridW > 0 && uTextureGridH > 0) {
+            float cell = max(uTextureCellSize, 0.0001);
+            int gx = int(floor(vWorldXZ.x / cell));
+            int gz = int(floor(vWorldXZ.y / cell));
+            gx = clamp(gx, 0, uTextureGridW - 1);
+            gz = clamp(gz, 0, uTextureGridH - 1);
+            desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
+        }
+        if (camera_dist <= uNearTextureDistance
+            && uHasTextureAtlas && uHasTextureLookup && uTextureLookupSize > 0) {
             if (desired >= 0 && desired < uTextureLookupSize) {
                 vec4 slot = texelFetch(uTextureLookup, ivec2(desired, 0), 0);
                 if (slot.z > 0.0 && slot.w > 0.0) {
@@ -94,9 +106,11 @@ void main() {
         }
         if (has_texture) {
             c = tex_color;
+        } else if (desired >= 0 && desired < 65535) {
+            c = vSat;
         } else {
-            float idx = floor(vTex + 1.0);
-            c = hash_color(idx);
+            if (desired < 0) c = vec3(0.35, 0.0, 0.35);
+            else c = hash_color(float(desired + 1));
         }
     } else if (uMode == 1) {
         int cls = int(vMask + 0.5);
@@ -363,11 +377,15 @@ void GLWrpTerrainView::clear_world() {
     texture_atlas_pixels_.clear();
     texture_lookup_uvs_.clear();
     texture_lookup_size_ = 0;
+    texture_index_tex_w_ = 0;
+    texture_index_tex_h_ = 0;
     texture_world_scale_ = 32.0f;
     has_texture_atlas_ = false;
     has_texture_lookup_ = false;
+    has_texture_index_ = false;
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
+    cleanup_texture_index_gl();
     if (texture_rebuild_idle_) texture_rebuild_idle_.disconnect();
 
     heights_.clear();
@@ -691,6 +709,7 @@ void GLWrpTerrainView::set_texture_loader_service(
     if (!texture_loader_) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
+        cleanup_texture_index_gl();
         return;
     }
     if (color_mode_ == 2 && !texture_entries_.empty() && !texture_indices_.empty())
@@ -704,56 +723,75 @@ void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::T
     texture_atlas_pixels_.clear();
     atlas_width_ = atlas_height_ = 0;
     has_texture_atlas_ = false;
+    has_texture_index_ = false;
+    texture_index_tex_w_ = grid_w_;
+    texture_index_tex_h_ = grid_h_;
 
     if (!texture_loader_ || textures.empty() || texture_indices_.empty()) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
+        cleanup_texture_index_gl();
         return;
     }
 
-    std::unordered_set<int> unique_indices;
+    std::unordered_map<int, int> index_freq;
     for (float value : texture_indices_) {
-        int ti = static_cast<int>(std::floor(value + 0.5f));
+        const int ti = static_cast<int>(std::floor(value + 0.5f));
         if (ti < 0 || ti >= static_cast<int>(textures.size())) continue;
-        unique_indices.insert(ti);
+        index_freq[ti] += 1;
     }
-    if (unique_indices.empty()) {
+    if (index_freq.empty()) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
+        cleanup_texture_index_gl();
         return;
     }
-
-    std::vector<int> sorted(unique_indices.begin(), unique_indices.end());
-    std::sort(sorted.begin(), sorted.end());
+    std::vector<std::pair<int, int>> ranked;
+    ranked.reserve(index_freq.size());
+    for (const auto& kv : index_freq) ranked.push_back(kv);
+    std::sort(ranked.begin(), ranked.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.second != b.second) return a.second > b.second;
+                  return a.first < b.first;
+              });
+    static constexpr size_t kMaxAtlasTextures = 256;
+    if (ranked.size() > kMaxAtlasTextures) ranked.resize(kMaxAtlasTextures);
 
     struct AtlasEntry {
-        int index;
+        int index = -1;
         LodTexturesLoaderService::TextureData data;
     };
     std::vector<AtlasEntry> entries;
-    entries.reserve(sorted.size());
-    for (int idx : sorted) {
+    entries.reserve(ranked.size());
+    int resolved_paa_pac = 0;
+    int resolved_rvmat = 0;
+    int missing = 0;
+    for (const auto& it : ranked) {
+        const int idx = it.first;
         if (idx < 0 || idx >= static_cast<int>(textures.size())) continue;
         const auto& texture = textures[static_cast<std::size_t>(idx)];
-        if (texture.filename.empty()) continue;
-        if (auto data = texture_loader_->load_texture(texture.filename)) {
-            entries.emplace_back(AtlasEntry{idx, std::move(*data)});
+        if (texture.filename.empty()) {
+            missing++;
+            continue;
+        }
+        if (auto data = texture_loader_->load_terrain_texture_entry(texture.filename)) {
+            if (data->resolved_from_material) resolved_rvmat++;
+            else resolved_paa_pac++;
+            entries.push_back(AtlasEntry{idx, std::move(*data)});
+        } else {
+            missing++;
         }
     }
     if (entries.empty()) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
+        cleanup_texture_index_gl();
         return;
     }
 
-    int max_tex_width = 1;
-    int max_tex_height = 1;
-    for (const auto& entry : entries) {
-        max_tex_width = std::max(max_tex_width, entry.data.header.width);
-        max_tex_height = std::max(max_tex_height, entry.data.header.height);
-    }
-    int max_row_width = std::max(4096, max_tex_width);
-    struct Placement { int x; int y; };
+    static constexpr int kAtlasPadding = 2;
+    const int max_row_width = 4096;
+    struct Placement { int x = 0; int y = 0; };
     std::vector<Placement> placements;
     placements.reserve(entries.size());
     int x = 0;
@@ -761,26 +799,29 @@ void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::T
     int row_height = 0;
     int row_width_max = 0;
     for (const auto& entry : entries) {
-        int w = entry.data.header.width;
-        int h = entry.data.header.height;
+        const int w = entry.data.header.width;
+        const int h = entry.data.header.height;
         if (w <= 0 || h <= 0) continue;
-        if (x > 0 && (x + w > max_row_width)) {
+        const int packed_w = w + 2 * kAtlasPadding;
+        const int packed_h = h + 2 * kAtlasPadding;
+        if (x > 0 && (x + packed_w > max_row_width)) {
             row_width_max = std::max(row_width_max, x);
             x = 0;
             y += row_height;
             row_height = 0;
         }
         placements.push_back(Placement{x, y});
-        x += w;
-        row_height = std::max(row_height, h);
+        x += packed_w;
+        row_height = std::max(row_height, packed_h);
         row_width_max = std::max(row_width_max, x);
     }
     row_width_max = std::max(row_width_max, x);
-    int atlas_w = std::max(row_width_max, 1);
-    int atlas_h = y + row_height;
+    const int atlas_w = std::max(row_width_max, 1);
+    const int atlas_h = y + row_height;
     if (atlas_h <= 0) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
+        cleanup_texture_index_gl();
         return;
     }
 
@@ -788,40 +829,80 @@ void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::T
     int filled_entries = 0;
     for (size_t i = 0; i < entries.size() && i < placements.size(); ++i) {
         const auto& entry = entries[i];
-        int w = entry.data.header.width;
-        int h = entry.data.header.height;
+        const int w = entry.data.header.width;
+        const int h = entry.data.header.height;
         if (w <= 0 || h <= 0) continue;
-        int px = placements[i].x;
-        int py = placements[i].y;
+        const int px = placements[i].x;
+        const int py = placements[i].y;
+        const int dst_x = px + kAtlasPadding;
+        const int dst_y = py + kAtlasPadding;
         for (int row = 0; row < h; ++row) {
-            size_t dst = static_cast<size_t>((py + row) * atlas_w + px) * 4;
+            const size_t dst = static_cast<size_t>((dst_y + row) * atlas_w + dst_x) * 4u;
             const auto* src = entry.data.image.pixels.data()
-                + static_cast<size_t>(row) * static_cast<size_t>(w) * 4;
-            std::memcpy(texture_atlas_pixels_.data() + dst, src, static_cast<size_t>(w) * 4);
+                + static_cast<size_t>(row) * static_cast<size_t>(w) * 4u;
+            std::memcpy(texture_atlas_pixels_.data() + dst, src, static_cast<size_t>(w) * 4u);
         }
-        float off_x = static_cast<float>(px) / static_cast<float>(atlas_w);
-        float off_y = static_cast<float>(py) / static_cast<float>(atlas_h);
-        float scale_x = static_cast<float>(w) / static_cast<float>(atlas_w);
-        float scale_y = static_cast<float>(h) / static_cast<float>(atlas_h);
+
+        for (int row = 0; row < h; ++row) {
+            const size_t row_off = static_cast<size_t>(dst_y + row) * static_cast<size_t>(atlas_w);
+            const size_t left_src = (row_off + static_cast<size_t>(dst_x)) * 4u;
+            const size_t right_src = (row_off + static_cast<size_t>(dst_x + w - 1)) * 4u;
+            for (int pad = 1; pad <= kAtlasPadding; ++pad) {
+                std::memcpy(texture_atlas_pixels_.data() + (left_src - static_cast<size_t>(pad) * 4u),
+                            texture_atlas_pixels_.data() + left_src, 4u);
+                std::memcpy(texture_atlas_pixels_.data() + (right_src + static_cast<size_t>(pad) * 4u),
+                            texture_atlas_pixels_.data() + right_src, 4u);
+            }
+        }
+        for (int col = -kAtlasPadding; col < w + kAtlasPadding; ++col) {
+            const int sx = dst_x + col;
+            const size_t top_src = (static_cast<size_t>(dst_y) * static_cast<size_t>(atlas_w)
+                                   + static_cast<size_t>(sx)) * 4u;
+            const size_t bot_src = (static_cast<size_t>(dst_y + h - 1) * static_cast<size_t>(atlas_w)
+                                   + static_cast<size_t>(sx)) * 4u;
+            for (int pad = 1; pad <= kAtlasPadding; ++pad) {
+                const size_t top_dst = (static_cast<size_t>(dst_y - pad) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                const size_t bot_dst = (static_cast<size_t>(dst_y + h - 1 + pad) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                std::memcpy(texture_atlas_pixels_.data() + top_dst, texture_atlas_pixels_.data() + top_src, 4u);
+                std::memcpy(texture_atlas_pixels_.data() + bot_dst, texture_atlas_pixels_.data() + bot_src, 4u);
+            }
+        }
+
+        const float off_x = static_cast<float>(dst_x) / static_cast<float>(atlas_w);
+        const float off_y = static_cast<float>(dst_y) / static_cast<float>(atlas_h);
+        const float scale_x = static_cast<float>(w) / static_cast<float>(atlas_w);
+        const float scale_y = static_cast<float>(h) / static_cast<float>(atlas_h);
         if (entry.index >= 0 && entry.index < static_cast<int>(texture_lookup_uvs_.size())) {
             texture_lookup_uvs_[static_cast<std::size_t>(entry.index)] = {off_x, off_y, scale_x, scale_y};
             has_texture_lookup_ = true;
         }
         filled_entries++;
     }
+
     atlas_width_ = atlas_w;
     atlas_height_ = atlas_h;
     has_texture_atlas_ = !texture_atlas_pixels_.empty() && filled_entries > 0;
     texture_world_scale_ = std::max(cell_size_, 1.0f) * 8.0f;
+    has_texture_index_ = (texture_index_tex_w_ > 0 && texture_index_tex_h_ > 0
+                          && texture_indices_.size()
+                             >= static_cast<size_t>(texture_index_tex_w_) * static_cast<size_t>(texture_index_tex_h_));
     if (get_realized()) {
         upload_texture_atlas();
         upload_texture_lookup();
+        upload_texture_index();
     }
+
     std::ostringstream ss;
     ss << "GLWrpTerrainView: texture atlas built entries=" << filled_entries
-       << " lookup_size=" << texture_lookup_size_;
-    for (const auto& entry : entries)
-        ss << " idx" << entry.index;
+       << " lookup_size=" << texture_lookup_size_
+       << " total=" << textures.size()
+       << " unique_used=" << index_freq.size()
+       << " loaded_used=" << ranked.size()
+       << " resolved_paa_pac=" << resolved_paa_pac
+       << " resolved_rvmat=" << resolved_rvmat
+       << " missing=" << missing;
     app_log(LogLevel::Debug, ss.str());
 }
 
@@ -837,11 +918,10 @@ void GLWrpTerrainView::upload_texture_atlas() {
     glBindTexture(GL_TEXTURE_2D, texture_atlas_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlas_width_, atlas_height_, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, texture_atlas_pixels_.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
     has_texture_atlas_ = true;
 }
@@ -864,6 +944,27 @@ void GLWrpTerrainView::upload_texture_lookup() {
                  GL_RGBA, GL_FLOAT, texture_lookup_uvs_.data());
     glBindTexture(GL_TEXTURE_2D, 0);
     has_texture_lookup_ = true;
+}
+
+void GLWrpTerrainView::upload_texture_index() {
+    if (!get_realized() || texture_indices_.empty() || texture_index_tex_w_ <= 0 || texture_index_tex_h_ <= 0)
+        return;
+    make_current();
+    if (has_error()) return;
+    if (texture_index_tex_) {
+        glDeleteTextures(1, &texture_index_tex_);
+        texture_index_tex_ = 0;
+    }
+    glGenTextures(1, &texture_index_tex_);
+    glBindTexture(GL_TEXTURE_2D, texture_index_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, texture_index_tex_w_, texture_index_tex_h_, 0,
+                 GL_RED, GL_FLOAT, texture_indices_.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    has_texture_index_ = true;
 }
 
 void GLWrpTerrainView::cleanup_texture_atlas_gl() {
@@ -890,8 +991,28 @@ void GLWrpTerrainView::cleanup_texture_lookup_gl() {
     has_texture_lookup_ = false;
 }
 
+void GLWrpTerrainView::cleanup_texture_index_gl() {
+    if (texture_index_tex_ == 0) {
+        has_texture_index_ = false;
+        return;
+    }
+    if (!get_realized()) {
+        texture_index_tex_ = 0;
+        has_texture_index_ = false;
+        return;
+    }
+    make_current();
+    glDeleteTextures(1, &texture_index_tex_);
+    texture_index_tex_ = 0;
+    has_texture_index_ = false;
+}
+
 void GLWrpTerrainView::set_on_object_picked(std::function<void(size_t)> cb) {
     on_object_picked_ = std::move(cb);
+}
+
+void GLWrpTerrainView::set_on_texture_debug_info(std::function<void(const std::string&)> cb) {
+    on_texture_debug_info_ = std::move(cb);
 }
 
 void GLWrpTerrainView::on_realize_gl() {
@@ -917,13 +1038,19 @@ void GLWrpTerrainView::on_realize_gl() {
     loc_hmin_terrain_ = glGetUniformLocation(prog_terrain_, "uMinH");
     loc_hmax_terrain_ = glGetUniformLocation(prog_terrain_, "uMaxH");
     loc_mode_terrain_ = glGetUniformLocation(prog_terrain_, "uMode");
-    loc_tmax_terrain_ = glGetUniformLocation(prog_terrain_, "uTexMax");
     loc_texture_atlas_ = glGetUniformLocation(prog_terrain_, "uTextureAtlas");
     loc_texture_lookup_ = glGetUniformLocation(prog_terrain_, "uTextureLookup");
+    loc_texture_index_ = glGetUniformLocation(prog_terrain_, "uTextureIndex");
     loc_texture_lookup_size_ = glGetUniformLocation(prog_terrain_, "uTextureLookupSize");
     loc_texture_world_scale_ = glGetUniformLocation(prog_terrain_, "uTextureWorldScale");
+    loc_texture_cell_size_ = glGetUniformLocation(prog_terrain_, "uTextureCellSize");
+    loc_texture_grid_w_ = glGetUniformLocation(prog_terrain_, "uTextureGridW");
+    loc_texture_grid_h_ = glGetUniformLocation(prog_terrain_, "uTextureGridH");
     loc_has_texture_atlas_ = glGetUniformLocation(prog_terrain_, "uHasTextureAtlas");
     loc_has_texture_lookup_ = glGetUniformLocation(prog_terrain_, "uHasTextureLookup");
+    loc_has_texture_index_ = glGetUniformLocation(prog_terrain_, "uHasTextureIndex");
+    loc_camera_xz_ = glGetUniformLocation(prog_terrain_, "uCameraXZ");
+    loc_near_texture_distance_ = glGetUniformLocation(prog_terrain_, "uNearTextureDistance");
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
 
     glUseProgram(prog_terrain_);
@@ -931,6 +1058,8 @@ void GLWrpTerrainView::on_realize_gl() {
         glUniform1i(loc_texture_atlas_, 0);
     if (loc_texture_lookup_ >= 0)
         glUniform1i(loc_texture_lookup_, 1);
+    if (loc_texture_index_ >= 0)
+        glUniform1i(loc_texture_index_, 2);
     glUseProgram(0);
 
     glEnable(GL_DEPTH_TEST);
@@ -940,6 +1069,7 @@ void GLWrpTerrainView::on_realize_gl() {
     rebuild_object_buffers();
     upload_texture_atlas();
     upload_texture_lookup();
+    upload_texture_index();
 }
 
 void GLWrpTerrainView::on_unrealize_gl() {
@@ -954,16 +1084,24 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
 
     if (!prog_terrain_) return true;
 
+    const float eye[3] = {pivot_[0], pivot_[1] + distance_, pivot_[2]};
+
     float mvp[16];
     build_mvp(mvp);
+    update_visible_terrain_indices(mvp, eye);
 
-    if (terrain_vao_ && terrain_index_count_ > 0) {
+    if (terrain_vao_ && terrain_visible_index_count_ > 0) {
         glUseProgram(prog_terrain_);
         glUniformMatrix4fv(loc_mvp_terrain_, 1, GL_FALSE, mvp);
         glUniform1f(loc_hmin_terrain_, min_elevation_);
         glUniform1f(loc_hmax_terrain_, max_elevation_);
         glUniform1i(loc_mode_terrain_, color_mode_);
-        glUniform1f(loc_tmax_terrain_, texture_index_max_);
+        if (loc_camera_xz_ >= 0)
+            glUniform2f(loc_camera_xz_, eye[0], eye[2]);
+        if (loc_near_texture_distance_ >= 0) {
+            const float scaled = std::max(near_texture_distance_, cell_size_ * 16.0f);
+            glUniform1f(loc_near_texture_distance_, scaled);
+        }
         if (loc_has_texture_atlas_ >= 0)
             glUniform1i(loc_has_texture_atlas_, has_texture_atlas_ ? 1 : 0);
         glActiveTexture(GL_TEXTURE0);
@@ -978,13 +1116,27 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             glUniform1i(loc_texture_lookup_size_, texture_lookup_size_);
         if (loc_has_texture_lookup_ >= 0)
             glUniform1i(loc_has_texture_lookup_, has_texture_lookup_ ? 1 : 0);
+        if (loc_texture_index_ >= 0) {
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, has_texture_index_ ? texture_index_tex_ : 0);
+            glUniform1i(loc_texture_index_, 2);
+            glActiveTexture(GL_TEXTURE0);
+        }
+        if (loc_texture_cell_size_ >= 0)
+            glUniform1f(loc_texture_cell_size_, cell_size_);
+        if (loc_texture_grid_w_ >= 0)
+            glUniform1i(loc_texture_grid_w_, texture_index_tex_w_);
+        if (loc_texture_grid_h_ >= 0)
+            glUniform1i(loc_texture_grid_h_, texture_index_tex_h_);
+        if (loc_has_texture_index_ >= 0)
+            glUniform1i(loc_has_texture_index_, has_texture_index_ ? 1 : 0);
         if (loc_texture_world_scale_ >= 0)
             glUniform1f(loc_texture_world_scale_, texture_world_scale_);
         if (loc_texture_atlas_ >= 0)
             glUniform1i(loc_texture_atlas_, 0);
         glBindVertexArray(terrain_vao_);
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        glDrawElements(GL_TRIANGLES, terrain_index_count_, GL_UNSIGNED_INT, nullptr);
+        glDrawElements(GL_TRIANGLES, terrain_visible_index_count_, GL_UNSIGNED_INT, nullptr);
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
@@ -997,6 +1149,31 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
 
     glBindVertexArray(0);
     glUseProgram(0);
+
+    if (on_texture_debug_info_) {
+        std::string info;
+        if (color_mode_ == 2 && grid_w_ > 0 && grid_h_ > 0 && !texture_indices_.empty()) {
+            const int cx = std::clamp(static_cast<int>(std::floor(pivot_[0] / std::max(cell_size_, 0.0001f))),
+                                      0, grid_w_ - 1);
+            const int cz = std::clamp(static_cast<int>(std::floor(pivot_[2] / std::max(cell_size_, 0.0001f))),
+                                      0, grid_h_ - 1);
+            const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(grid_w_) + static_cast<size_t>(cx);
+            const int ti = (cidx < texture_indices_.size())
+                ? static_cast<int>(std::floor(texture_indices_[cidx] + 0.5f)) : -1;
+            std::string state = "invalid";
+            if (ti >= 0 && ti < texture_lookup_size_ && ti < static_cast<int>(texture_lookup_uvs_.size())) {
+                const auto& slot = texture_lookup_uvs_[static_cast<size_t>(ti)];
+                state = (slot[2] > 0.0f && slot[3] > 0.0f) ? "resolved" : "missing";
+            }
+            std::ostringstream ss;
+            ss << "Cell[" << cx << "," << cz << "] idx=" << ti << " slot=" << state;
+            info = ss.str();
+        }
+        if (info != last_texture_debug_info_) {
+            last_texture_debug_info_ = info;
+            on_texture_debug_info_(info);
+        }
+    }
     return true;
 }
 
@@ -1005,6 +1182,7 @@ void GLWrpTerrainView::cleanup_gl() {
     if (terrain_vbo_) { glDeleteBuffers(1, &terrain_vbo_); terrain_vbo_ = 0; }
     if (terrain_ebo_) { glDeleteBuffers(1, &terrain_ebo_); terrain_ebo_ = 0; }
     terrain_index_count_ = 0;
+    terrain_visible_index_count_ = 0;
 
     if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
     if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
@@ -1014,6 +1192,7 @@ void GLWrpTerrainView::cleanup_gl() {
     if (prog_points_) { glDeleteProgram(prog_points_); prog_points_ = 0; }
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
+    cleanup_texture_index_gl();
 }
 
 uint32_t GLWrpTerrainView::compile_shader(uint32_t type, const char* src) {
@@ -1063,9 +1242,9 @@ void GLWrpTerrainView::rebuild_terrain_buffers() {
             const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
             const float h = idx < heights_.size() ? heights_[idx] : 0.0f;
             const float m = idx < surface_classes_.size() ? surface_classes_[idx] : 0.0f;
-            const float t = idx < texture_indices_.size() ? texture_indices_[idx] : 0.0f;
             float sr = 0.30f, sg = 0.30f, sb = 0.30f;
-            const int ti = static_cast<int>(t);
+            const float t = idx < texture_indices_.size() ? texture_indices_[idx] : 0.0f;
+            const int ti = static_cast<int>(std::floor(t + 0.5f));
             if (ti >= 0 && static_cast<size_t>(ti) < satellite_palette_.size()) {
                 sr = satellite_palette_[static_cast<size_t>(ti)][0];
                 sg = satellite_palette_[static_cast<size_t>(ti)][1];
@@ -1077,7 +1256,6 @@ void GLWrpTerrainView::rebuild_terrain_buffers() {
                 static_cast<float>(z) * cell_size_,
                 h,
                 m,
-                t,
                 sr, sg, sb});
         }
     }
@@ -1095,6 +1273,8 @@ void GLWrpTerrainView::rebuild_terrain_buffers() {
         }
     }
     terrain_index_count_ = static_cast<int>(indices.size());
+    terrain_visible_indices_ = indices;
+    terrain_visible_index_count_ = terrain_index_count_;
 
     glGenVertexArrays(1, &terrain_vao_);
     glGenBuffers(1, &terrain_vbo_);
@@ -1118,12 +1298,69 @@ void GLWrpTerrainView::rebuild_terrain_buffers() {
     glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<void*>(4 * sizeof(float)));
     glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<void*>(5 * sizeof(float)));
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<void*>(6 * sizeof(float)));
     glBindVertexArray(0);
+}
+
+void GLWrpTerrainView::update_visible_terrain_indices(const float* mvp, const float* eye) {
+    if (grid_w_ <= 1 || grid_h_ <= 1 || heights_.empty() || terrain_ebo_ == 0) {
+        terrain_visible_index_count_ = 0;
+        return;
+    }
+
+    terrain_visible_indices_.clear();
+    terrain_visible_indices_.reserve(static_cast<size_t>(grid_w_ - 1) * static_cast<size_t>(grid_h_ - 1) * 3);
+    const float max_dist = std::max(distance_ * 3.0f, cell_size_ * 48.0f);
+    const float max_dist2 = max_dist * max_dist;
+    const float cull_margin = 1.2f;
+
+    for (int z = 0; z < grid_h_ - 1; ++z) {
+        for (int x = 0; x < grid_w_ - 1; ++x) {
+            const float wx = (static_cast<float>(x) + 0.5f) * cell_size_;
+            const float wz = (static_cast<float>(z) + 0.5f) * cell_size_;
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
+            const float wy = (idx < heights_.size()) ? heights_[idx] : pivot_[1];
+            const float dx = wx - eye[0];
+            const float dy = wy - eye[1];
+            const float dz = wz - eye[2];
+            if ((dx * dx + dy * dy + dz * dz) > max_dist2)
+                continue;
+
+            const float clip_x = mvp[0] * wx + mvp[4] * wy + mvp[8] * wz + mvp[12];
+            const float clip_y = mvp[1] * wx + mvp[5] * wy + mvp[9] * wz + mvp[13];
+            const float clip_z = mvp[2] * wx + mvp[6] * wy + mvp[10] * wz + mvp[14];
+            const float clip_w = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15];
+            if (clip_w <= 0.0001f)
+                continue;
+            const float ndc_x = clip_x / clip_w;
+            const float ndc_y = clip_y / clip_w;
+            const float ndc_z = clip_z / clip_w;
+            if (ndc_x < -cull_margin || ndc_x > cull_margin
+                || ndc_y < -cull_margin || ndc_y > cull_margin
+                || ndc_z < -cull_margin || ndc_z > cull_margin) {
+                continue;
+            }
+
+            const uint32_t i00 = static_cast<uint32_t>(z * grid_w_ + x);
+            const uint32_t i10 = static_cast<uint32_t>(z * grid_w_ + (x + 1));
+            const uint32_t i01 = static_cast<uint32_t>((z + 1) * grid_w_ + x);
+            const uint32_t i11 = static_cast<uint32_t>((z + 1) * grid_w_ + (x + 1));
+            terrain_visible_indices_.push_back(i00);
+            terrain_visible_indices_.push_back(i01);
+            terrain_visible_indices_.push_back(i10);
+            terrain_visible_indices_.push_back(i10);
+            terrain_visible_indices_.push_back(i01);
+            terrain_visible_indices_.push_back(i11);
+        }
+    }
+
+    terrain_visible_index_count_ = static_cast<int>(terrain_visible_indices_.size());
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrain_ebo_);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(terrain_visible_indices_.size() * sizeof(uint32_t)),
+                 terrain_visible_indices_.empty() ? nullptr : terrain_visible_indices_.data(),
+                 GL_DYNAMIC_DRAW);
 }
 
 void GLWrpTerrainView::rebuild_object_buffers() {

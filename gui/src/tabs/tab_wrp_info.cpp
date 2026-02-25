@@ -130,7 +130,15 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_box_.append(terrain3d_toolbar_);
     terrain3d_view_.set_hexpand(true);
     terrain3d_view_.set_vexpand(true);
-    terrain3d_box_.append(terrain3d_view_);
+    terrain3d_overlay_.set_child(terrain3d_view_);
+    terrain3d_debug_overlay_.set_halign(Gtk::Align::START);
+    terrain3d_debug_overlay_.set_valign(Gtk::Align::START);
+    terrain3d_debug_overlay_.set_margin(8);
+    terrain3d_debug_overlay_.set_text("");
+    terrain3d_debug_overlay_.set_visible(false);
+    terrain3d_debug_overlay_.add_css_class("caption");
+    terrain3d_overlay_.add_overlay(terrain3d_debug_overlay_);
+    terrain3d_box_.append(terrain3d_overlay_);
     right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
 
     set_end_child(right_notebook_);
@@ -167,6 +175,10 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             ensure_satellite_palette_loaded();
         }
         else terrain3d_view_.set_color_mode(0);
+        if (id != "texture") {
+            terrain3d_debug_overlay_.set_text("");
+            terrain3d_debug_overlay_.set_visible(false);
+        }
     });
     terrain3d_view_.set_on_object_picked([this](size_t idx) {
         if (!world_data_ || idx >= world_data_->objects.size()) return;
@@ -175,6 +187,15 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         ss << "Object #" << idx << ": " << obj.model_name
            << " @ [" << obj.position[0] << ", " << obj.position[1] << ", " << obj.position[2] << "]";
         terrain3d_status_label_.set_text(ss.str());
+    });
+    terrain3d_view_.set_on_texture_debug_info([this](const std::string& text) {
+        if (text.empty() || terrain3d_mode_combo_.get_active_id() != "texture") {
+            terrain3d_debug_overlay_.set_text("");
+            terrain3d_debug_overlay_.set_visible(false);
+            return;
+        }
+        terrain3d_debug_overlay_.set_text(text);
+        terrain3d_debug_overlay_.set_visible(true);
     });
     right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
         if (page_num == 1) ensure_objects_loaded();
