@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/tab_config_presenter.h"
 #include "config.h"
 #include "log_panel.h"
 #include "tab_about.h"
@@ -26,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 struct Services {
     std::shared_ptr<PboIndexService> pbo_index_service;
@@ -56,6 +58,7 @@ private:
     Config cfg_;
     LayoutConfig layout_cfg_;
     Services services_;
+    TabConfigPresenter tab_config_presenter_;
 
     // The libpanel workbench manages multiple workspace windows (tear-off)
     PanelWorkbench* workbench_ = nullptr;
@@ -95,10 +98,15 @@ private:
     // Add a panel to the workspace at the given position
     void add_panel(Gtk::Widget& content, const char* id,
                    const char* title, const char* icon_name,
-                   PanelArea area);
+                   PanelArea area,
+                   bool simple_panel = false);
+
+    // Lookup helper for panel catalog descriptors.
+    Gtk::Widget* panel_content_by_id(std::string_view panel_id);
 
     // Reload config from disk and re-apply to all tabs
     void reload_config();
+    void register_tab_config_presenter();
     void init_tabs_lazy();
 
     // Session save/restore
@@ -114,18 +122,4 @@ private:
 
     // Unparent gtkmm widgets from PanelWidgets so they survive GTK teardown
     void detach_all_panels();
-
-    bool tab_config_inited_ = false;
-    bool tab_asset_browser_inited_ = false;
-    bool tab_pbo_inited_ = false;
-    bool tab_audio_inited_ = false;
-    bool tab_ogg_validate_inited_ = false;
-    bool tab_conversions_inited_ = false;
-    bool tab_obj_replace_inited_ = false;
-    bool tab_wrp_info_inited_ = false;
-    bool tab_wrp_project_inited_ = false;
-    bool tab_p3d_convert_inited_ = false;
-    bool tab_p3d_info_inited_ = false;
-    bool tab_paa_preview_inited_ = false;
-    bool tab_config_viewer_inited_ = false;
 };

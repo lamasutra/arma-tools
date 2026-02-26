@@ -24,3 +24,10 @@ add_dependencies(ir2mlod_roundtrip_tests ir2mlod mlod2ir)
 target_compile_definitions(ir2mlod_roundtrip_tests PRIVATE
     ARMATOOLS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     ARMATOOLS_BINARY_DIR="${CMAKE_BINARY_DIR}")
+
+armatools_add_test(gui_tab_config_presenter_tests
+    gui_tab_config_presenter_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/tab_config_presenter.cpp)
+target_include_directories(gui_tab_config_presenter_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src
+    ${CMAKE_SOURCE_DIR}/gui/src/core)

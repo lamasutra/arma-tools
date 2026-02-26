@@ -1,11 +1,11 @@
 #include "app_window.h"
+#include "app/default_panel_catalog.h"
+#include "cli_logger.h"
 #include "dockable_panel.h"
 #include "panel_wrapper.h"
 #include "pbo_index_service.h"
-#include "cli_logger.h"
 
 #include <adwaita.h>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <fstream>
@@ -148,14 +148,47 @@ static void hook_tab_views_for_tearoff(GtkWidget* dock_or_grid, AppWindow* self)
 // ---------------------------------------------------------------------------
 // Helper: add a panel to the workspace
 // ---------------------------------------------------------------------------
+static PanelArea to_panel_area(DockArea area) {
+    switch (area) {
+        case DockArea::Center: return PANEL_AREA_CENTER;
+        case DockArea::Bottom: return PANEL_AREA_BOTTOM;
+        case DockArea::Start: return PANEL_AREA_START;
+        case DockArea::End: return PANEL_AREA_END;
+        case DockArea::Top: return PANEL_AREA_TOP;
+    }
+    return PANEL_AREA_CENTER;
+}
+
 void AppWindow::add_panel(Gtk::Widget& content, const char* id,
                           const char* title, const char* icon_name,
-                          PanelArea area) {
-    auto* pw = create_dockable_panel({id, title, icon_name, &content});
+                          PanelArea area,
+                          bool simple_panel) {
+    auto* pw = simple_panel
+        ? create_simple_panel({id, title, icon_name, &content})
+        : create_dockable_panel({id, title, icon_name, &content});
     panels_[id] = pw;
 
     auto pos = panel::make_position(area);
     panel_document_workspace_add_widget(workspace_, pw, pos.get());
+}
+
+Gtk::Widget* AppWindow::panel_content_by_id(std::string_view panel_id) {
+    if (panel_id == "asset-browser") return &tab_asset_browser_;
+    if (panel_id == "pbo-browser") return &tab_pbo_;
+    if (panel_id == "p3d-info") return &tab_p3d_info_;
+    if (panel_id == "p3d-convert") return &tab_p3d_convert_;
+    if (panel_id == "paa-preview") return &tab_paa_preview_;
+    if (panel_id == "config-viewer") return &tab_config_viewer_;
+    if (panel_id == "audio") return &tab_audio_;
+    if (panel_id == "ogg-validate") return &tab_ogg_validate_;
+    if (panel_id == "conversions") return &tab_conversions_;
+    if (panel_id == "obj-replace") return &tab_obj_replace_;
+    if (panel_id == "wrp-info") return &tab_wrp_info_;
+    if (panel_id == "wrp-project") return &tab_wrp_project_;
+    if (panel_id == "config") return &tab_config_;
+    if (panel_id == "about") return &tab_about_;
+    if (panel_id == "log") return &log_panel_;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,75 +215,58 @@ void AppWindow::reload_config() {
     cfg_ = load_config();
     layout_cfg_ = load_layout_config();
     armatools::cli::log_verbose("Configuration reloaded from {}", config_path());
-    // if (services_.pbo_index_service)
-    //     services_.pbo_index_service->set_db_path(cfg_.a3db_path);
-    // } else {
-    //     services_.pbo_index_service = std::make_shared<PboIndexService>();
-    // }
-
-    if (tab_config_inited_) tab_config_.set_config(&cfg_);
-    if (tab_asset_browser_inited_) tab_asset_browser_.set_config(&cfg_);
-    if (tab_pbo_inited_) tab_pbo_.set_config(&cfg_);
-    if (tab_audio_inited_) tab_audio_.set_config(&cfg_);
-    if (tab_ogg_validate_inited_) tab_ogg_validate_.set_config(&cfg_);
-    if (tab_conversions_inited_) tab_conversions_.set_config(&cfg_);
-    if (tab_obj_replace_inited_) tab_obj_replace_.set_config(&cfg_);
-    if (tab_wrp_info_inited_) tab_wrp_info_.set_config(&cfg_);
-    if (tab_wrp_project_inited_) tab_wrp_project_.set_config(&cfg_);
-    if (tab_p3d_convert_inited_) tab_p3d_convert_.set_config(&cfg_);
-    if (tab_p3d_info_inited_) tab_p3d_info_.set_config(&cfg_);
-    if (tab_paa_preview_inited_) tab_paa_preview_.set_config(&cfg_);
-    if (tab_config_viewer_inited_) tab_config_viewer_.set_config(&cfg_);
-
+    tab_config_presenter_.apply_to_initialized(&cfg_);
     update_status("Configuration reloaded");
 }
 
+void AppWindow::register_tab_config_presenter() {
+    tab_config_presenter_.register_tab("config", [this](Config* cfg) { tab_config_.set_config(cfg); });
+    tab_config_presenter_.register_tab("asset-browser", [this](Config* cfg) { tab_asset_browser_.set_config(cfg); });
+    tab_config_presenter_.register_tab("pbo-browser", [this](Config* cfg) { tab_pbo_.set_config(cfg); });
+    tab_config_presenter_.register_tab("audio", [this](Config* cfg) { tab_audio_.set_config(cfg); });
+    tab_config_presenter_.register_tab("ogg-validate", [this](Config* cfg) { tab_ogg_validate_.set_config(cfg); });
+    tab_config_presenter_.register_tab("conversions", [this](Config* cfg) { tab_conversions_.set_config(cfg); });
+    tab_config_presenter_.register_tab("obj-replace", [this](Config* cfg) { tab_obj_replace_.set_config(cfg); });
+    tab_config_presenter_.register_tab("wrp-info", [this](Config* cfg) { tab_wrp_info_.set_config(cfg); });
+    tab_config_presenter_.register_tab("wrp-project", [this](Config* cfg) { tab_wrp_project_.set_config(cfg); });
+    tab_config_presenter_.register_tab("p3d-convert", [this](Config* cfg) { tab_p3d_convert_.set_config(cfg); });
+    tab_config_presenter_.register_tab("p3d-info", [this](Config* cfg) { tab_p3d_info_.set_config(cfg); });
+    tab_config_presenter_.register_tab("paa-preview", [this](Config* cfg) { tab_paa_preview_.set_config(cfg); });
+    tab_config_presenter_.register_tab("config-viewer", [this](Config* cfg) { tab_config_viewer_.set_config(cfg); });
+}
+
 void AppWindow::init_tabs_lazy() {
-    auto hook_lazy = [this](Gtk::Widget& widget, bool& inited,
-                            std::function<void()> init_fn) {
-        auto maybe_init = [this, &widget, &inited, init_fn]() {
-            if (inited) return;
+    auto hook_lazy = [this](Gtk::Widget& widget, const char* tab_id) {
+        const std::string id(tab_id);
+        auto maybe_init = [this, &widget, id]() {
+            if (tab_config_presenter_.is_initialized(id)) return;
             if (!gtk_widget_get_mapped(widget.gobj())) return;
             if (!gtk_widget_get_child_visible(widget.gobj())) return;
-            inited = true;
-            init_fn();
+            tab_config_presenter_.ensure_initialized(id, &cfg_);
         };
         widget.signal_map().connect(maybe_init);
         Glib::signal_timeout().connect(
-            [maybe_init, &inited]() -> bool {
-                if (inited) return false;
+            [this, maybe_init, id]() -> bool {
+                if (tab_config_presenter_.is_initialized(id)) return false;
                 maybe_init();
-                return !inited;
+                return !tab_config_presenter_.is_initialized(id);
             },
             150);
     };
 
-    hook_lazy(tab_config_, tab_config_inited_,
-              [this]() { tab_config_.set_config(&cfg_); });
-    hook_lazy(tab_asset_browser_, tab_asset_browser_inited_,
-              [this]() { tab_asset_browser_.set_config(&cfg_); });
-    hook_lazy(tab_pbo_, tab_pbo_inited_,
-              [this]() { tab_pbo_.set_config(&cfg_); });
-    hook_lazy(tab_audio_, tab_audio_inited_,
-              [this]() { tab_audio_.set_config(&cfg_); });
-    hook_lazy(tab_ogg_validate_, tab_ogg_validate_inited_,
-              [this]() { tab_ogg_validate_.set_config(&cfg_); });
-    hook_lazy(tab_conversions_, tab_conversions_inited_,
-              [this]() { tab_conversions_.set_config(&cfg_); });
-    hook_lazy(tab_obj_replace_, tab_obj_replace_inited_,
-              [this]() { tab_obj_replace_.set_config(&cfg_); });
-    hook_lazy(tab_wrp_info_, tab_wrp_info_inited_,
-              [this]() { tab_wrp_info_.set_config(&cfg_); });
-    hook_lazy(tab_wrp_project_, tab_wrp_project_inited_,
-              [this]() { tab_wrp_project_.set_config(&cfg_); });
-    hook_lazy(tab_p3d_convert_, tab_p3d_convert_inited_,
-              [this]() { tab_p3d_convert_.set_config(&cfg_); });
-    hook_lazy(tab_p3d_info_, tab_p3d_info_inited_,
-              [this]() { tab_p3d_info_.set_config(&cfg_); });
-    hook_lazy(tab_paa_preview_, tab_paa_preview_inited_,
-              [this]() { tab_paa_preview_.set_config(&cfg_); });
-    hook_lazy(tab_config_viewer_, tab_config_viewer_inited_,
-              [this]() { tab_config_viewer_.set_config(&cfg_); });
+    hook_lazy(tab_config_, "config");
+    hook_lazy(tab_asset_browser_, "asset-browser");
+    hook_lazy(tab_pbo_, "pbo-browser");
+    hook_lazy(tab_audio_, "audio");
+    hook_lazy(tab_ogg_validate_, "ogg-validate");
+    hook_lazy(tab_conversions_, "conversions");
+    hook_lazy(tab_obj_replace_, "obj-replace");
+    hook_lazy(tab_wrp_info_, "wrp-info");
+    hook_lazy(tab_wrp_project_, "wrp-project");
+    hook_lazy(tab_p3d_convert_, "p3d-convert");
+    hook_lazy(tab_p3d_info_, "p3d-info");
+    hook_lazy(tab_paa_preview_, "paa-preview");
+    hook_lazy(tab_config_viewer_, "config-viewer");
 }
 
 // ---------------------------------------------------------------------------
@@ -372,27 +388,17 @@ void AppWindow::restore_layout() {
 }
 
 void AppWindow::apply_default_layout() {
-    // Add panels as tabs in the center grid
-    add_panel(tab_asset_browser_,  "asset-browser",  "Asset Browser",  "system-file-manager-symbolic",  PANEL_AREA_CENTER);
-    add_panel(tab_pbo_,            "pbo-browser",    "PBO Browser",    "package-x-generic-symbolic",    PANEL_AREA_CENTER);
-    add_panel(tab_p3d_info_,       "p3d-info",       "P3D Info",       "emblem-system-symbolic",        PANEL_AREA_CENTER);
-    add_panel(tab_p3d_convert_,    "p3d-convert",    "P3D Convert",    "emblem-synchronizing-symbolic", PANEL_AREA_CENTER);
-    add_panel(tab_paa_preview_,    "paa-preview",    "PAA Preview",    "image-x-generic-symbolic",      PANEL_AREA_CENTER);
-    add_panel(tab_config_viewer_,  "config-viewer",  "Config Viewer",  "text-x-generic-symbolic",       PANEL_AREA_CENTER);
-    add_panel(tab_audio_,          "audio",          "Audio",          "audio-x-generic-symbolic",      PANEL_AREA_CENTER);
-    add_panel(tab_ogg_validate_,   "ogg-validate",   "OGG Validate",   "dialog-warning-symbolic",       PANEL_AREA_CENTER);
-    add_panel(tab_conversions_,    "conversions",    "Conversions",    "document-save-as-symbolic",     PANEL_AREA_CENTER);
-    add_panel(tab_obj_replace_,    "obj-replace",    "Obj Replace",    "edit-find-replace-symbolic",    PANEL_AREA_CENTER);
-    add_panel(tab_wrp_info_,       "wrp-info",       "WRP Info",       "x-office-address-book-symbolic", PANEL_AREA_CENTER);
-    add_panel(tab_wrp_project_,    "wrp-project",    "WRP Project",    "folder-new-symbolic",           PANEL_AREA_CENTER);
-    add_panel(tab_config_,         "config",         "Configuration",  "preferences-system-symbolic",   PANEL_AREA_CENTER);
-
-    // About tab last, pinned (cannot be moved or closed)
-    add_panel(tab_about_,          "about",          "About",          "help-about-symbolic",           PANEL_AREA_CENTER);
-    pin_panel("about");
-
-    // Log panel in the bottom dock area
-    add_panel(log_panel_,          "log",            "Log",            "utilities-terminal-symbolic",   PANEL_AREA_BOTTOM);
+    for (const auto& descriptor : default_panel_catalog()) {
+        auto* content = panel_content_by_id(descriptor.id);
+        if (!content) continue;
+        add_panel(*content,
+                  descriptor.id,
+                  descriptor.title,
+                  descriptor.icon_name,
+                  to_panel_area(descriptor.area),
+                  descriptor.simple_panel);
+        if (descriptor.pinned) pin_panel(descriptor.id);
+    }
 }
 
 void AppWindow::on_reset_layout() {
@@ -591,6 +597,7 @@ AppWindow::AppWindow(GtkApplication* app) {
 
     app_log(LogLevel::Info, "Application started");
     app_log(LogLevel::Info, "Configuration loaded from " + config_path());
+    register_tab_config_presenter();
 
     tab_asset_browser_.set_pbo_index_service(services_.pbo_index_service);
     tab_pbo_.set_pbo_index_service(services_.pbo_index_service);
@@ -602,10 +609,7 @@ AppWindow::AppWindow(GtkApplication* app) {
     tab_paa_preview_.set_pbo_index_service(services_.pbo_index_service);
     tab_wrp_info_.set_on_open_p3d_info([this](const std::string& model_path) {
         if (model_path.empty()) return;
-        if (!tab_p3d_info_inited_) {
-            tab_p3d_info_.set_config(&cfg_);
-            tab_p3d_info_inited_ = true;
-        }
+        tab_config_presenter_.ensure_initialized("p3d-info", &cfg_);
         tab_p3d_info_.open_model_path(model_path);
         auto it = panels_.find("p3d-info");
         if (it != panels_.end() && it->second)
@@ -649,28 +653,14 @@ AppWindow::AppWindow(GtkApplication* app) {
 
     // Restore layout or apply default
     if (!layout_cfg_.panels.empty()) {
-        // First create all panels (unparented) so we can look them up by id
-        auto create_pw = [this](Gtk::Widget& w, const char* id, const char* title, const char* icon) {
-            auto* pw = create_dockable_panel({id, title, icon, &w});
-            panels_[id] = pw;
-        };
-
-        create_pw(tab_asset_browser_,  "asset-browser",  "Asset Browser",  "system-file-manager-symbolic");
-        create_pw(tab_pbo_,            "pbo-browser",    "PBO Browser",    "package-x-generic-symbolic");
-        create_pw(tab_p3d_info_,       "p3d-info",       "P3D Info",       "emblem-system-symbolic");
-        create_pw(tab_p3d_convert_,    "p3d-convert",    "P3D Convert",    "emblem-synchronizing-symbolic");
-        create_pw(tab_paa_preview_,    "paa-preview",    "PAA Preview",    "image-x-generic-symbolic");
-        create_pw(tab_config_viewer_,  "config-viewer",  "Config Viewer",  "text-x-generic-symbolic");
-        create_pw(tab_audio_,          "audio",          "Audio",          "audio-x-generic-symbolic");
-        create_pw(tab_ogg_validate_,   "ogg-validate",   "OGG Validate",   "dialog-warning-symbolic");
-        create_pw(tab_conversions_,    "conversions",    "Conversions",    "document-save-as-symbolic");
-        create_pw(tab_obj_replace_,    "obj-replace",    "Obj Replace",    "edit-find-replace-symbolic");
-        create_pw(tab_wrp_info_,       "wrp-info",       "WRP Info",       "x-office-address-book-symbolic");
-        create_pw(tab_wrp_project_,    "wrp-project",    "WRP Project",    "folder-new-symbolic");
-        create_pw(tab_config_,         "config",         "Configuration",  "preferences-system-symbolic");
-        create_pw(log_panel_,          "log",            "Log",            "utilities-terminal-symbolic");
-        // create_pw(tab_about_,          "about",          "About",          "help-about-symbolic");
-        panels_["about"] = create_simple_panel({"about", "About", "help-about-symbolic", &tab_about_});
+        // First create all panels (unparented) so restore can place by id.
+        for (const auto& descriptor : default_panel_catalog()) {
+            auto* content = panel_content_by_id(descriptor.id);
+            if (!content) continue;
+            panels_[descriptor.id] = descriptor.simple_panel
+                ? create_simple_panel({descriptor.id, descriptor.title, descriptor.icon_name, content})
+                : create_dockable_panel({descriptor.id, descriptor.title, descriptor.icon_name, content});
+        }
         restore_layout();
     } else {
         apply_default_layout();
