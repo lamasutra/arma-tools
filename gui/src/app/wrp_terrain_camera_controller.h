@@ -4,10 +4,14 @@
 
 class WrpTerrainCameraController {
 public:
+    using CameraMode = wrpterrain::CameraMode;
     using CameraState = wrpterrain::CameraState;
 
     [[nodiscard]] CameraState camera_state() const;
     void set_camera_state(const CameraState& state);
+
+    [[nodiscard]] CameraMode camera_mode() const;
+    [[nodiscard]] bool set_camera_mode(CameraMode mode);
 
     void set_world_defaults(float world_size_x, float world_size_z,
                             float min_elevation, float max_elevation);
@@ -28,4 +32,7 @@ private:
     float azimuth_ = 0.5f;
     float elevation_ = 0.8f;
     float distance_ = 500.0f;
+    CameraMode camera_mode_ = CameraMode::Orbit;
+    float default_center_[3] = {0.0f, 0.0f, 0.0f};
+    bool has_default_center_ = false;
 };

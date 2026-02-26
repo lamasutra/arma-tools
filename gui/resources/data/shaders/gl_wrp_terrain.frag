@@ -3,6 +3,7 @@ in float vHeight;
 in float vMask;
 in vec3 vSat;
 in vec2 vWorldXZ;
+in vec3 vNormalWS;
 uniform float uMinH;
 uniform float uMaxH;
 uniform int uMode;
@@ -40,6 +41,9 @@ uniform float uTileCellSize;
 uniform int uPatchLod;
 uniform int uSamplerCount;
 uniform int uDebugMode;
+uniform int uSeamDebugMode;
+uniform float uTerrainMaxZ;
+uniform bool uFlipTerrainZ;
 out vec4 FragColor;
 
 #ifndef SURFACE_CAP
@@ -102,6 +106,7 @@ vec3 decode_normal(vec3 packed_n) {
 }
 
 void main() {
+    vec3 base_normal = normalize(vNormalWS);
     vec3 c;
     if (uMode == 3) {
         c = vSat;
@@ -109,10 +114,12 @@ void main() {
         vec3 tex_color = vSat;
         int desired = -1;
         float camera_dist = distance(vWorldXZ, uCameraXZ);
+        float lookup_z = uFlipTerrainZ ? (uTerrainMaxZ - vWorldXZ.y) : vWorldXZ.y;
+        vec2 lookup_xz = vec2(vWorldXZ.x, lookup_z);
         if (uHasTextureIndex && uTextureGridW > 0 && uTextureGridH > 0) {
             float cell = max(uTextureCellSize, 0.0001);
-            int gx = int(floor(vWorldXZ.x / cell));
-            int gz = int(floor(vWorldXZ.y / cell));
+            int gx = int(floor(lookup_xz.x / cell));
+            int gz = int(floor(lookup_xz.y / cell));
             gx = clamp(gx, 0, uTextureGridW - 1);
             gz = clamp(gz, 0, uTextureGridH - 1);
             desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
@@ -120,7 +127,7 @@ void main() {
 
         int lookup_w = textureSize(uMaterialLookup, 0).x;
         if (uHasMaterialLookup && desired >= 0 && desired < lookup_w) {
-            vec2 world_uv = vWorldXZ / max(uTextureCellSize, 0.0001);
+            vec2 world_uv = lookup_xz / max(uTextureCellSize, 0.0001);
             vec2 uv_sat = world_uv;
             vec2 uv_mask = world_uv;
             vec2 uv_tex0 = world_uv * 0.35;
@@ -142,7 +149,7 @@ void main() {
                 float wsum = max(dot(weights, vec4(1.0)), 0.0001);
                 weights /= wsum;
                 vec3 near_color = vec3(0.0);
-                vec3 near_normal = vec3(0.0, 1.0, 0.0);
+                vec3 near_normal = base_normal;
                 for (int i = 0; i < SURFACE_CAP; ++i) {
                     if (i >= surface_count) break;
                     int row_base = 3 + i * 3;
@@ -156,10 +163,11 @@ void main() {
                     vec3 sampled_macro = sample_slot(2 + i * 3 + 0, macro_slot, uv_tex0).rgb;
                     if (macro_slot.z > 0.0 && macro_slot.w > 0.0) macro = sampled_macro;
 #endif
-                    vec3 nrm = vec3(0.0, 1.0, 0.0);
+                    vec3 nrm = base_normal;
 #if QUALITY_TIER >= 2 && HAS_NORMALS
                     if (normal_slot.z > 0.0 && normal_slot.w > 0.0) {
-                        nrm = decode_normal(sample_slot(2 + i * 3 + 1, normal_slot, uv_tex1).xyz);
+                        vec3 detail_n = decode_normal(sample_slot(2 + i * 3 + 1, normal_slot, uv_tex1).xyz);
+                        nrm = normalize(base_normal + vec3(detail_n.x, detail_n.y - 1.0, detail_n.z));
                     }
 #endif
                     vec3 surface_color = detail * macro;
@@ -167,11 +175,9 @@ void main() {
                     near_normal += weights[i] * nrm;
                 }
 
-#if QUALITY_TIER >= 2 && HAS_NORMALS
                 vec3 n = normalize(near_normal);
                 float ndotl = clamp(dot(n, normalize(vec3(0.22, 0.95, 0.18))), 0.0, 1.0);
                 near_color *= (0.72 + ndotl * 0.28);
-#endif
                 float t = clamp((camera_dist - uMaterialMidDistance)
                                 / max(1.0, uMaterialFarDistance - uMaterialMidDistance), 0.0, 1.0);
                 tex_color = mix(near_color, sat, t);
@@ -213,6 +219,12 @@ void main() {
         vec3 mid = vec3(0.55, 0.45, 0.25);
         vec3 high = vec3(0.90, 0.90, 0.88);
         c = t < 0.5 ? mix(low, mid, t * 2.0) : mix(mid, high, (t - 0.5) * 2.0);
+    }
+
+    if (uSeamDebugMode == 1) {
+        c = vec3(0.64);
+    } else if (uSeamDebugMode == 2) {
+        c = base_normal * 0.5 + 0.5;
     }
 
     if (uShowLodTint) {

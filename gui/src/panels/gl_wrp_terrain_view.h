@@ -38,12 +38,16 @@ public:
     void set_on_object_picked(std::function<void(size_t)> cb);
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_on_terrain_stats(std::function<void(const std::string&)> cb);
+    void set_on_compass_info(std::function<void(const std::string&)> cb);
     void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_show_patch_boundaries(bool on);
     void set_show_patch_lod_colors(bool on);
     void set_show_tile_boundaries(bool on);
     void set_terrain_far_distance(float distance_m);
     void set_material_quality_distances(float mid_distance_m, float far_distance_m);
+    void set_seam_debug_mode(int mode);
+    void set_camera_mode(wrpterrain::CameraMode mode);
+    [[nodiscard]] wrpterrain::CameraMode camera_mode() const;
 
 private:
     static constexpr int kMaxTerrainSurfaces = 4;
@@ -58,6 +62,9 @@ private:
         float sr = 0.3f;
         float sg = 0.3f;
         float sb = 0.3f;
+        float nx = 0.0f;
+        float ny = 1.0f;
+        float nz = 0.0f;
     };
 
     struct TerrainPatch {
@@ -127,6 +134,7 @@ private:
     int grid_w_ = 0; // heightmap width
     int grid_h_ = 0; // heightmap height
     float cell_size_ = 1.0f; // geometry spacing
+    float terrain_max_z_ = 0.0f;
     float world_size_x_ = 0.0f;
     float world_size_z_ = 0.0f;
     float min_elevation_ = 0.0f;
@@ -200,6 +208,9 @@ private:
         int loc_patch_lod = -1;
         int loc_sampler_count = -1;
         int loc_debug_mode = -1;
+        int loc_seam_debug_mode = -1;
+        int loc_terrain_max_z = -1;
+        int loc_flip_terrain_z = -1;
         std::array<int, kTerrainRoleCount> loc_layer_atlas{};
     };
     std::unordered_map<uint32_t, TerrainProgram> terrain_program_cache_;
@@ -210,6 +221,8 @@ private:
     int active_sampler_count_ = 0;
     int active_surface_cap_ = 1;
     int debug_material_mode_ = 0; // 0=final,1=sat,2=mask,3+=surface channels
+    int seam_debug_mode_ = 0; // 0=final,1=depth-only,2=normals
+    bool flip_terrain_z_ = true;
 
     std::shared_ptr<TexturesLoaderService> texture_loader_;
     std::vector<armatools::wrp::TextureEntry> texture_entries_;
@@ -269,8 +282,10 @@ private:
     std::function<void(size_t)> on_object_picked_;
     std::function<void(const std::string&)> on_texture_debug_info_;
     std::function<void(const std::string&)> on_terrain_stats_;
+    std::function<void(const std::string&)> on_compass_info_;
     std::string last_texture_debug_info_;
     std::string last_terrain_stats_;
+    std::string last_compass_info_;
     double click_press_x_ = 0.0;
     double click_press_y_ = 0.0;
 
@@ -295,8 +310,15 @@ private:
     void cleanup_lod_buffers();
     void rebuild_object_buffers();
     void build_mvp(float* mvp) const;
+    float render_z_from_grid(int gz) const;
+    float source_z_from_render(float wz) const;
     void update_visible_patches(const float* mvp, const float* eye);
     int choose_patch_lod(const TerrainPatch& patch, const float* eye) const;
+    float sample_height_clamped(int gx, int gz) const;
+    std::array<float, 3> sample_world_normal_clamped(int gx, int gz) const;
+#ifndef NDEBUG
+    void validate_patch_edge_heights() const;
+#endif
     void stream_visible_tile_textures();
     void enqueue_visible_tile_jobs(const std::vector<int>& selected_tiles);
     int drain_ready_tile_results(int max_results);

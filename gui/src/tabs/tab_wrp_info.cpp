@@ -32,6 +32,14 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         b.set_has_frame(false);
         b.set_tooltip_text(tip);
     };
+    auto make_icon_toggle = [](Gtk::ToggleButton& b, const char* icon, const char* tip) {
+        b.set_label("");
+        b.set_icon_name(icon);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+        b.add_css_class("p3d-toggle-icon");
+        b.set_size_request(26, 26);
+    };
     make_icon_button(scan_button_, "system-search-symbolic", "Scan/search WRP files");
     make_icon_button(folder_button_, "document-open-symbolic", "Browse folder with WRP files");
 
@@ -114,6 +122,18 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     // Page 4: Terrain 3D
     terrain3d_toolbar_.set_margin(4);
     update_terrain3d_mode_options(true, true);
+    terrain3d_seam_debug_combo_.append("final", "Final");
+    terrain3d_seam_debug_combo_.append("depth", "Depth");
+    terrain3d_seam_debug_combo_.append("normals", "Normals");
+    terrain3d_seam_debug_combo_.set_active_id("final");
+    make_icon_toggle(terrain3d_camera_mode_btn_, "object-rotate-right-symbolic",
+                     "Orbit camera (click to switch to first person)");
+    terrain3d_camera_mode_btn_.set_active(true);
+    make_icon_toggle(terrain3d_wireframe_btn_, "applications-engineering-symbolic", "Wireframe");
+    make_icon_toggle(terrain3d_objects_btn_, "image-x-generic-symbolic", "Objects");
+    make_icon_toggle(terrain3d_patch_bounds_btn_, "view-fullscreen-symbolic", "Patch bounds");
+    make_icon_toggle(terrain3d_lod_tint_btn_, "dialog-information-symbolic", "LOD colors");
+    make_icon_toggle(terrain3d_tile_bounds_btn_, "view-grid-symbolic", "Tile grid");
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
     terrain3d_patch_bounds_btn_.set_active(false);
@@ -132,11 +152,13 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_far_mat_scale_.set_digits(0);
     terrain3d_far_mat_scale_.set_size_request(110, -1);
     terrain3d_status_label_.set_halign(Gtk::Align::START);
-    terrain3d_status_label_.set_hexpand(true);
     terrain3d_base_status_ = "Load a WRP to preview terrain";
     terrain3d_status_label_.set_text(terrain3d_base_status_);
     terrain3d_toolbar_.append(terrain3d_mode_label_);
     terrain3d_toolbar_.append(terrain3d_mode_combo_);
+    terrain3d_toolbar_.append(terrain3d_seam_debug_label_);
+    terrain3d_toolbar_.append(terrain3d_seam_debug_combo_);
+    terrain3d_toolbar_.append(terrain3d_camera_mode_btn_);
     terrain3d_toolbar_.append(terrain3d_wireframe_btn_);
     terrain3d_toolbar_.append(terrain3d_objects_btn_);
     terrain3d_toolbar_.append(terrain3d_patch_bounds_btn_);
@@ -148,11 +170,16 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_mid_scale_);
     terrain3d_toolbar_.append(terrain3d_far_mat_label_);
     terrain3d_toolbar_.append(terrain3d_far_mat_scale_);
-    terrain3d_toolbar_.append(terrain3d_status_label_);
     terrain3d_box_.append(terrain3d_toolbar_);
     terrain3d_view_.set_hexpand(true);
     terrain3d_view_.set_vexpand(true);
     terrain3d_overlay_.set_child(terrain3d_view_);
+    terrain3d_status_box_.set_halign(Gtk::Align::START);
+    terrain3d_status_box_.set_valign(Gtk::Align::END);
+    terrain3d_status_box_.set_margin(8);
+    terrain3d_status_box_.add_css_class("terrain3d-status");
+    terrain3d_status_box_.append(terrain3d_status_label_);
+    terrain3d_overlay_.add_overlay(terrain3d_status_box_);
     terrain3d_debug_overlay_.set_halign(Gtk::Align::START);
     terrain3d_debug_overlay_.set_valign(Gtk::Align::START);
     terrain3d_debug_overlay_.set_margin(8);
@@ -160,6 +187,12 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_debug_overlay_.set_visible(false);
     terrain3d_debug_overlay_.add_css_class("caption");
     terrain3d_overlay_.add_overlay(terrain3d_debug_overlay_);
+    terrain3d_compass_overlay_.set_halign(Gtk::Align::END);
+    terrain3d_compass_overlay_.set_valign(Gtk::Align::START);
+    terrain3d_compass_overlay_.set_margin(8);
+    terrain3d_compass_overlay_.set_text("N: --");
+    terrain3d_compass_overlay_.add_css_class("terrain3d-status");
+    terrain3d_overlay_.add_overlay(terrain3d_compass_overlay_);
     terrain3d_box_.append(terrain3d_overlay_);
     right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
 
@@ -184,6 +217,25 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_wireframe_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_wireframe(terrain3d_wireframe_btn_.get_active());
     });
+    auto update_camera_mode_button = [this]() {
+        if (terrain3d_camera_mode_btn_.get_active()) {
+            terrain3d_camera_mode_btn_.set_icon_name("object-rotate-right-symbolic");
+            terrain3d_camera_mode_btn_.set_tooltip_text(
+                "Orbit camera (click to switch to first person)");
+        } else {
+            terrain3d_camera_mode_btn_.set_icon_name("input-keyboard-symbolic");
+            terrain3d_camera_mode_btn_.set_tooltip_text(
+                "First-person camera (click to switch to orbit)");
+        }
+    };
+    terrain3d_camera_mode_btn_.signal_toggled().connect([this, update_camera_mode_button]() {
+        terrain3d_view_.set_camera_mode(
+            terrain3d_camera_mode_btn_.get_active()
+                ? wrpterrain::CameraMode::Orbit
+                : wrpterrain::CameraMode::FirstPerson);
+        update_camera_mode_button();
+    });
+    update_camera_mode_button();
     terrain3d_objects_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_objects(terrain3d_objects_btn_.get_active());
         if (terrain3d_objects_btn_.get_active()) ensure_objects_loaded();
@@ -208,6 +260,12 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     };
     terrain3d_mid_scale_.signal_value_changed().connect(update_material_distances);
     terrain3d_far_mat_scale_.signal_value_changed().connect(update_material_distances);
+    terrain3d_seam_debug_combo_.signal_changed().connect([this]() {
+        const auto id = std::string(terrain3d_seam_debug_combo_.get_active_id());
+        if (id == "depth") terrain3d_view_.set_seam_debug_mode(1);
+        else if (id == "normals") terrain3d_view_.set_seam_debug_mode(2);
+        else terrain3d_view_.set_seam_debug_mode(0);
+    });
     terrain3d_mode_combo_.signal_changed().connect([this]() {
         auto id = std::string(terrain3d_mode_combo_.get_active_id());
         if (id == "texture" && !allow_texture_mode_) {
@@ -256,6 +314,9 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         }
         terrain3d_debug_overlay_.set_text(text);
         terrain3d_debug_overlay_.set_visible(true);
+    });
+    terrain3d_view_.set_on_compass_info([this](const std::string& text) {
+        terrain3d_compass_overlay_.set_text(text.empty() ? "N: --" : text);
     });
     right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
         if (page_num == 1) ensure_objects_loaded();
@@ -518,6 +579,9 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
     hm_picture_.set_paintable({});
     class_status_label_.set_text("Objects deferred (open Objects tab to load)");
     terrain3d_status_label_.set_text("Loading terrain...");
+    terrain3d_compass_overlay_.set_text("N: --");
+    terrain3d_camera_mode_btn_.set_active(true);
+    terrain3d_view_.set_camera_mode(wrpterrain::CameraMode::Orbit);
     terrain3d_view_.clear_world();
     terrain3d_view_.set_satellite_palette({});
 
@@ -626,14 +690,15 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
                 loaded_wrp_entry_valid_ = true;
 
                 update_terrain3d_mode_options(true, true);
-
                 terrain3d_view_.set_world_data(*world_data_);
+                terrain3d_camera_mode_btn_.set_active(true);
+                terrain3d_view_.set_camera_mode(wrpterrain::CameraMode::Orbit);
                 if (std::string(terrain3d_mode_combo_.get_active_id()) == "satellite")
                     ensure_satellite_palette_loaded();
                 std::ostringstream terrain_status;
                 terrain_status << world_data_->grid.terrain_x << "x" << world_data_->grid.terrain_y
                                << " cells, objects: deferred"
-                               << " (LMB orbit, MMB pan, wheel zoom)";
+                               << " (LMB look, MMB pan, wheel zoom, camera toggle on toolbar)";
                 terrain3d_base_status_ = terrain_status.str();
                 terrain3d_status_label_.set_text(terrain3d_base_status_);
                 while (auto* row = class_list_.get_row_at_index(0))

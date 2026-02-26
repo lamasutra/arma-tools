@@ -86,3 +86,10 @@ paned.audio-split > separator {
 paned.audio-split > separator:hover {
   background-color: @borders;
 }
+
+/* Terrain 3D status overlay */
+.terrain3d-status {
+  background-color: alpha(@theme_bg_color, 0.7);
+  border-radius: 4px;
+  padding: 4px 6px;
+}

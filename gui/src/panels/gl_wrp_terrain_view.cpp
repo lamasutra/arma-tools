@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -167,6 +168,25 @@ static uint32_t make_shader_key(int surface_cap, int quality_tier, bool has_norm
     return (s << 4) | (q << 2) | (n << 1) | m;
 }
 
+static float wrap_degrees(float deg) {
+    float out = std::fmod(deg, 360.0f);
+    if (out < 0.0f) out += 360.0f;
+    return out;
+}
+
+static std::string make_compass_text(float azimuth_rad) {
+    static constexpr std::array<const char*, 8> kNorthRel = {
+        "FWD", "FR", "RIGHT", "BR", "BACK", "BL", "LEFT", "FL"
+    };
+    const float heading_deg = wrap_degrees(-azimuth_rad * (180.0f / 3.14159265358979323846f));
+    const float north_rel_deg = wrap_degrees(360.0f - heading_deg);
+    const int idx = (static_cast<int>(std::floor((north_rel_deg + 22.5f) / 45.0f))) & 7;
+    std::ostringstream ss;
+    ss << "N:" << kNorthRel[static_cast<size_t>(idx)]
+       << "  HDG " << static_cast<int>(std::lround(heading_deg)) << " deg";
+    return ss.str();
+}
+
 } // namespace
 
 GLWrpTerrainView::GLWrpTerrainView() {
@@ -294,6 +314,18 @@ GLWrpTerrainView::GLWrpTerrainView() {
                 break;
             case GDK_KEY_6:
                 debug_material_mode_ = 6;
+                queue_render();
+                break;
+            case GDK_KEY_7:
+                seam_debug_mode_ = 0;
+                queue_render();
+                break;
+            case GDK_KEY_8:
+                seam_debug_mode_ = 1;
+                queue_render();
+                break;
+            case GDK_KEY_9:
+                seam_debug_mode_ = 2;
                 queue_render();
                 break;
             default:
@@ -454,6 +486,7 @@ void GLWrpTerrainView::clear_world() {
     world_size_x_ = 0.0f;
     world_size_z_ = 0.0f;
     cell_size_ = 1.0f;
+    terrain_max_z_ = 0.0f;
     tile_cell_size_ = 1.0f;
     object_points_.clear();
     object_positions_.clear();
@@ -505,6 +538,9 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
     cell_size_ = world_size_x_ / static_cast<float>(std::max(grid_w_, 1));
     if (cell_size_ <= 0.0f)
         cell_size_ = std::max(1.0f, static_cast<float>(world.grid.cell_size));
+    terrain_max_z_ = (grid_h_ > 0)
+        ? (static_cast<float>(grid_h_ - 1) * cell_size_)
+        : 0.0f;
 
     heights_.assign(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_), 0.0f);
     min_elevation_ = std::numeric_limits<float>::max();
@@ -592,9 +628,10 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
 
     auto tile_index_at_world = [&](float wx, float wz) -> int {
         if (tile_grid_w_ <= 0 || tile_grid_h_ <= 0 || tile_texture_indices_.empty()) return -1;
+        const float src_wz = source_z_from_render(wz);
         const int tx = clampi(static_cast<int>(std::floor(wx / std::max(tile_cell_size_, 0.0001f))),
                               0, tile_grid_w_ - 1);
-        const int tz = clampi(static_cast<int>(std::floor(wz / std::max(tile_cell_size_, 0.0001f))),
+        const int tz = clampi(static_cast<int>(std::floor(src_wz / std::max(tile_cell_size_, 0.0001f))),
                               0, tile_grid_h_ - 1);
         const size_t ti = static_cast<size_t>(tz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(tx);
         if (ti >= tile_texture_indices_.size()) return -1;
@@ -666,7 +703,8 @@ void GLWrpTerrainView::set_objects(const std::vector<armatools::wrp::ObjectRecor
         else if (cat == "infrastructure") { cr = 0.20f; cg = 0.20f; cb = 0.20f; }
         const float px = static_cast<float>(obj.position[0]);
         const float py = static_cast<float>(obj.position[1]) + 1.0f;
-        const float pz = static_cast<float>(obj.position[2]);
+        const float src_z = static_cast<float>(obj.position[2]);
+        const float pz = flip_terrain_z_ ? (terrain_max_z_ - src_z) : src_z;
         object_points_.push_back(px);
         object_points_.push_back(py);
         object_points_.push_back(pz);
@@ -717,6 +755,20 @@ void GLWrpTerrainView::set_material_quality_distances(float mid_distance_m, floa
     queue_render();
 }
 
+void GLWrpTerrainView::set_seam_debug_mode(int mode) {
+    seam_debug_mode_ = std::clamp(mode, 0, 2);
+    queue_render();
+}
+
+void GLWrpTerrainView::set_camera_mode(wrpterrain::CameraMode mode) {
+    if (!camera_controller_.set_camera_mode(mode)) return;
+    queue_render();
+}
+
+wrpterrain::CameraMode GLWrpTerrainView::camera_mode() const {
+    return camera_controller_.camera_mode();
+}
+
 void GLWrpTerrainView::set_color_mode(int mode) {
     const int prev_mode = color_mode_;
     color_mode_ = std::clamp(mode, 0, 3);
@@ -748,6 +800,17 @@ void GLWrpTerrainView::set_on_texture_debug_info(std::function<void(const std::s
 void GLWrpTerrainView::set_on_terrain_stats(std::function<void(const std::string&)> cb) {
     on_terrain_stats_ = std::move(cb);
     emit_terrain_stats();
+}
+
+void GLWrpTerrainView::set_on_compass_info(std::function<void(const std::string&)> cb) {
+    on_compass_info_ = std::move(cb);
+    if (on_compass_info_) {
+        if (last_compass_info_.empty()) {
+            const auto state = camera_controller_.camera_state();
+            last_compass_info_ = make_compass_text(state.azimuth);
+        }
+        on_compass_info_(last_compass_info_);
+    }
 }
 
 void GLWrpTerrainView::schedule_texture_rebuild() {
@@ -993,6 +1056,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glClearColor(0.14f, 0.17f, 0.20f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    const auto camera_state = camera_controller_.camera_state();
     float eye[3] = {0.0f, 0.0f, 0.0f};
     float center[3] = {0.0f, 0.0f, 0.0f};
     camera_controller_.build_eye_center(eye, center);
@@ -1073,6 +1137,9 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         if (tp.loc_has_material_lookup >= 0) glUniform1i(tp.loc_has_material_lookup, has_material_lookup_ ? 1 : 0);
         if (tp.loc_sampler_count >= 0) glUniform1i(tp.loc_sampler_count, active_sampler_count_);
         if (tp.loc_debug_mode >= 0) glUniform1i(tp.loc_debug_mode, debug_material_mode_);
+        if (tp.loc_seam_debug_mode >= 0) glUniform1i(tp.loc_seam_debug_mode, seam_debug_mode_);
+        if (tp.loc_terrain_max_z >= 0) glUniform1f(tp.loc_terrain_max_z, terrain_max_z_);
+        if (tp.loc_flip_terrain_z >= 0) glUniform1i(tp.loc_flip_terrain_z, flip_terrain_z_ ? 1 : 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, has_texture_index_ ? texture_index_tex_ : 0);
@@ -1134,9 +1201,10 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         std::string info;
         if (color_mode_ == 2 && tile_grid_w_ > 0 && tile_grid_h_ > 0 && !tile_texture_indices_.empty()) {
             const float* pivot = camera_controller_.pivot();
+            const float pivot_src_z = source_z_from_render(pivot[2]);
             const int cx = std::clamp(static_cast<int>(std::floor(pivot[0] / std::max(tile_cell_size_, 0.0001f))),
                                       0, tile_grid_w_ - 1);
-            const int cz = std::clamp(static_cast<int>(std::floor(pivot[2] / std::max(tile_cell_size_, 0.0001f))),
+            const int cz = std::clamp(static_cast<int>(std::floor(pivot_src_z / std::max(tile_cell_size_, 0.0001f))),
                                       0, tile_grid_h_ - 1);
             const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(cx);
             const int ti = (cidx < tile_texture_indices_.size())
@@ -1163,7 +1231,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
                << " | patches " << visible_patch_count_ << "/" << terrain_patches_.size()
                << " draws " << terrain_draw_calls_
                << " tiles " << visible_tile_count_
-               << " dbg(" << debug_material_mode_ << ")";
+               << " dbg(" << debug_material_mode_ << "/" << seam_debug_mode_ << ")";
             info = ss.str();
         }
         if (info != last_texture_debug_info_) {
@@ -1173,6 +1241,13 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     }
 
     emit_terrain_stats();
+    if (on_compass_info_) {
+        const auto compass = make_compass_text(camera_state.azimuth);
+        if (compass != last_compass_info_) {
+            last_compass_info_ = compass;
+            on_compass_info_(compass);
+        }
+    }
     log_gl_errors("GLWrpTerrainView::on_render_gl");
     return true;
 }
@@ -1321,6 +1396,9 @@ uint32_t GLWrpTerrainView::ensure_terrain_program(uint32_t key,
     p.loc_patch_lod = glGetUniformLocation(prog, "uPatchLod");
     p.loc_sampler_count = glGetUniformLocation(prog, "uSamplerCount");
     p.loc_debug_mode = glGetUniformLocation(prog, "uDebugMode");
+    p.loc_seam_debug_mode = glGetUniformLocation(prog, "uSeamDebugMode");
+    p.loc_terrain_max_z = glGetUniformLocation(prog, "uTerrainMaxZ");
+    p.loc_flip_terrain_z = glGetUniformLocation(prog, "uFlipTerrainZ");
     for (int i = 0; i < kTerrainRoleCount; ++i) {
         std::ostringstream name;
         name << "uLayerAtlas" << i;
@@ -1419,6 +1497,79 @@ void GLWrpTerrainView::rebuild_shared_lod_buffers() {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
+float GLWrpTerrainView::render_z_from_grid(int gz) const {
+    const int clamped = std::clamp(gz, 0, std::max(0, grid_h_ - 1));
+    const float src = static_cast<float>(clamped) * cell_size_;
+    return flip_terrain_z_ ? (terrain_max_z_ - src) : src;
+}
+
+float GLWrpTerrainView::source_z_from_render(float wz) const {
+    return flip_terrain_z_ ? (terrain_max_z_ - wz) : wz;
+}
+
+float GLWrpTerrainView::sample_height_clamped(int gx, int gz) const {
+    if (grid_w_ <= 0 || grid_h_ <= 0 || heights_.empty()) return 0.0f;
+    gx = std::clamp(gx, 0, grid_w_ - 1);
+    gz = std::clamp(gz, 0, grid_h_ - 1);
+    const size_t idx = static_cast<size_t>(gz) * static_cast<size_t>(grid_w_)
+                     + static_cast<size_t>(gx);
+    if (idx >= heights_.size()) return 0.0f;
+    return heights_[idx];
+}
+
+std::array<float, 3> GLWrpTerrainView::sample_world_normal_clamped(int gx, int gz) const {
+    const float hxl = sample_height_clamped(gx - 1, gz);
+    const float hxr = sample_height_clamped(gx + 1, gz);
+    const float hzd = sample_height_clamped(gx, gz - 1);
+    const float hzu = sample_height_clamped(gx, gz + 1);
+    const float inv_span = 1.0f / std::max(cell_size_ * 2.0f, 0.0001f);
+    const float ddx = (hxr - hxl) * inv_span;
+    const float ddz = (hzu - hzd) * inv_span;
+    float n[3] = {-ddx, 1.0f, -ddz};
+    vec3_normalize(n);
+    return {n[0], n[1], n[2]};
+}
+
+#ifndef NDEBUG
+void GLWrpTerrainView::validate_patch_edge_heights() const {
+    if (terrain_patches_.empty() || patch_cols_ <= 0 || patch_rows_ <= 0) return;
+    auto patch_ref = [this](int px, int pz) -> const TerrainPatch& {
+        const size_t idx = static_cast<size_t>(pz) * static_cast<size_t>(patch_cols_)
+                         + static_cast<size_t>(px);
+        assert(idx < terrain_patches_.size());
+        return terrain_patches_[idx];
+    };
+    auto height_at_local = [this](const TerrainPatch& p, int lx, int lz) -> float {
+        const int gx = std::clamp(p.base_grid_x + lx, 0, grid_w_ - 1);
+        const int gz = std::clamp(p.base_grid_z + lz, 0, grid_h_ - 1);
+        return sample_height_clamped(gx, gz);
+    };
+
+    constexpr float eps = 1e-4f;
+    for (int pz = 0; pz < patch_rows_; ++pz) {
+        for (int px = 0; px < patch_cols_; ++px) {
+            const auto& p = patch_ref(px, pz);
+            if (px + 1 < patch_cols_) {
+                const auto& n = patch_ref(px + 1, pz);
+                for (int v = 0; v <= patch_quads_; ++v) {
+                    const float h0 = height_at_local(p, patch_quads_, v);
+                    const float h1 = height_at_local(n, 0, v);
+                    assert(std::fabs(h0 - h1) <= eps);
+                }
+            }
+            if (pz + 1 < patch_rows_) {
+                const auto& n = patch_ref(px, pz + 1);
+                for (int v = 0; v <= patch_quads_; ++v) {
+                    const float h0 = height_at_local(p, v, patch_quads_);
+                    const float h1 = height_at_local(n, v, 0);
+                    assert(std::fabs(h0 - h1) <= eps);
+                }
+            }
+        }
+    }
+}
+#endif
+
 void GLWrpTerrainView::rebuild_patch_buffers() {
     cleanup_patch_buffers();
 
@@ -1448,9 +1599,10 @@ void GLWrpTerrainView::rebuild_patch_buffers() {
 
     auto tile_index_at_world = [&](float wx, float wz) -> int {
         if (tile_grid_w_ <= 0 || tile_grid_h_ <= 0 || tile_texture_indices_.empty()) return -1;
+        const float src_wz = source_z_from_render(wz);
         const int tx = clampi(static_cast<int>(std::floor(wx / std::max(tile_cell_size_, 0.0001f))),
                               0, tile_grid_w_ - 1);
-        const int tz = clampi(static_cast<int>(std::floor(wz / std::max(tile_cell_size_, 0.0001f))),
+        const int tz = clampi(static_cast<int>(std::floor(src_wz / std::max(tile_cell_size_, 0.0001f))),
                               0, tile_grid_h_ - 1);
         const size_t ti = static_cast<size_t>(tz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(tx);
         if (ti >= tile_texture_indices_.size()) return -1;
@@ -1475,15 +1627,16 @@ void GLWrpTerrainView::rebuild_patch_buffers() {
             float max_z = std::numeric_limits<float>::lowest();
 
             for (int vz = 0; vz < side; ++vz) {
-                const int src_z = std::min(base_z + vz, grid_h_ - 1);
+                const int src_z = std::clamp(base_z + vz, 0, grid_h_ - 1);
                 for (int vx = 0; vx < side; ++vx) {
-                    const int src_x = std::min(base_x + vx, grid_w_ - 1);
+                    const int src_x = std::clamp(base_x + vx, 0, grid_w_ - 1);
                     const size_t src_idx = static_cast<size_t>(src_z) * static_cast<size_t>(grid_w_)
-                                         + static_cast<size_t>(src_x);
-                    const float h = (src_idx < heights_.size()) ? heights_[src_idx] : 0.0f;
+                        + static_cast<size_t>(src_x);
+                    const float h = sample_height_clamped(src_x, src_z);
                     const float m = (src_idx < surface_classes_.size()) ? surface_classes_[src_idx] : 0.0f;
                     const float wx = static_cast<float>(src_x) * cell_size_;
-                    const float wz = static_cast<float>(src_z) * cell_size_;
+                    const float wz = render_z_from_grid(src_z);
+                    const auto n = sample_world_normal_clamped(src_x, src_z);
 
                     float sr = 0.30f, sg = 0.30f, sb = 0.30f;
                     const int ti = tile_index_at_world(wx, wz);
@@ -1494,7 +1647,7 @@ void GLWrpTerrainView::rebuild_patch_buffers() {
                     }
 
                     const size_t vi = idx_core(vx, vz);
-                    verts[vi] = Vertex{wx, h, wz, h, m, sr, sg, sb};
+                    verts[vi] = Vertex{wx, h, wz, h, m, sr, sg, sb, n[0], n[1], n[2]};
 
                     min_x = std::min(min_x, wx);
                     min_y = std::min(min_y, h);
@@ -1541,10 +1694,12 @@ void GLWrpTerrainView::rebuild_patch_buffers() {
                                           0, tile_grid_w_ - 1);
                 patch.tile_max_x = clampi(static_cast<int>(std::floor(max_x / std::max(tile_cell_size_, 0.0001f))),
                                           0, tile_grid_w_ - 1);
-                patch.tile_min_z = clampi(static_cast<int>(std::floor(min_z / std::max(tile_cell_size_, 0.0001f))),
-                                          0, tile_grid_h_ - 1);
-                patch.tile_max_z = clampi(static_cast<int>(std::floor(max_z / std::max(tile_cell_size_, 0.0001f))),
-                                          0, tile_grid_h_ - 1);
+                const int tz0 = clampi(static_cast<int>(std::floor(
+                    source_z_from_render(min_z) / std::max(tile_cell_size_, 0.0001f))), 0, tile_grid_h_ - 1);
+                const int tz1 = clampi(static_cast<int>(std::floor(
+                    source_z_from_render(max_z) / std::max(tile_cell_size_, 0.0001f))), 0, tile_grid_h_ - 1);
+                patch.tile_min_z = std::min(tz0, tz1);
+                patch.tile_max_z = std::max(tz0, tz1);
             }
 
             glGenVertexArrays(1, &patch.vao);
@@ -1565,12 +1720,18 @@ void GLWrpTerrainView::rebuild_patch_buffers() {
             glEnableVertexAttribArray(3);
             glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                                   reinterpret_cast<void*>(5 * sizeof(float)));
+            glEnableVertexAttribArray(4);
+            glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                  reinterpret_cast<void*>(8 * sizeof(float)));
             glBindVertexArray(0);
 
             terrain_patches_.push_back(std::move(patch));
         }
     }
 
+#ifndef NDEBUG
+    validate_patch_edge_heights();
+#endif
     visible_patch_indices_.reserve(terrain_patches_.size());
 }
 
@@ -1596,7 +1757,7 @@ int GLWrpTerrainView::choose_patch_lod(const TerrainPatch& patch, const float* e
     const std::array<float, 4> bounds = {b0, b1, b2, b3};
 
     int lod = std::clamp(patch.current_lod, 0, 4);
-    const float hysteresis = std::max(40.0f, patch_span * 0.35f);
+    const float hysteresis = std::max(30.0f, patch_span * 0.20f);
 
     while (lod < 4 && dist > (bounds[static_cast<size_t>(lod)] + hysteresis)) lod++;
     while (lod > 0 && dist < (bounds[static_cast<size_t>(lod - 1)] - hysteresis)) lod--;
@@ -2195,8 +2356,8 @@ bool GLWrpTerrainView::movement_tick() {
     float vertical = 0.0f;
     if (move_fwd_) forward += 1.0f;
     if (move_back_) forward -= 1.0f;
-    if (move_right_) right -= 1.0f;
-    if (move_left_) right += 1.0f;
+    if (move_right_) right += 1.0f;
+    if (move_left_) right -= 1.0f;
     if (move_up_) vertical += 1.0f;
     if (move_down_) vertical -= 1.0f;
     if (forward == 0.0f && right == 0.0f && vertical == 0.0f) return false;
