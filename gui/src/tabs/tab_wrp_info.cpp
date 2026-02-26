@@ -116,13 +116,38 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     update_terrain3d_mode_options(true, true);
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
+    terrain3d_patch_bounds_btn_.set_active(false);
+    terrain3d_lod_tint_btn_.set_active(false);
+    terrain3d_tile_bounds_btn_.set_active(false);
+    terrain3d_far_scale_.set_range(1000.0, 60000.0);
+    terrain3d_far_scale_.set_value(25000.0);
+    terrain3d_far_scale_.set_digits(0);
+    terrain3d_far_scale_.set_size_request(130, -1);
+    terrain3d_mid_scale_.set_range(300.0, 20000.0);
+    terrain3d_mid_scale_.set_value(1800.0);
+    terrain3d_mid_scale_.set_digits(0);
+    terrain3d_mid_scale_.set_size_request(110, -1);
+    terrain3d_far_mat_scale_.set_range(600.0, 60000.0);
+    terrain3d_far_mat_scale_.set_value(5200.0);
+    terrain3d_far_mat_scale_.set_digits(0);
+    terrain3d_far_mat_scale_.set_size_request(110, -1);
     terrain3d_status_label_.set_halign(Gtk::Align::START);
     terrain3d_status_label_.set_hexpand(true);
-    terrain3d_status_label_.set_text("Load a WRP to preview terrain");
+    terrain3d_base_status_ = "Load a WRP to preview terrain";
+    terrain3d_status_label_.set_text(terrain3d_base_status_);
     terrain3d_toolbar_.append(terrain3d_mode_label_);
     terrain3d_toolbar_.append(terrain3d_mode_combo_);
     terrain3d_toolbar_.append(terrain3d_wireframe_btn_);
     terrain3d_toolbar_.append(terrain3d_objects_btn_);
+    terrain3d_toolbar_.append(terrain3d_patch_bounds_btn_);
+    terrain3d_toolbar_.append(terrain3d_lod_tint_btn_);
+    terrain3d_toolbar_.append(terrain3d_tile_bounds_btn_);
+    terrain3d_toolbar_.append(terrain3d_far_label_);
+    terrain3d_toolbar_.append(terrain3d_far_scale_);
+    terrain3d_toolbar_.append(terrain3d_mid_label_);
+    terrain3d_toolbar_.append(terrain3d_mid_scale_);
+    terrain3d_toolbar_.append(terrain3d_far_mat_label_);
+    terrain3d_toolbar_.append(terrain3d_far_mat_scale_);
     terrain3d_toolbar_.append(terrain3d_status_label_);
     terrain3d_box_.append(terrain3d_toolbar_);
     terrain3d_view_.set_hexpand(true);
@@ -163,6 +188,26 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         terrain3d_view_.set_show_objects(terrain3d_objects_btn_.get_active());
         if (terrain3d_objects_btn_.get_active()) ensure_objects_loaded();
     });
+    terrain3d_patch_bounds_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_show_patch_boundaries(terrain3d_patch_bounds_btn_.get_active());
+    });
+    terrain3d_lod_tint_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_show_patch_lod_colors(terrain3d_lod_tint_btn_.get_active());
+    });
+    terrain3d_tile_bounds_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_show_tile_boundaries(terrain3d_tile_bounds_btn_.get_active());
+    });
+    terrain3d_far_scale_.signal_value_changed().connect([this]() {
+        terrain3d_view_.set_terrain_far_distance(
+            static_cast<float>(terrain3d_far_scale_.get_value()));
+    });
+    auto update_material_distances = [this]() {
+        terrain3d_view_.set_material_quality_distances(
+            static_cast<float>(terrain3d_mid_scale_.get_value()),
+            static_cast<float>(terrain3d_far_mat_scale_.get_value()));
+    };
+    terrain3d_mid_scale_.signal_value_changed().connect(update_material_distances);
+    terrain3d_far_mat_scale_.signal_value_changed().connect(update_material_distances);
     terrain3d_mode_combo_.signal_changed().connect([this]() {
         auto id = std::string(terrain3d_mode_combo_.get_active_id());
         if (id == "texture" && !allow_texture_mode_) {
@@ -191,7 +236,17 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         std::ostringstream ss;
         ss << "Object #" << idx << ": " << obj.model_name
            << " @ [" << obj.position[0] << ", " << obj.position[1] << ", " << obj.position[2] << "]";
-        terrain3d_status_label_.set_text(ss.str());
+        terrain3d_base_status_ = ss.str();
+        terrain3d_status_label_.set_text(terrain3d_base_status_);
+    });
+    terrain3d_view_.set_on_terrain_stats([this](const std::string& text) {
+        if (terrain3d_base_status_.empty()) {
+            terrain3d_status_label_.set_text(text);
+        } else if (text.empty()) {
+            terrain3d_status_label_.set_text(terrain3d_base_status_);
+        } else {
+            terrain3d_status_label_.set_text(terrain3d_base_status_ + " | " + text);
+        }
     });
     terrain3d_view_.set_on_texture_debug_info([this](const std::string& text) {
         if (text.empty() || terrain3d_mode_combo_.get_active_id() != "texture") {
@@ -570,23 +625,7 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
                 loaded_wrp_entry_ = entry;
                 loaded_wrp_entry_valid_ = true;
 
-                auto normalize_sig = [](std::string sig) {
-                    auto trim = [](std::string& s) {
-                        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
-                            s.erase(s.begin());
-                        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
-                            s.pop_back();
-                    };
-                    trim(sig);
-                    for (auto& c : sig) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                    return sig;
-                };
-                const std::string sig = normalize_sig(world_data_->format.signature);
-                // Temporary: disable texture index + satellite for OPRW v17+ until satmask rebuild is understood.
-                const bool disable_texture_satellite =
-                    (sig == "OPRW" && world_data_->format.version >= 17);
-                update_terrain3d_mode_options(!disable_texture_satellite,
-                                              !disable_texture_satellite);
+                update_terrain3d_mode_options(true, true);
 
                 terrain3d_view_.set_world_data(*world_data_);
                 if (std::string(terrain3d_mode_combo_.get_active_id()) == "satellite")
@@ -595,13 +634,15 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
                 terrain_status << world_data_->grid.terrain_x << "x" << world_data_->grid.terrain_y
                                << " cells, objects: deferred"
                                << " (LMB orbit, MMB pan, wheel zoom)";
-                terrain3d_status_label_.set_text(terrain_status.str());
+                terrain3d_base_status_ = terrain_status.str();
+                terrain3d_status_label_.set_text(terrain3d_base_status_);
                 while (auto* row = class_list_.get_row_at_index(0))
                     class_list_.remove(*row);
                 class_entries_.clear();
                 model_panel_.clear();
             } else {
-                terrain3d_status_label_.set_text("Failed to load terrain");
+                terrain3d_base_status_ = "Failed to load terrain";
+                terrain3d_status_label_.set_text(terrain3d_base_status_);
             }
 
             loading_ = false;

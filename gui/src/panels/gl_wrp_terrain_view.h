@@ -6,6 +6,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <epoxy/gl.h>
@@ -28,7 +30,13 @@ public:
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
+    void set_on_terrain_stats(std::function<void(const std::string&)> cb);
     void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_show_patch_boundaries(bool on);
+    void set_show_patch_lod_colors(bool on);
+    void set_show_tile_boundaries(bool on);
+    void set_terrain_far_distance(float distance_m);
+    void set_material_quality_distances(float mid_distance_m, float far_distance_m);
 
 private:
     struct Vertex {
@@ -42,15 +50,57 @@ private:
         float sb = 0.3f;
     };
 
+    struct TerrainPatch {
+        int patch_x = 0;
+        int patch_z = 0;
+        int base_grid_x = 0;
+        int base_grid_z = 0;
+        float min_x = 0.0f;
+        float min_y = 0.0f;
+        float min_z = 0.0f;
+        float max_x = 0.0f;
+        float max_y = 0.0f;
+        float max_z = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        float center_z = 0.0f;
+        int tile_min_x = 0;
+        int tile_min_z = 0;
+        int tile_max_x = 0;
+        int tile_max_z = 0;
+        int current_lod = 0;
+        uint32_t vao = 0;
+        uint32_t vbo = 0;
+    };
+
+    struct LodIndexBuffer {
+        uint32_t ibo = 0;
+        int index_count = 0;
+        int step = 1;
+    };
+
+    struct CachedTileTexture {
+        bool missing = false;
+        uint64_t last_used_stamp = 0;
+        int width = 0;
+        int height = 0;
+        std::vector<uint8_t> rgba;
+    };
+
     // Input world subset used for rendering.
     std::vector<float> heights_;
-    int grid_w_ = 0;
-    int grid_h_ = 0;
-    float cell_size_ = 1.0f;
+    int grid_w_ = 0; // heightmap width
+    int grid_h_ = 0; // heightmap height
+    float cell_size_ = 1.0f; // geometry spacing
+    float world_size_x_ = 0.0f;
+    float world_size_z_ = 0.0f;
     float min_elevation_ = 0.0f;
     float max_elevation_ = 1.0f;
     std::vector<float> surface_classes_;
-    std::vector<float> texture_indices_;
+    std::vector<uint16_t> tile_texture_indices_;
+    int tile_grid_w_ = 0;
+    int tile_grid_h_ = 0;
+    float tile_cell_size_ = 1.0f;
     std::vector<std::array<float, 3>> satellite_palette_;
     std::vector<float> object_points_;
     std::vector<float> object_positions_;
@@ -69,6 +119,21 @@ private:
     bool show_objects_ = true;
     int color_mode_ = 0; // 0=elevation, 1=surface mask, 2=texture index, 3=satellite
     float texture_index_max_ = 1.0f;
+    bool show_patch_boundaries_ = false;
+    bool show_patch_lod_colors_ = false;
+    bool show_tile_boundaries_ = false;
+    float terrain_far_distance_ = 25000.0f;
+    float material_mid_distance_ = 1800.0f;
+    float material_far_distance_ = 5200.0f;
+
+    // Terrain geometry.
+    std::vector<TerrainPatch> terrain_patches_;
+    std::array<LodIndexBuffer, 5> lod_index_buffers_{};
+    std::vector<int> visible_patch_indices_;
+    int patch_quads_ = 64;
+    int patch_cols_ = 0;
+    int patch_rows_ = 0;
+    float skirt_drop_m_ = 6.0f;
 
     // GL resources.
     uint32_t prog_terrain_ = 0;
@@ -78,10 +143,6 @@ private:
     int loc_hmax_terrain_ = -1;
     int loc_mode_terrain_ = -1;
     int loc_mvp_points_ = -1;
-    uint32_t terrain_vao_ = 0;
-    uint32_t terrain_vbo_ = 0;
-    uint32_t terrain_ebo_ = 0;
-    int terrain_index_count_ = 0;
     uint32_t points_vao_ = 0;
     uint32_t points_vbo_ = 0;
     int points_count_ = 0;
@@ -114,11 +175,27 @@ private:
     int loc_has_texture_lookup_ = -1;
     int loc_has_texture_index_ = -1;
     int loc_camera_xz_ = -1;
-    int loc_near_texture_distance_ = -1;
-    float near_texture_distance_ = 1500.0f;
+    int loc_material_mid_distance_ = -1;
+    int loc_material_far_distance_ = -1;
+    int loc_show_patch_bounds_ = -1;
+    int loc_show_tile_bounds_ = -1;
+    int loc_show_lod_tint_ = -1;
+    int loc_patch_bounds_ = -1;
+    int loc_patch_lod_color_ = -1;
+    int loc_tile_cell_size_ = -1;
     sigc::connection texture_rebuild_idle_;
-    std::vector<uint32_t> terrain_visible_indices_;
-    int terrain_visible_index_count_ = 0;
+    std::unordered_map<int, CachedTileTexture> tile_texture_cache_;
+    std::unordered_set<int> tile_missing_logged_once_;
+    std::vector<int> last_visible_tile_indices_;
+    uint64_t tile_cache_stamp_ = 1;
+    size_t tile_cache_budget_entries_ = 384;
+    uint64_t texture_cache_hits_ = 0;
+    uint64_t texture_cache_misses_ = 0;
+    int visible_tile_count_ = 0;
+    int terrain_draw_calls_ = 0;
+    int visible_patch_count_ = 0;
+    int last_loaded_texture_count_ = 0;
+
     // Gesture controllers.
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
@@ -136,7 +213,9 @@ private:
     bool alt_pressed_ = false;
     std::function<void(size_t)> on_object_picked_;
     std::function<void(const std::string&)> on_texture_debug_info_;
+    std::function<void(const std::string&)> on_terrain_stats_;
     std::string last_texture_debug_info_;
+    std::string last_terrain_stats_;
     double click_press_x_ = 0.0;
     double click_press_y_ = 0.0;
 
@@ -150,9 +229,17 @@ private:
     uint32_t compile_shader(uint32_t type, const char* src);
     uint32_t link_program(uint32_t vs, uint32_t fs);
     void rebuild_terrain_buffers();
+    void rebuild_patch_buffers();
+    void rebuild_shared_lod_buffers();
+    void cleanup_patch_buffers();
+    void cleanup_lod_buffers();
     void rebuild_object_buffers();
     void build_mvp(float* mvp) const;
-    void update_visible_terrain_indices(const float* mvp, const float* eye);
+    void update_visible_patches(const float* mvp, const float* eye);
+    int choose_patch_lod(const TerrainPatch& patch, const float* eye) const;
+    void stream_visible_tile_textures();
+    std::vector<int> collect_visible_tile_indices() const;
+    void emit_terrain_stats();
     void pick_object_at(double x, double y);
     void move_camera_local(float forward, float right);
     bool movement_tick();

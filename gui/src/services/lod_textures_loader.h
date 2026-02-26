@@ -51,10 +51,20 @@ public:
                     const std::shared_ptr<armatools::pboindex::Index>& index_in);
 
 private:
+    struct TerrainEntryCacheItem {
+        bool has_value = false;
+        TextureData value;
+        uint64_t last_used = 0;
+    };
+
     std::string db_path;
     Config* cfg = nullptr;
     std::shared_ptr<armatools::pboindex::DB> db;
     std::shared_ptr<armatools::pboindex::Index> index;
+    std::mutex terrain_entry_cache_mutex_;
+    std::unordered_map<std::string, TerrainEntryCacheItem> terrain_entry_cache_;
+    uint64_t terrain_entry_cache_tick_ = 1;
+    size_t terrain_entry_cache_capacity_ = 1024;
 
     std::optional<TextureData> load_single_texture(const std::string& tex_path,
                                                    const std::string& model_path);

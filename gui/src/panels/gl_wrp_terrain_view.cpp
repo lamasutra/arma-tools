@@ -12,9 +12,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <unordered_set>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -60,8 +60,16 @@ uniform bool uHasTextureAtlas;
 uniform bool uHasTextureLookup;
 uniform bool uHasTextureIndex;
 uniform vec2 uCameraXZ;
-uniform float uNearTextureDistance;
+uniform float uMaterialMidDistance;
+uniform float uMaterialFarDistance;
+uniform bool uShowPatchBounds;
+uniform bool uShowTileBounds;
+uniform bool uShowLodTint;
+uniform vec4 uPatchBounds;
+uniform vec3 uPatchLodColor;
+uniform float uTileCellSize;
 out vec4 FragColor;
+
 vec3 hash_color(float n) {
     uint h = uint(max(n, 0.0));
     h ^= (h >> 16);
@@ -74,6 +82,7 @@ vec3 hash_color(float n) {
     float b = float((h >> 16) & 255u) / 255.0;
     return vec3(0.20 + 0.75 * r, 0.20 + 0.75 * g, 0.20 + 0.75 * b);
 }
+
 void main() {
     vec3 c;
     if (uMode == 3) {
@@ -91,20 +100,26 @@ void main() {
             gz = clamp(gz, 0, uTextureGridH - 1);
             desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
         }
-        if (camera_dist <= uNearTextureDistance
-            && uHasTextureAtlas && uHasTextureLookup && uTextureLookupSize > 0) {
-            if (desired >= 0 && desired < uTextureLookupSize) {
-                vec4 slot = texelFetch(uTextureLookup, ivec2(desired, 0), 0);
-                if (slot.z > 0.0 && slot.w > 0.0) {
-                    vec2 world_uv = vWorldXZ / max(uTextureWorldScale, 0.0001);
-                    vec2 tile_uv = fract(world_uv);
-                    vec2 atlas_uv = slot.xy + tile_uv * slot.zw;
-                    tex_color = texture(uTextureAtlas, atlas_uv).rgb;
-                    has_texture = true;
-                }
+
+        if (camera_dist <= uMaterialFarDistance
+            && uHasTextureAtlas && uHasTextureLookup && uTextureLookupSize > 0
+            && desired >= 0 && desired < uTextureLookupSize) {
+            vec4 slot = texelFetch(uTextureLookup, ivec2(desired, 0), 0);
+            if (slot.z > 0.0 && slot.w > 0.0) {
+                vec2 world_uv = vWorldXZ / max(uTextureWorldScale, 0.0001);
+                vec2 tile_uv = fract(world_uv);
+                vec2 atlas_uv = slot.xy + tile_uv * slot.zw;
+                tex_color = texture(uTextureAtlas, atlas_uv).rgb;
+                has_texture = true;
             }
         }
+
         if (has_texture) {
+            if (camera_dist > uMaterialMidDistance) {
+                float t = clamp((camera_dist - uMaterialMidDistance)
+                                / max(1.0, uMaterialFarDistance - uMaterialMidDistance), 0.0, 1.0);
+                tex_color = mix(tex_color, vSat, t * 0.35);
+            }
             c = tex_color;
         } else if (desired >= 0 && desired < 65535) {
             c = vSat;
@@ -114,12 +129,12 @@ void main() {
         }
     } else if (uMode == 1) {
         int cls = int(vMask + 0.5);
-        if (cls == 1) c = vec3(0.70, 0.60, 0.35);          // tidal
-        else if (cls == 2) c = vec3(0.92, 0.86, 0.55);     // coastline
-        else if (cls == 3) c = vec3(0.16, 0.38, 0.72);     // sea
-        else if (cls == 4) c = vec3(0.12, 0.46, 0.14);     // forest
-        else if (cls == 5) c = vec3(0.25, 0.25, 0.25);     // roadway
-        else c = vec3(0.45, 0.36, 0.22);                   // ground
+        if (cls == 1) c = vec3(0.70, 0.60, 0.35);
+        else if (cls == 2) c = vec3(0.92, 0.86, 0.55);
+        else if (cls == 3) c = vec3(0.16, 0.38, 0.72);
+        else if (cls == 4) c = vec3(0.12, 0.46, 0.14);
+        else if (cls == 5) c = vec3(0.25, 0.25, 0.25);
+        else c = vec3(0.45, 0.36, 0.22);
     } else {
         float denom = max(0.001, uMaxH - uMinH);
         float t = clamp((vHeight - uMinH) / denom, 0.0, 1.0);
@@ -128,6 +143,26 @@ void main() {
         vec3 high = vec3(0.90, 0.90, 0.88);
         c = t < 0.5 ? mix(low, mid, t * 2.0) : mix(mid, high, (t - 0.5) * 2.0);
     }
+
+    if (uShowLodTint) {
+        c = mix(c, uPatchLodColor, 0.25);
+    }
+
+    if (uShowTileBounds && uTileCellSize > 0.0) {
+        vec2 tile_uv = fract(vWorldXZ / uTileCellSize);
+        float edge = min(min(tile_uv.x, 1.0 - tile_uv.x), min(tile_uv.y, 1.0 - tile_uv.y));
+        float line = 1.0 - smoothstep(0.0, 0.03, edge);
+        c = mix(c, vec3(0.0, 0.0, 0.0), line * 0.55);
+    }
+
+    if (uShowPatchBounds) {
+        float dx = min(abs(vWorldXZ.x - uPatchBounds.x), abs(uPatchBounds.z - vWorldXZ.x));
+        float dz = min(abs(vWorldXZ.y - uPatchBounds.y), abs(uPatchBounds.w - vWorldXZ.y));
+        float edge = min(dx, dz);
+        float line = 1.0 - smoothstep(0.0, 3.0, edge);
+        c = mix(c, vec3(0.95, 0.15, 0.15), line * 0.8);
+    }
+
     FragColor = vec4(c, 1.0);
 }
 )";
@@ -153,6 +188,13 @@ void main() {
     FragColor = vec4(vColor, 1.0);
 }
 )";
+
+struct FrustumPlane {
+    float a = 0.0f;
+    float b = 0.0f;
+    float c = 0.0f;
+    float d = 0.0f;
+};
 
 static void mat4_identity(float* m) {
     std::memset(m, 0, 16 * sizeof(float));
@@ -214,6 +256,67 @@ static void mat4_look_at(float* m, const float* eye, const float* center, const 
     m[14] = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
 }
 
+static std::array<FrustumPlane, 6> extract_frustum_planes(const float* m) {
+    std::array<FrustumPlane, 6> planes{};
+    planes[0] = {m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]};  // left
+    planes[1] = {m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]};  // right
+    planes[2] = {m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]};  // bottom
+    planes[3] = {m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]};  // top
+    planes[4] = {m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]}; // near
+    planes[5] = {m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]}; // far
+
+    for (auto& p : planes) {
+        const float len = std::sqrt(p.a * p.a + p.b * p.b + p.c * p.c);
+        if (len > 1e-8f) {
+            p.a /= len;
+            p.b /= len;
+            p.c /= len;
+            p.d /= len;
+        }
+    }
+    return planes;
+}
+
+static bool aabb_inside_frustum(const std::array<FrustumPlane, 6>& frustum,
+                                float min_x, float min_y, float min_z,
+                                float max_x, float max_y, float max_z) {
+    for (const auto& p : frustum) {
+        const float px = (p.a >= 0.0f) ? max_x : min_x;
+        const float py = (p.b >= 0.0f) ? max_y : min_y;
+        const float pz = (p.c >= 0.0f) ? max_z : min_z;
+        if (p.a * px + p.b * py + p.c * pz + p.d < 0.0f)
+            return false;
+    }
+    return true;
+}
+
+static std::array<float, 3> lod_tint_color(int lod) {
+    switch (lod) {
+    case 0: return {0.10f, 0.85f, 0.10f};
+    case 1: return {0.25f, 0.75f, 0.95f};
+    case 2: return {0.95f, 0.85f, 0.20f};
+    case 3: return {0.95f, 0.45f, 0.15f};
+    default: return {0.85f, 0.10f, 0.10f};
+    }
+}
+
+static std::vector<uint8_t> make_missing_checkerboard_rgba() {
+    static constexpr int kW = 4;
+    static constexpr int kH = 4;
+    std::vector<uint8_t> out(static_cast<size_t>(kW * kH * 4), 0);
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            const bool a = ((x + y) & 1) == 0;
+            const size_t off = static_cast<size_t>(y * kW + x) * 4u;
+            out[off + 0] = a ? 240 : 24;
+            out[off + 1] = 0;
+            out[off + 2] = a ? 240 : 24;
+            out[off + 3] = 255;
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 GLWrpTerrainView::GLWrpTerrainView() {
@@ -248,7 +351,7 @@ GLWrpTerrainView::GLWrpTerrainView() {
         std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
     });
     drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
-        const float scale = 0.5f;
+        const float scale = std::max(0.1f, distance_ * 0.002f);
         const float ca = std::cos(azimuth_);
         const float sa = std::sin(azimuth_);
         const float rx = ca;
@@ -264,7 +367,7 @@ GLWrpTerrainView::GLWrpTerrainView() {
     scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
     scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
         distance_ *= (dy > 0.0) ? 0.9f : 1.1f;
-        distance_ = std::clamp(distance_, 0.1f, 10.0f);
+        distance_ = std::clamp(distance_, 5.0f, 250000.0f);
         queue_render();
         return true;
     }, false);
@@ -383,6 +486,16 @@ void GLWrpTerrainView::clear_world() {
     has_texture_atlas_ = false;
     has_texture_lookup_ = false;
     has_texture_index_ = false;
+    tile_texture_cache_.clear();
+    tile_missing_logged_once_.clear();
+    last_visible_tile_indices_.clear();
+    texture_cache_hits_ = 0;
+    texture_cache_misses_ = 0;
+    visible_tile_count_ = 0;
+    terrain_draw_calls_ = 0;
+    visible_patch_count_ = 0;
+    last_loaded_texture_count_ = 0;
+
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
     cleanup_texture_index_gl();
@@ -390,19 +503,28 @@ void GLWrpTerrainView::clear_world() {
 
     heights_.clear();
     surface_classes_.clear();
-    texture_indices_.clear();
+    tile_texture_indices_.clear();
     satellite_palette_.clear();
     grid_w_ = 0;
     grid_h_ = 0;
+    tile_grid_w_ = 0;
+    tile_grid_h_ = 0;
+    world_size_x_ = 0.0f;
+    world_size_z_ = 0.0f;
+    cell_size_ = 1.0f;
+    tile_cell_size_ = 1.0f;
     object_points_.clear();
     object_positions_.clear();
     min_elevation_ = 0.0f;
     max_elevation_ = 1.0f;
     texture_index_max_ = 1.0f;
+
     if (get_realized()) {
         rebuild_terrain_buffers();
         rebuild_object_buffers();
     }
+
+    emit_terrain_stats();
     queue_render();
 }
 
@@ -414,182 +536,169 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
         return;
     }
 
-    // Downsample large terrains for interactive preview.
-    static constexpr int kMaxGrid = 512;
-    const int step = std::max({1, (src_w + kMaxGrid - 1) / kMaxGrid, (src_h + kMaxGrid - 1) / kMaxGrid});
-    grid_w_ = std::max(2, (src_w + step - 1) / step);
-    grid_h_ = std::max(2, (src_h + step - 1) / step);
-    cell_size_ = static_cast<float>(world.grid.cell_size * static_cast<double>(step));
+    grid_w_ = src_w;
+    grid_h_ = src_h;
 
-    heights_.resize(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_));
-    surface_classes_.resize(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_), 0.0f);
-    texture_indices_.resize(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_), 0.0f);
-    texture_index_max_ = 1.0f;
-    float texture_index_min = std::numeric_limits<float>::max();
-    size_t texture_nonzero = 0;
-    size_t surface_nonzero = 0;
+    world_size_x_ = static_cast<float>(world.bounds.world_size_x);
+    world_size_z_ = static_cast<float>(world.bounds.world_size_y);
+    if (world_size_x_ <= 0.0f)
+        world_size_x_ = static_cast<float>(std::max(world.grid.cells_x, 1))
+            * static_cast<float>(std::max(world.grid.cell_size, 1.0));
+    if (world_size_z_ <= 0.0f)
+        world_size_z_ = static_cast<float>(std::max(world.grid.cells_y, 1))
+            * static_cast<float>(std::max(world.grid.cell_size, 1.0));
+
+    // Task 29 requirement: geometry spacing based on worldSize / heightmapSize.
+    cell_size_ = world_size_x_ / static_cast<float>(std::max(grid_w_, 1));
+    if (cell_size_ <= 0.0f)
+        cell_size_ = std::max(1.0f, static_cast<float>(world.grid.cell_size));
+
+    heights_.assign(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_), 0.0f);
     min_elevation_ = std::numeric_limits<float>::max();
     max_elevation_ = std::numeric_limits<float>::lowest();
 
-    enum class FormatFamily { OprwModern, OprwLegacy, Wvr4, Wvr1, Unknown };
-    FormatFamily family = FormatFamily::Unknown;
-    auto normalize_sig = [](std::string sig) {
-        auto trim = [](std::string& s) {
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
-                s.erase(s.begin());
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
-                s.pop_back();
-        };
-        trim(sig);
-        for (auto& c : sig) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return sig;
-    };
-    const std::string sig = normalize_sig(world.format.signature);
-    if (sig == "OPRW") {
-        family = (world.format.version >= 20) ? FormatFamily::OprwModern
-                                              : FormatFamily::OprwLegacy;
-    } else if (sig == "4WVR") {
-        family = FormatFamily::Wvr4;
-    } else if (sig == "1WVR") {
-        family = FormatFamily::Wvr1;
-    }
-
-    const int land_w = std::max(world.grid.cells_x, 0);
-    const int land_h = std::max(world.grid.cells_y, 0);
-    const int terr_w = std::max(world.grid.terrain_x, 0);
-    const int terr_h = std::max(world.grid.terrain_y, 0);
-    const bool has_flags = land_w > 0 && land_h > 0 && !world.cell_bit_flags.empty();
-    const bool has_textures_land = land_w > 0 && land_h > 0 && !world.cell_texture_indexes.empty();
-    const bool has_textures_terrain = terr_w > 0 && terr_h > 0 && !world.cell_texture_indexes.empty();
-
-    auto map_to_grid = [](int x, int z, int in_w, int in_h, int out_w, int out_h)
-        -> std::pair<int, int> {
-        const double ux = (in_w > 1) ? (static_cast<double>(x) / static_cast<double>(in_w - 1)) : 0.0;
-        const double uz = (in_h > 1) ? (static_cast<double>(z) / static_cast<double>(in_h - 1)) : 0.0;
-        const int ox = std::clamp(static_cast<int>(ux * static_cast<double>(std::max(1, out_w - 1))), 0, std::max(0, out_w - 1));
-        const int oz = std::clamp(static_cast<int>(uz * static_cast<double>(std::max(1, out_h - 1))), 0, std::max(0, out_h - 1));
-        return {ox, oz};
-    };
-
+    const size_t src_count = world.elevations.size();
     for (int z = 0; z < grid_h_; ++z) {
-        const int src_z = std::min(z * step, src_h - 1);
         for (int x = 0; x < grid_w_; ++x) {
-            const int src_x = std::min(x * step, src_w - 1);
-            const size_t src_idx = static_cast<size_t>(src_z) * static_cast<size_t>(src_w)
-                                 + static_cast<size_t>(src_x);
-            const float h = src_idx < world.elevations.size() ? world.elevations[src_idx] : 0.0f;
-            const size_t dst_idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
-            heights_[dst_idx] = h;
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
+            float h = 0.0f;
+            if (idx < src_count) h = world.elevations[idx];
+            heights_[idx] = h;
             min_elevation_ = std::min(min_elevation_, h);
             max_elevation_ = std::max(max_elevation_, h);
-
-            float cls = 0.0f;
-            float tex_idx = 0.0f;
-            switch (family) {
-            case FormatFamily::OprwModern:
-            case FormatFamily::OprwLegacy: {
-                if (has_flags) {
-                    const auto [fx, fz] = map_to_grid(x, z, grid_w_, grid_h_, land_w, land_h);
-                    const size_t fidx = static_cast<size_t>(fz) * static_cast<size_t>(land_w)
-                                      + static_cast<size_t>(fx);
-                    if (fidx < world.cell_bit_flags.size()) {
-                        const uint32_t f = world.cell_bit_flags[fidx];
-                        if (f & 0x40) cls = 5.0f;          // roadway
-                        else if (f & 0x20) cls = 4.0f;     // forest
-                        else cls = static_cast<float>(f & 0x03); // surface class
-                    }
-                }
-                if (has_textures_land) {
-                    const auto [tx, tz] = map_to_grid(x, z, grid_w_, grid_h_, land_w, land_h);
-                    const size_t tidx = static_cast<size_t>(tz) * static_cast<size_t>(land_w)
-                                      + static_cast<size_t>(tx);
-                    if (tidx < world.cell_texture_indexes.size())
-                        tex_idx = static_cast<float>(world.cell_texture_indexes[tidx]);
-                }
-                break;
-            }
-            case FormatFamily::Wvr4:
-            case FormatFamily::Wvr1: {
-                // OFP-era WRP variants keep texture index grid aligned to terrain/cell grid.
-                if (has_textures_terrain) {
-                    const auto [tx, tz] = map_to_grid(x, z, grid_w_, grid_h_, terr_w, terr_h);
-                    const size_t tidx = static_cast<size_t>(tz) * static_cast<size_t>(terr_w)
-                                      + static_cast<size_t>(tx);
-                    if (tidx < world.cell_texture_indexes.size())
-                        tex_idx = static_cast<float>(world.cell_texture_indexes[tidx]);
-                }
-                cls = 0.0f;
-                break;
-            }
-            case FormatFamily::Unknown:
-            default: {
-                if (has_flags) {
-                    const auto [fx, fz] = map_to_grid(x, z, grid_w_, grid_h_, land_w, land_h);
-                    const size_t fidx = static_cast<size_t>(fz) * static_cast<size_t>(land_w)
-                                      + static_cast<size_t>(fx);
-                    if (fidx < world.cell_bit_flags.size())
-                        cls = static_cast<float>(world.cell_bit_flags[fidx] & 0x03);
-                }
-                if (has_textures_land) {
-                    const auto [tx, tz] = map_to_grid(x, z, grid_w_, grid_h_, land_w, land_h);
-                    const size_t tidx = static_cast<size_t>(tz) * static_cast<size_t>(land_w)
-                                      + static_cast<size_t>(tx);
-                    if (tidx < world.cell_texture_indexes.size())
-                        tex_idx = static_cast<float>(world.cell_texture_indexes[tidx]);
-                }
-                break;
-            }
-            }
-            surface_classes_[dst_idx] = cls;
-            texture_indices_[dst_idx] = tex_idx;
-            if (cls != 0.0f) surface_nonzero++;
-            texture_index_min = std::min(texture_index_min, tex_idx);
-            texture_index_max_ = std::max(texture_index_max_, tex_idx);
-            if (tex_idx > 0.0f) texture_nonzero++;
         }
     }
     if (max_elevation_ <= min_elevation_)
         max_elevation_ = min_elevation_ + 1.0f;
 
-    if (texture_index_min == std::numeric_limits<float>::max())
-        texture_index_min = 0.0f;
-    std::string mode_handler = "unknown";
-    switch (family) {
-    case FormatFamily::OprwModern: mode_handler = "oprw-modern"; break;
-    case FormatFamily::OprwLegacy: mode_handler = "oprw-legacy"; break;
-    case FormatFamily::Wvr4: mode_handler = "4wvr"; break;
-    case FormatFamily::Wvr1: mode_handler = "1wvr"; break;
-    case FormatFamily::Unknown: break;
+    // Surface class grid in land cell space.
+    const int land_w = std::max(world.grid.cells_x, 0);
+    const int land_h = std::max(world.grid.cells_y, 0);
+    const bool has_flags = land_w > 0 && land_h > 0
+        && world.cell_bit_flags.size() >= static_cast<size_t>(land_w) * static_cast<size_t>(land_h);
+
+    surface_classes_.assign(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_), 0.0f);
+
+    auto clampi = [](int v, int lo, int hi) {
+        return std::max(lo, std::min(v, hi));
+    };
+
+    auto flag_class = [&](int x, int z) -> float {
+        if (!has_flags) return 0.0f;
+        const float wx = static_cast<float>(x) * cell_size_;
+        const float wz = static_cast<float>(z) * cell_size_;
+        const float land_cell_x = world_size_x_ / static_cast<float>(std::max(land_w, 1));
+        const float land_cell_z = world_size_z_ / static_cast<float>(std::max(land_h, 1));
+        const int fx = clampi(static_cast<int>(std::floor(wx / std::max(land_cell_x, 0.0001f))),
+                              0, land_w - 1);
+        const int fz = clampi(static_cast<int>(std::floor(wz / std::max(land_cell_z, 0.0001f))),
+                              0, land_h - 1);
+        const size_t fi = static_cast<size_t>(fz) * static_cast<size_t>(land_w) + static_cast<size_t>(fx);
+        if (fi >= world.cell_bit_flags.size()) return 0.0f;
+        const uint32_t f = world.cell_bit_flags[fi];
+        if (f & 0x40) return 5.0f;
+        if (f & 0x20) return 4.0f;
+        return static_cast<float>(f & 0x03);
+    };
+
+    // Material/tile grid from WRP cell texture indexes.
+    const size_t tex_count = world.cell_texture_indexes.size();
+    const size_t land_cells = static_cast<size_t>(std::max(land_w, 0)) * static_cast<size_t>(std::max(land_h, 0));
+    const size_t terr_cells = static_cast<size_t>(std::max(grid_w_, 0)) * static_cast<size_t>(std::max(grid_h_, 0));
+
+    tile_grid_w_ = 0;
+    tile_grid_h_ = 0;
+    if (land_w > 0 && land_h > 0 && tex_count == land_cells) {
+        tile_grid_w_ = land_w;
+        tile_grid_h_ = land_h;
+    } else if (tex_count == terr_cells) {
+        tile_grid_w_ = grid_w_;
+        tile_grid_h_ = grid_h_;
+    } else if (!world.cell_texture_indexes.empty()) {
+        // Conservative fallback: assume square-ish grid.
+        int side = static_cast<int>(std::sqrt(static_cast<double>(tex_count)));
+        side = std::max(side, 1);
+        tile_grid_w_ = side;
+        tile_grid_h_ = static_cast<int>((tex_count + static_cast<size_t>(side) - 1) / static_cast<size_t>(side));
     }
-    app_log(LogLevel::Debug,
-            "GLWrpTerrainView: handler=" + mode_handler
-            + " texture indices min=" + std::to_string(texture_index_min)
-            + " max=" + std::to_string(texture_index_max_)
-            + " nonzero=" + std::to_string(texture_nonzero)
-            + " surface_nonzero=" + std::to_string(surface_nonzero)
-            + " verts=" + std::to_string(heights_.size()));
+
+    tile_texture_indices_.clear();
+    if (tile_grid_w_ > 0 && tile_grid_h_ > 0) {
+        tile_texture_indices_.assign(static_cast<size_t>(tile_grid_w_) * static_cast<size_t>(tile_grid_h_), 0);
+        const size_t copy_n = std::min(tile_texture_indices_.size(), world.cell_texture_indexes.size());
+        std::copy_n(world.cell_texture_indexes.begin(), copy_n, tile_texture_indices_.begin());
+    }
+
+    texture_index_max_ = 1.0f;
+    for (uint16_t idx : tile_texture_indices_) {
+        texture_index_max_ = std::max(texture_index_max_, static_cast<float>(idx));
+    }
+
+    tile_cell_size_ = (tile_grid_w_ > 0) ? (world_size_x_ / static_cast<float>(tile_grid_w_)) : cell_size_;
+    if (tile_cell_size_ <= 0.0f) tile_cell_size_ = cell_size_;
+
+    auto tile_index_at_world = [&](float wx, float wz) -> int {
+        if (tile_grid_w_ <= 0 || tile_grid_h_ <= 0 || tile_texture_indices_.empty()) return -1;
+        const int tx = clampi(static_cast<int>(std::floor(wx / std::max(tile_cell_size_, 0.0001f))),
+                              0, tile_grid_w_ - 1);
+        const int tz = clampi(static_cast<int>(std::floor(wz / std::max(tile_cell_size_, 0.0001f))),
+                              0, tile_grid_h_ - 1);
+        const size_t ti = static_cast<size_t>(tz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(tx);
+        if (ti >= tile_texture_indices_.size()) return -1;
+        return static_cast<int>(tile_texture_indices_[ti]);
+    };
+
+    for (int z = 0; z < grid_h_; ++z) {
+        for (int x = 0; x < grid_w_; ++x) {
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
+            surface_classes_[idx] = flag_class(x, z);
+            const int ti = tile_index_at_world(static_cast<float>(x) * cell_size_, static_cast<float>(z) * cell_size_);
+            if (ti >= 0) texture_index_max_ = std::max(texture_index_max_, static_cast<float>(ti));
+        }
+    }
 
     texture_entries_ = world.textures;
-    if (color_mode_ == 2 && !texture_entries_.empty() && !texture_indices_.empty())
-        schedule_texture_rebuild();
+    texture_lookup_size_ = static_cast<int>(texture_entries_.size());
+    texture_lookup_uvs_.assign(texture_entries_.size(), {0.0f, 0.0f, 0.0f, 0.0f});
+    tile_texture_cache_.clear();
+    tile_missing_logged_once_.clear();
+    last_visible_tile_indices_.clear();
+    texture_cache_hits_ = 0;
+    texture_cache_misses_ = 0;
+
+    texture_index_tex_w_ = tile_grid_w_;
+    texture_index_tex_h_ = tile_grid_h_;
+    has_texture_index_ = tile_grid_w_ > 0 && tile_grid_h_ > 0 && !tile_texture_indices_.empty();
 
     set_objects(world.objects);
 
     // Camera pivot at terrain center.
-    const float world_w = static_cast<float>(grid_w_ - 1) * cell_size_;
-    const float world_h = static_cast<float>(grid_h_ - 1) * cell_size_;
-    pivot_[0] = world_w * 0.5f;
-    pivot_[2] = world_h * 0.5f;
+    pivot_[0] = world_size_x_ * 0.5f;
+    pivot_[2] = world_size_z_ * 0.5f;
     pivot_[1] = (min_elevation_ + max_elevation_) * 0.5f;
-    const float radius = std::max(world_w, world_h) * 0.75f;
-    distance_ = std::max(radius, 50.0f);
+    const float radius = std::max(world_size_x_, world_size_z_) * 0.75f;
+    distance_ = std::clamp(std::max(radius, 100.0f), 100.0f, 200000.0f);
     azimuth_ = 0.65f;
     elevation_ = 0.85f;
 
     if (get_realized()) {
         rebuild_terrain_buffers();
         rebuild_object_buffers();
+        upload_texture_index();
     }
+
+    if (color_mode_ == 2) schedule_texture_rebuild();
+
+    std::ostringstream ss;
+    ss << "GLWrpTerrainView: terrain=" << grid_w_ << "x" << grid_h_
+       << " land=" << land_w << "x" << land_h
+       << " tile=" << tile_grid_w_ << "x" << tile_grid_h_
+       << " geomCell=" << cell_size_ << "m"
+       << " tileCell=" << tile_cell_size_ << "m"
+       << " textures=" << texture_entries_.size();
+    app_log(LogLevel::Debug, ss.str());
+
+    emit_terrain_stats();
     queue_render();
 }
 
@@ -634,70 +743,64 @@ void GLWrpTerrainView::set_show_objects(bool on) {
     queue_render();
 }
 
+void GLWrpTerrainView::set_show_patch_boundaries(bool on) {
+    show_patch_boundaries_ = on;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_show_patch_lod_colors(bool on) {
+    show_patch_lod_colors_ = on;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_show_tile_boundaries(bool on) {
+    show_tile_boundaries_ = on;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_terrain_far_distance(float distance_m) {
+    terrain_far_distance_ = std::clamp(distance_m, 500.0f, 250000.0f);
+    queue_render();
+}
+
+void GLWrpTerrainView::set_material_quality_distances(float mid_distance_m, float far_distance_m) {
+    material_mid_distance_ = std::clamp(mid_distance_m, 100.0f, 200000.0f);
+    material_far_distance_ = std::clamp(far_distance_m, material_mid_distance_ + 1.0f, 250000.0f);
+    queue_render();
+}
+
 void GLWrpTerrainView::set_color_mode(int mode) {
     color_mode_ = std::clamp(mode, 0, 3);
-    const char* mode_name = "elevation";
-    if (color_mode_ == 1) mode_name = "surface";
-    else if (color_mode_ == 2) mode_name = "texture";
-    else if (color_mode_ == 3) mode_name = "satellite";
-
-    std::ostringstream ss;
-    ss << "GLWrpTerrainView: color mode -> " << color_mode_ << " (" << mode_name << ")"
-       << " grid=" << grid_w_ << "x" << grid_h_
-       << " heights=" << heights_.size()
-       << " surface=" << surface_classes_.size()
-       << " texture=" << texture_indices_.size()
-       << " texMax=" << texture_index_max_
-       << " satPalette=" << satellite_palette_.size();
-
-    if (!heights_.empty()) {
-        const int cx = std::clamp(grid_w_ / 2, 0, std::max(0, grid_w_ - 1));
-        const int cz = std::clamp(grid_h_ / 2, 0, std::max(0, grid_h_ - 1));
-        const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(grid_w_)
-                          + static_cast<size_t>(cx);
-        if (cidx < heights_.size()) {
-            const float h = heights_[cidx];
-            const float m = cidx < surface_classes_.size() ? surface_classes_[cidx] : 0.0f;
-            const float t = cidx < texture_indices_.size() ? texture_indices_[cidx] : 0.0f;
-            ss << " sample[c=" << cx << "," << cz << "]: h=" << h
-               << " mask=" << m << " tex=" << t;
-            const int ti = static_cast<int>(std::floor(t + 0.5f));
-            if (ti >= 0 && static_cast<size_t>(ti) < satellite_palette_.size()) {
-                const auto& rgb = satellite_palette_[static_cast<size_t>(ti)];
-                ss << " satRGB=[" << rgb[0] << "," << rgb[1] << "," << rgb[2] << "]";
-            } else if (color_mode_ == 3) {
-                ss << " satRGB=[missing for texIdx=" << ti << "]";
-            }
-        }
-    }
-
-    if (color_mode_ == 3 && satellite_palette_.empty())
-        app_log(LogLevel::Warning, "GLWrpTerrainView: satellite mode selected but palette is empty");
-    if (color_mode_ == 2 && !texture_entries_.empty() && !texture_indices_.empty())
+    if (color_mode_ == 2 && !texture_entries_.empty() && !tile_texture_indices_.empty())
         schedule_texture_rebuild();
-    app_log(LogLevel::Debug, ss.str());
     queue_render();
 }
 
 void GLWrpTerrainView::set_satellite_palette(const std::vector<std::array<float, 3>>& palette) {
     satellite_palette_ = palette;
-    std::ostringstream ss;
-    ss << "GLWrpTerrainView: satellite palette updated size=" << satellite_palette_.size();
-    if (!satellite_palette_.empty()) {
-        const auto& c0 = satellite_palette_[0];
-        ss << " first=[" << c0[0] << "," << c0[1] << "," << c0[2] << "]";
-    }
-    app_log(LogLevel::Debug, ss.str());
     if (get_realized()) rebuild_terrain_buffers();
     queue_render();
 }
 
+void GLWrpTerrainView::set_on_object_picked(std::function<void(size_t)> cb) {
+    on_object_picked_ = std::move(cb);
+}
+
+void GLWrpTerrainView::set_on_texture_debug_info(std::function<void(const std::string&)> cb) {
+    on_texture_debug_info_ = std::move(cb);
+}
+
+void GLWrpTerrainView::set_on_terrain_stats(std::function<void(const std::string&)> cb) {
+    on_terrain_stats_ = std::move(cb);
+    emit_terrain_stats();
+}
+
 void GLWrpTerrainView::schedule_texture_rebuild() {
     if (!texture_loader_) return;
-    if (texture_entries_.empty() || texture_indices_.empty()) return;
+    if (texture_entries_.empty() || tile_texture_indices_.empty()) return;
     if (texture_rebuild_idle_) return;
     texture_rebuild_idle_ = Glib::signal_idle().connect([this]() {
-        rebuild_texture_atlas(texture_entries_);
+        stream_visible_tile_textures();
         texture_rebuild_idle_.disconnect();
         return false;
     });
@@ -709,201 +812,14 @@ void GLWrpTerrainView::set_texture_loader_service(
     if (!texture_loader_) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
-        cleanup_texture_index_gl();
         return;
     }
-    if (color_mode_ == 2 && !texture_entries_.empty() && !texture_indices_.empty())
+    if (color_mode_ == 2 && !texture_entries_.empty() && !tile_texture_indices_.empty())
         schedule_texture_rebuild();
 }
 
-void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::TextureEntry>& textures) {
-    texture_lookup_uvs_.assign(textures.size(), {0.0f, 0.0f, 0.0f, 0.0f});
-    texture_lookup_size_ = static_cast<int>(texture_lookup_uvs_.size());
-    has_texture_lookup_ = false;
-    texture_atlas_pixels_.clear();
-    atlas_width_ = atlas_height_ = 0;
-    has_texture_atlas_ = false;
-    has_texture_index_ = false;
-    texture_index_tex_w_ = grid_w_;
-    texture_index_tex_h_ = grid_h_;
-
-    if (!texture_loader_ || textures.empty() || texture_indices_.empty()) {
-        cleanup_texture_atlas_gl();
-        cleanup_texture_lookup_gl();
-        cleanup_texture_index_gl();
-        return;
-    }
-
-    std::unordered_map<int, int> index_freq;
-    for (float value : texture_indices_) {
-        const int ti = static_cast<int>(std::floor(value + 0.5f));
-        if (ti < 0 || ti >= static_cast<int>(textures.size())) continue;
-        index_freq[ti] += 1;
-    }
-    if (index_freq.empty()) {
-        cleanup_texture_atlas_gl();
-        cleanup_texture_lookup_gl();
-        cleanup_texture_index_gl();
-        return;
-    }
-    std::vector<std::pair<int, int>> ranked;
-    ranked.reserve(index_freq.size());
-    for (const auto& kv : index_freq) ranked.push_back(kv);
-    std::sort(ranked.begin(), ranked.end(),
-              [](const auto& a, const auto& b) {
-                  if (a.second != b.second) return a.second > b.second;
-                  return a.first < b.first;
-              });
-    static constexpr size_t kMaxAtlasTextures = 256;
-    if (ranked.size() > kMaxAtlasTextures) ranked.resize(kMaxAtlasTextures);
-
-    struct AtlasEntry {
-        int index = -1;
-        LodTexturesLoaderService::TextureData data;
-    };
-    std::vector<AtlasEntry> entries;
-    entries.reserve(ranked.size());
-    int resolved_paa_pac = 0;
-    int resolved_rvmat = 0;
-    int missing = 0;
-    for (const auto& it : ranked) {
-        const int idx = it.first;
-        if (idx < 0 || idx >= static_cast<int>(textures.size())) continue;
-        const auto& texture = textures[static_cast<std::size_t>(idx)];
-        if (texture.filename.empty()) {
-            missing++;
-            continue;
-        }
-        if (auto data = texture_loader_->load_terrain_texture_entry(texture.filename)) {
-            if (data->resolved_from_material) resolved_rvmat++;
-            else resolved_paa_pac++;
-            entries.push_back(AtlasEntry{idx, std::move(*data)});
-        } else {
-            missing++;
-        }
-    }
-    if (entries.empty()) {
-        cleanup_texture_atlas_gl();
-        cleanup_texture_lookup_gl();
-        cleanup_texture_index_gl();
-        return;
-    }
-
-    static constexpr int kAtlasPadding = 2;
-    const int max_row_width = 4096;
-    struct Placement { int x = 0; int y = 0; };
-    std::vector<Placement> placements;
-    placements.reserve(entries.size());
-    int x = 0;
-    int y = 0;
-    int row_height = 0;
-    int row_width_max = 0;
-    for (const auto& entry : entries) {
-        const int w = entry.data.header.width;
-        const int h = entry.data.header.height;
-        if (w <= 0 || h <= 0) continue;
-        const int packed_w = w + 2 * kAtlasPadding;
-        const int packed_h = h + 2 * kAtlasPadding;
-        if (x > 0 && (x + packed_w > max_row_width)) {
-            row_width_max = std::max(row_width_max, x);
-            x = 0;
-            y += row_height;
-            row_height = 0;
-        }
-        placements.push_back(Placement{x, y});
-        x += packed_w;
-        row_height = std::max(row_height, packed_h);
-        row_width_max = std::max(row_width_max, x);
-    }
-    row_width_max = std::max(row_width_max, x);
-    const int atlas_w = std::max(row_width_max, 1);
-    const int atlas_h = y + row_height;
-    if (atlas_h <= 0) {
-        cleanup_texture_atlas_gl();
-        cleanup_texture_lookup_gl();
-        cleanup_texture_index_gl();
-        return;
-    }
-
-    texture_atlas_pixels_.assign(static_cast<size_t>(atlas_w) * static_cast<size_t>(atlas_h) * 4u, 0);
-    int filled_entries = 0;
-    for (size_t i = 0; i < entries.size() && i < placements.size(); ++i) {
-        const auto& entry = entries[i];
-        const int w = entry.data.header.width;
-        const int h = entry.data.header.height;
-        if (w <= 0 || h <= 0) continue;
-        const int px = placements[i].x;
-        const int py = placements[i].y;
-        const int dst_x = px + kAtlasPadding;
-        const int dst_y = py + kAtlasPadding;
-        for (int row = 0; row < h; ++row) {
-            const size_t dst = static_cast<size_t>((dst_y + row) * atlas_w + dst_x) * 4u;
-            const auto* src = entry.data.image.pixels.data()
-                + static_cast<size_t>(row) * static_cast<size_t>(w) * 4u;
-            std::memcpy(texture_atlas_pixels_.data() + dst, src, static_cast<size_t>(w) * 4u);
-        }
-
-        for (int row = 0; row < h; ++row) {
-            const size_t row_off = static_cast<size_t>(dst_y + row) * static_cast<size_t>(atlas_w);
-            const size_t left_src = (row_off + static_cast<size_t>(dst_x)) * 4u;
-            const size_t right_src = (row_off + static_cast<size_t>(dst_x + w - 1)) * 4u;
-            for (int pad = 1; pad <= kAtlasPadding; ++pad) {
-                std::memcpy(texture_atlas_pixels_.data() + (left_src - static_cast<size_t>(pad) * 4u),
-                            texture_atlas_pixels_.data() + left_src, 4u);
-                std::memcpy(texture_atlas_pixels_.data() + (right_src + static_cast<size_t>(pad) * 4u),
-                            texture_atlas_pixels_.data() + right_src, 4u);
-            }
-        }
-        for (int col = -kAtlasPadding; col < w + kAtlasPadding; ++col) {
-            const int sx = dst_x + col;
-            const size_t top_src = (static_cast<size_t>(dst_y) * static_cast<size_t>(atlas_w)
-                                   + static_cast<size_t>(sx)) * 4u;
-            const size_t bot_src = (static_cast<size_t>(dst_y + h - 1) * static_cast<size_t>(atlas_w)
-                                   + static_cast<size_t>(sx)) * 4u;
-            for (int pad = 1; pad <= kAtlasPadding; ++pad) {
-                const size_t top_dst = (static_cast<size_t>(dst_y - pad) * static_cast<size_t>(atlas_w)
-                                       + static_cast<size_t>(sx)) * 4u;
-                const size_t bot_dst = (static_cast<size_t>(dst_y + h - 1 + pad) * static_cast<size_t>(atlas_w)
-                                       + static_cast<size_t>(sx)) * 4u;
-                std::memcpy(texture_atlas_pixels_.data() + top_dst, texture_atlas_pixels_.data() + top_src, 4u);
-                std::memcpy(texture_atlas_pixels_.data() + bot_dst, texture_atlas_pixels_.data() + bot_src, 4u);
-            }
-        }
-
-        const float off_x = static_cast<float>(dst_x) / static_cast<float>(atlas_w);
-        const float off_y = static_cast<float>(dst_y) / static_cast<float>(atlas_h);
-        const float scale_x = static_cast<float>(w) / static_cast<float>(atlas_w);
-        const float scale_y = static_cast<float>(h) / static_cast<float>(atlas_h);
-        if (entry.index >= 0 && entry.index < static_cast<int>(texture_lookup_uvs_.size())) {
-            texture_lookup_uvs_[static_cast<std::size_t>(entry.index)] = {off_x, off_y, scale_x, scale_y};
-            has_texture_lookup_ = true;
-        }
-        filled_entries++;
-    }
-
-    atlas_width_ = atlas_w;
-    atlas_height_ = atlas_h;
-    has_texture_atlas_ = !texture_atlas_pixels_.empty() && filled_entries > 0;
-    texture_world_scale_ = std::max(cell_size_, 1.0f) * 8.0f;
-    has_texture_index_ = (texture_index_tex_w_ > 0 && texture_index_tex_h_ > 0
-                          && texture_indices_.size()
-                             >= static_cast<size_t>(texture_index_tex_w_) * static_cast<size_t>(texture_index_tex_h_));
-    if (get_realized()) {
-        upload_texture_atlas();
-        upload_texture_lookup();
-        upload_texture_index();
-    }
-
-    std::ostringstream ss;
-    ss << "GLWrpTerrainView: texture atlas built entries=" << filled_entries
-       << " lookup_size=" << texture_lookup_size_
-       << " total=" << textures.size()
-       << " unique_used=" << index_freq.size()
-       << " loaded_used=" << ranked.size()
-       << " resolved_paa_pac=" << resolved_paa_pac
-       << " resolved_rvmat=" << resolved_rvmat
-       << " missing=" << missing;
-    app_log(LogLevel::Debug, ss.str());
+void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::TextureEntry>&) {
+    stream_visible_tile_textures();
 }
 
 void GLWrpTerrainView::upload_texture_atlas() {
@@ -918,10 +834,11 @@ void GLWrpTerrainView::upload_texture_atlas() {
     glBindTexture(GL_TEXTURE_2D, texture_atlas_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlas_width_, atlas_height_, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, texture_atlas_pixels_.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     has_texture_atlas_ = true;
 }
@@ -947,7 +864,7 @@ void GLWrpTerrainView::upload_texture_lookup() {
 }
 
 void GLWrpTerrainView::upload_texture_index() {
-    if (!get_realized() || texture_indices_.empty() || texture_index_tex_w_ <= 0 || texture_index_tex_h_ <= 0)
+    if (!get_realized() || tile_texture_indices_.empty() || tile_grid_w_ <= 0 || tile_grid_h_ <= 0)
         return;
     make_current();
     if (has_error()) return;
@@ -955,15 +872,23 @@ void GLWrpTerrainView::upload_texture_index() {
         glDeleteTextures(1, &texture_index_tex_);
         texture_index_tex_ = 0;
     }
+
+    std::vector<float> tex_index_float;
+    tex_index_float.reserve(tile_texture_indices_.size());
+    for (uint16_t v : tile_texture_indices_)
+        tex_index_float.push_back(static_cast<float>(v));
+
     glGenTextures(1, &texture_index_tex_);
     glBindTexture(GL_TEXTURE_2D, texture_index_tex_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, texture_index_tex_w_, texture_index_tex_h_, 0,
-                 GL_RED, GL_FLOAT, texture_indices_.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, tile_grid_w_, tile_grid_h_, 0,
+                 GL_RED, GL_FLOAT, tex_index_float.data());
     glBindTexture(GL_TEXTURE_2D, 0);
+    texture_index_tex_w_ = tile_grid_w_;
+    texture_index_tex_h_ = tile_grid_h_;
     has_texture_index_ = true;
 }
 
@@ -1007,14 +932,6 @@ void GLWrpTerrainView::cleanup_texture_index_gl() {
     has_texture_index_ = false;
 }
 
-void GLWrpTerrainView::set_on_object_picked(std::function<void(size_t)> cb) {
-    on_object_picked_ = std::move(cb);
-}
-
-void GLWrpTerrainView::set_on_texture_debug_info(std::function<void(const std::string&)> cb) {
-    on_texture_debug_info_ = std::move(cb);
-}
-
 void GLWrpTerrainView::on_realize_gl() {
     make_current();
     if (has_error()) {
@@ -1050,7 +967,15 @@ void GLWrpTerrainView::on_realize_gl() {
     loc_has_texture_lookup_ = glGetUniformLocation(prog_terrain_, "uHasTextureLookup");
     loc_has_texture_index_ = glGetUniformLocation(prog_terrain_, "uHasTextureIndex");
     loc_camera_xz_ = glGetUniformLocation(prog_terrain_, "uCameraXZ");
-    loc_near_texture_distance_ = glGetUniformLocation(prog_terrain_, "uNearTextureDistance");
+    loc_material_mid_distance_ = glGetUniformLocation(prog_terrain_, "uMaterialMidDistance");
+    loc_material_far_distance_ = glGetUniformLocation(prog_terrain_, "uMaterialFarDistance");
+    loc_show_patch_bounds_ = glGetUniformLocation(prog_terrain_, "uShowPatchBounds");
+    loc_show_tile_bounds_ = glGetUniformLocation(prog_terrain_, "uShowTileBounds");
+    loc_show_lod_tint_ = glGetUniformLocation(prog_terrain_, "uShowLodTint");
+    loc_patch_bounds_ = glGetUniformLocation(prog_terrain_, "uPatchBounds");
+    loc_patch_lod_color_ = glGetUniformLocation(prog_terrain_, "uPatchLodColor");
+    loc_tile_cell_size_ = glGetUniformLocation(prog_terrain_, "uTileCellSize");
+
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
 
     glUseProgram(prog_terrain_);
@@ -1088,9 +1013,14 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
 
     float mvp[16];
     build_mvp(mvp);
-    update_visible_terrain_indices(mvp, eye);
+    update_visible_patches(mvp, eye);
 
-    if (terrain_vao_ && terrain_visible_index_count_ > 0) {
+    if (color_mode_ == 2)
+        stream_visible_tile_textures();
+
+    terrain_draw_calls_ = 0;
+
+    if (!terrain_patches_.empty() && !visible_patch_indices_.empty()) {
         glUseProgram(prog_terrain_);
         glUniformMatrix4fv(loc_mvp_terrain_, 1, GL_FALSE, mvp);
         glUniform1f(loc_hmin_terrain_, min_elevation_);
@@ -1098,14 +1028,16 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         glUniform1i(loc_mode_terrain_, color_mode_);
         if (loc_camera_xz_ >= 0)
             glUniform2f(loc_camera_xz_, eye[0], eye[2]);
-        if (loc_near_texture_distance_ >= 0) {
-            const float scaled = std::max(near_texture_distance_, cell_size_ * 16.0f);
-            glUniform1f(loc_near_texture_distance_, scaled);
-        }
+        if (loc_material_mid_distance_ >= 0)
+            glUniform1f(loc_material_mid_distance_, material_mid_distance_);
+        if (loc_material_far_distance_ >= 0)
+            glUniform1f(loc_material_far_distance_, material_far_distance_);
+
         if (loc_has_texture_atlas_ >= 0)
             glUniform1i(loc_has_texture_atlas_, has_texture_atlas_ ? 1 : 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, has_texture_atlas_ ? texture_atlas_ : 0);
+
         if (loc_texture_lookup_ >= 0) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, has_texture_lookup_ ? texture_lookup_tex_ : 0);
@@ -1116,6 +1048,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             glUniform1i(loc_texture_lookup_size_, texture_lookup_size_);
         if (loc_has_texture_lookup_ >= 0)
             glUniform1i(loc_has_texture_lookup_, has_texture_lookup_ ? 1 : 0);
+
         if (loc_texture_index_ >= 0) {
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, has_texture_index_ ? texture_index_tex_ : 0);
@@ -1123,7 +1056,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             glActiveTexture(GL_TEXTURE0);
         }
         if (loc_texture_cell_size_ >= 0)
-            glUniform1f(loc_texture_cell_size_, cell_size_);
+            glUniform1f(loc_texture_cell_size_, tile_cell_size_);
         if (loc_texture_grid_w_ >= 0)
             glUniform1i(loc_texture_grid_w_, texture_index_tex_w_);
         if (loc_texture_grid_h_ >= 0)
@@ -1132,11 +1065,37 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             glUniform1i(loc_has_texture_index_, has_texture_index_ ? 1 : 0);
         if (loc_texture_world_scale_ >= 0)
             glUniform1f(loc_texture_world_scale_, texture_world_scale_);
-        if (loc_texture_atlas_ >= 0)
-            glUniform1i(loc_texture_atlas_, 0);
-        glBindVertexArray(terrain_vao_);
+
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        glDrawElements(GL_TRIANGLES, terrain_visible_index_count_, GL_UNSIGNED_INT, nullptr);
+
+        for (int patch_idx : visible_patch_indices_) {
+            if (patch_idx < 0 || patch_idx >= static_cast<int>(terrain_patches_.size())) continue;
+            auto& patch = terrain_patches_[static_cast<size_t>(patch_idx)];
+            const int lod = std::clamp(patch.current_lod, 0, static_cast<int>(lod_index_buffers_.size()) - 1);
+            const auto& ib = lod_index_buffers_[static_cast<size_t>(lod)];
+            if (patch.vao == 0 || ib.ibo == 0 || ib.index_count <= 0) continue;
+
+            if (loc_show_patch_bounds_ >= 0)
+                glUniform1i(loc_show_patch_bounds_, show_patch_boundaries_ ? 1 : 0);
+            if (loc_show_tile_bounds_ >= 0)
+                glUniform1i(loc_show_tile_bounds_, show_tile_boundaries_ ? 1 : 0);
+            if (loc_show_lod_tint_ >= 0)
+                glUniform1i(loc_show_lod_tint_, show_patch_lod_colors_ ? 1 : 0);
+            if (loc_tile_cell_size_ >= 0)
+                glUniform1f(loc_tile_cell_size_, tile_cell_size_);
+            if (loc_patch_bounds_ >= 0)
+                glUniform4f(loc_patch_bounds_, patch.min_x, patch.min_z, patch.max_x, patch.max_z);
+            if (loc_patch_lod_color_ >= 0) {
+                const auto tint = lod_tint_color(lod);
+                glUniform3f(loc_patch_lod_color_, tint[0], tint[1], tint[2]);
+            }
+
+            glBindVertexArray(patch.vao);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib.ibo);
+            glDrawElements(GL_TRIANGLES, ib.index_count, GL_UNSIGNED_INT, nullptr);
+            terrain_draw_calls_++;
+        }
+
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
@@ -1152,21 +1111,24 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
 
     if (on_texture_debug_info_) {
         std::string info;
-        if (color_mode_ == 2 && grid_w_ > 0 && grid_h_ > 0 && !texture_indices_.empty()) {
-            const int cx = std::clamp(static_cast<int>(std::floor(pivot_[0] / std::max(cell_size_, 0.0001f))),
-                                      0, grid_w_ - 1);
-            const int cz = std::clamp(static_cast<int>(std::floor(pivot_[2] / std::max(cell_size_, 0.0001f))),
-                                      0, grid_h_ - 1);
-            const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(grid_w_) + static_cast<size_t>(cx);
-            const int ti = (cidx < texture_indices_.size())
-                ? static_cast<int>(std::floor(texture_indices_[cidx] + 0.5f)) : -1;
+        if (color_mode_ == 2 && tile_grid_w_ > 0 && tile_grid_h_ > 0 && !tile_texture_indices_.empty()) {
+            const int cx = std::clamp(static_cast<int>(std::floor(pivot_[0] / std::max(tile_cell_size_, 0.0001f))),
+                                      0, tile_grid_w_ - 1);
+            const int cz = std::clamp(static_cast<int>(std::floor(pivot_[2] / std::max(tile_cell_size_, 0.0001f))),
+                                      0, tile_grid_h_ - 1);
+            const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(cx);
+            const int ti = (cidx < tile_texture_indices_.size())
+                ? static_cast<int>(tile_texture_indices_[cidx]) : -1;
             std::string state = "invalid";
             if (ti >= 0 && ti < texture_lookup_size_ && ti < static_cast<int>(texture_lookup_uvs_.size())) {
                 const auto& slot = texture_lookup_uvs_[static_cast<size_t>(ti)];
                 state = (slot[2] > 0.0f && slot[3] > 0.0f) ? "resolved" : "missing";
             }
             std::ostringstream ss;
-            ss << "Cell[" << cx << "," << cz << "] idx=" << ti << " slot=" << state;
+            ss << "Tile[" << cx << "," << cz << "] idx=" << ti << " slot=" << state
+               << " | patches " << visible_patch_count_ << "/" << terrain_patches_.size()
+               << " draws " << terrain_draw_calls_
+               << " tiles " << visible_tile_count_;
             info = ss.str();
         }
         if (info != last_texture_debug_info_) {
@@ -1174,15 +1136,49 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             on_texture_debug_info_(info);
         }
     }
+
+    emit_terrain_stats();
     return true;
 }
 
+void GLWrpTerrainView::cleanup_patch_buffers() {
+    if (!get_realized()) {
+        for (auto& p : terrain_patches_) {
+            p.vao = 0;
+            p.vbo = 0;
+        }
+        terrain_patches_.clear();
+        visible_patch_indices_.clear();
+        return;
+    }
+
+    for (auto& p : terrain_patches_) {
+        if (p.vao) {
+            glDeleteVertexArrays(1, &p.vao);
+            p.vao = 0;
+        }
+        if (p.vbo) {
+            glDeleteBuffers(1, &p.vbo);
+            p.vbo = 0;
+        }
+    }
+    terrain_patches_.clear();
+    visible_patch_indices_.clear();
+}
+
+void GLWrpTerrainView::cleanup_lod_buffers() {
+    for (auto& lod : lod_index_buffers_) {
+        if (lod.ibo && get_realized()) {
+            glDeleteBuffers(1, &lod.ibo);
+        }
+        lod.ibo = 0;
+        lod.index_count = 0;
+    }
+}
+
 void GLWrpTerrainView::cleanup_gl() {
-    if (terrain_vao_) { glDeleteVertexArrays(1, &terrain_vao_); terrain_vao_ = 0; }
-    if (terrain_vbo_) { glDeleteBuffers(1, &terrain_vbo_); terrain_vbo_ = 0; }
-    if (terrain_ebo_) { glDeleteBuffers(1, &terrain_ebo_); terrain_ebo_ = 0; }
-    terrain_index_count_ = 0;
-    terrain_visible_index_count_ = 0;
+    cleanup_patch_buffers();
+    cleanup_lod_buffers();
 
     if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
     if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
@@ -1224,143 +1220,521 @@ uint32_t GLWrpTerrainView::link_program(uint32_t vs, uint32_t fs) {
     return prog;
 }
 
+void GLWrpTerrainView::rebuild_shared_lod_buffers() {
+    cleanup_lod_buffers();
+
+    static constexpr std::array<int, 5> kLodSteps = {1, 2, 4, 8, 16};
+    const int side = patch_quads_ + 1;
+    const int core_count = side * side;
+    const int top_off = core_count;
+    const int bottom_off = top_off + side;
+    const int left_off = bottom_off + side;
+    const int right_off = left_off + side;
+
+    auto core_index = [side](int x, int z) -> uint32_t {
+        return static_cast<uint32_t>(z * side + x);
+    };
+
+    for (size_t i = 0; i < lod_index_buffers_.size(); ++i) {
+        const int step = kLodSteps[i];
+        std::vector<uint32_t> indices;
+        indices.reserve(static_cast<size_t>(patch_quads_ / step) * static_cast<size_t>(patch_quads_ / step) * 6u +
+                        static_cast<size_t>(patch_quads_) * 24u);
+
+        for (int z = 0; z < patch_quads_; z += step) {
+            for (int x = 0; x < patch_quads_; x += step) {
+                const uint32_t i00 = core_index(x, z);
+                const uint32_t i10 = core_index(x + step, z);
+                const uint32_t i01 = core_index(x, z + step);
+                const uint32_t i11 = core_index(x + step, z + step);
+                indices.push_back(i00); indices.push_back(i01); indices.push_back(i10);
+                indices.push_back(i10); indices.push_back(i01); indices.push_back(i11);
+            }
+        }
+
+        // Skirts: always full-resolution edges.
+        for (int x = 0; x < patch_quads_; ++x) {
+            const uint32_t c0 = core_index(x, 0);
+            const uint32_t c1 = core_index(x + 1, 0);
+            const uint32_t s0 = static_cast<uint32_t>(top_off + x);
+            const uint32_t s1 = static_cast<uint32_t>(top_off + x + 1);
+            indices.push_back(c0); indices.push_back(s0); indices.push_back(c1);
+            indices.push_back(c1); indices.push_back(s0); indices.push_back(s1);
+        }
+        for (int x = 0; x < patch_quads_; ++x) {
+            const uint32_t c0 = core_index(x, patch_quads_);
+            const uint32_t c1 = core_index(x + 1, patch_quads_);
+            const uint32_t s0 = static_cast<uint32_t>(bottom_off + x);
+            const uint32_t s1 = static_cast<uint32_t>(bottom_off + x + 1);
+            indices.push_back(c1); indices.push_back(s0); indices.push_back(c0);
+            indices.push_back(c1); indices.push_back(s1); indices.push_back(s0);
+        }
+        for (int z = 0; z < patch_quads_; ++z) {
+            const uint32_t c0 = core_index(0, z);
+            const uint32_t c1 = core_index(0, z + 1);
+            const uint32_t s0 = static_cast<uint32_t>(left_off + z);
+            const uint32_t s1 = static_cast<uint32_t>(left_off + z + 1);
+            indices.push_back(c1); indices.push_back(s0); indices.push_back(c0);
+            indices.push_back(c1); indices.push_back(s1); indices.push_back(s0);
+        }
+        for (int z = 0; z < patch_quads_; ++z) {
+            const uint32_t c0 = core_index(patch_quads_, z);
+            const uint32_t c1 = core_index(patch_quads_, z + 1);
+            const uint32_t s0 = static_cast<uint32_t>(right_off + z);
+            const uint32_t s1 = static_cast<uint32_t>(right_off + z + 1);
+            indices.push_back(c0); indices.push_back(s0); indices.push_back(c1);
+            indices.push_back(c1); indices.push_back(s0); indices.push_back(s1);
+        }
+
+        auto& lod = lod_index_buffers_[i];
+        lod.step = step;
+        lod.index_count = static_cast<int>(indices.size());
+        glGenBuffers(1, &lod.ibo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lod.ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(indices.size() * sizeof(uint32_t)),
+                     indices.data(), GL_STATIC_DRAW);
+    }
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+void GLWrpTerrainView::rebuild_patch_buffers() {
+    cleanup_patch_buffers();
+
+    if (grid_w_ <= 1 || grid_h_ <= 1 || heights_.empty()) return;
+
+    patch_quads_ = (std::max(grid_w_, grid_h_) <= 512) ? 32 : 64;
+    patch_cols_ = std::max(1, (grid_w_ + patch_quads_ - 1) / patch_quads_);
+    patch_rows_ = std::max(1, (grid_h_ + patch_quads_ - 1) / patch_quads_);
+    skirt_drop_m_ = std::clamp(cell_size_ * 0.7f, 2.0f, 10.0f);
+
+    rebuild_shared_lod_buffers();
+
+    const int side = patch_quads_ + 1;
+    const int core_count = side * side;
+    const int top_off = core_count;
+    const int bottom_off = top_off + side;
+    const int left_off = bottom_off + side;
+    const int right_off = left_off + side;
+
+    auto idx_core = [side](int x, int z) {
+        return static_cast<size_t>(z * side + x);
+    };
+
+    auto clampi = [](int v, int lo, int hi) {
+        return std::max(lo, std::min(v, hi));
+    };
+
+    auto tile_index_at_world = [&](float wx, float wz) -> int {
+        if (tile_grid_w_ <= 0 || tile_grid_h_ <= 0 || tile_texture_indices_.empty()) return -1;
+        const int tx = clampi(static_cast<int>(std::floor(wx / std::max(tile_cell_size_, 0.0001f))),
+                              0, tile_grid_w_ - 1);
+        const int tz = clampi(static_cast<int>(std::floor(wz / std::max(tile_cell_size_, 0.0001f))),
+                              0, tile_grid_h_ - 1);
+        const size_t ti = static_cast<size_t>(tz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(tx);
+        if (ti >= tile_texture_indices_.size()) return -1;
+        return static_cast<int>(tile_texture_indices_[ti]);
+    };
+
+    terrain_patches_.reserve(static_cast<size_t>(patch_cols_) * static_cast<size_t>(patch_rows_));
+
+    for (int pz = 0; pz < patch_rows_; ++pz) {
+        for (int px = 0; px < patch_cols_; ++px) {
+            const int base_x = px * patch_quads_;
+            const int base_z = pz * patch_quads_;
+
+            std::vector<Vertex> verts;
+            verts.resize(static_cast<size_t>(core_count + side * 4));
+
+            float min_x = std::numeric_limits<float>::max();
+            float min_y = std::numeric_limits<float>::max();
+            float min_z = std::numeric_limits<float>::max();
+            float max_x = std::numeric_limits<float>::lowest();
+            float max_y = std::numeric_limits<float>::lowest();
+            float max_z = std::numeric_limits<float>::lowest();
+
+            for (int vz = 0; vz < side; ++vz) {
+                const int src_z = std::min(base_z + vz, grid_h_ - 1);
+                for (int vx = 0; vx < side; ++vx) {
+                    const int src_x = std::min(base_x + vx, grid_w_ - 1);
+                    const size_t src_idx = static_cast<size_t>(src_z) * static_cast<size_t>(grid_w_)
+                                         + static_cast<size_t>(src_x);
+                    const float h = (src_idx < heights_.size()) ? heights_[src_idx] : 0.0f;
+                    const float m = (src_idx < surface_classes_.size()) ? surface_classes_[src_idx] : 0.0f;
+                    const float wx = static_cast<float>(src_x) * cell_size_;
+                    const float wz = static_cast<float>(src_z) * cell_size_;
+
+                    float sr = 0.30f, sg = 0.30f, sb = 0.30f;
+                    const int ti = tile_index_at_world(wx, wz);
+                    if (ti >= 0 && static_cast<size_t>(ti) < satellite_palette_.size()) {
+                        sr = satellite_palette_[static_cast<size_t>(ti)][0];
+                        sg = satellite_palette_[static_cast<size_t>(ti)][1];
+                        sb = satellite_palette_[static_cast<size_t>(ti)][2];
+                    }
+
+                    const size_t vi = idx_core(vx, vz);
+                    verts[vi] = Vertex{wx, h, wz, h, m, sr, sg, sb};
+
+                    min_x = std::min(min_x, wx);
+                    min_y = std::min(min_y, h);
+                    min_z = std::min(min_z, wz);
+                    max_x = std::max(max_x, wx);
+                    max_y = std::max(max_y, h);
+                    max_z = std::max(max_z, wz);
+                }
+            }
+
+            auto make_skirt = [&](size_t dst_idx, size_t src_idx) {
+                verts[dst_idx] = verts[src_idx];
+                verts[dst_idx].y -= skirt_drop_m_;
+                min_y = std::min(min_y, verts[dst_idx].y);
+            };
+
+            for (int x = 0; x < side; ++x)
+                make_skirt(static_cast<size_t>(top_off + x), idx_core(x, 0));
+            for (int x = 0; x < side; ++x)
+                make_skirt(static_cast<size_t>(bottom_off + x), idx_core(x, patch_quads_));
+            for (int z = 0; z < side; ++z)
+                make_skirt(static_cast<size_t>(left_off + z), idx_core(0, z));
+            for (int z = 0; z < side; ++z)
+                make_skirt(static_cast<size_t>(right_off + z), idx_core(patch_quads_, z));
+
+            TerrainPatch patch;
+            patch.patch_x = px;
+            patch.patch_z = pz;
+            patch.base_grid_x = base_x;
+            patch.base_grid_z = base_z;
+            patch.min_x = min_x;
+            patch.min_y = min_y;
+            patch.min_z = min_z;
+            patch.max_x = max_x;
+            patch.max_y = max_y;
+            patch.max_z = max_z;
+            patch.center_x = 0.5f * (min_x + max_x);
+            patch.center_y = 0.5f * (min_y + max_y);
+            patch.center_z = 0.5f * (min_z + max_z);
+            patch.current_lod = 0;
+
+            if (tile_grid_w_ > 0 && tile_grid_h_ > 0) {
+                patch.tile_min_x = clampi(static_cast<int>(std::floor(min_x / std::max(tile_cell_size_, 0.0001f))),
+                                          0, tile_grid_w_ - 1);
+                patch.tile_max_x = clampi(static_cast<int>(std::floor(max_x / std::max(tile_cell_size_, 0.0001f))),
+                                          0, tile_grid_w_ - 1);
+                patch.tile_min_z = clampi(static_cast<int>(std::floor(min_z / std::max(tile_cell_size_, 0.0001f))),
+                                          0, tile_grid_h_ - 1);
+                patch.tile_max_z = clampi(static_cast<int>(std::floor(max_z / std::max(tile_cell_size_, 0.0001f))),
+                                          0, tile_grid_h_ - 1);
+            }
+
+            glGenVertexArrays(1, &patch.vao);
+            glGenBuffers(1, &patch.vbo);
+            glBindVertexArray(patch.vao);
+            glBindBuffer(GL_ARRAY_BUFFER, patch.vbo);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Vertex)),
+                         verts.data(), GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                  reinterpret_cast<void*>(0));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                  reinterpret_cast<void*>(3 * sizeof(float)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                  reinterpret_cast<void*>(4 * sizeof(float)));
+            glEnableVertexAttribArray(3);
+            glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                  reinterpret_cast<void*>(5 * sizeof(float)));
+            glBindVertexArray(0);
+
+            terrain_patches_.push_back(std::move(patch));
+        }
+    }
+
+    visible_patch_indices_.reserve(terrain_patches_.size());
+}
+
 void GLWrpTerrainView::rebuild_terrain_buffers() {
     make_current();
     if (has_error()) return;
 
-    if (terrain_vao_) { glDeleteVertexArrays(1, &terrain_vao_); terrain_vao_ = 0; }
-    if (terrain_vbo_) { glDeleteBuffers(1, &terrain_vbo_); terrain_vbo_ = 0; }
-    if (terrain_ebo_) { glDeleteBuffers(1, &terrain_ebo_); terrain_ebo_ = 0; }
-    terrain_index_count_ = 0;
-
-    if (grid_w_ <= 1 || grid_h_ <= 1 || heights_.empty()) return;
-
-    std::vector<Vertex> verts;
-    verts.reserve(static_cast<size_t>(grid_w_) * static_cast<size_t>(grid_h_));
-    for (int z = 0; z < grid_h_; ++z) {
-        for (int x = 0; x < grid_w_; ++x) {
-            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
-            const float h = idx < heights_.size() ? heights_[idx] : 0.0f;
-            const float m = idx < surface_classes_.size() ? surface_classes_[idx] : 0.0f;
-            float sr = 0.30f, sg = 0.30f, sb = 0.30f;
-            const float t = idx < texture_indices_.size() ? texture_indices_[idx] : 0.0f;
-            const int ti = static_cast<int>(std::floor(t + 0.5f));
-            if (ti >= 0 && static_cast<size_t>(ti) < satellite_palette_.size()) {
-                sr = satellite_palette_[static_cast<size_t>(ti)][0];
-                sg = satellite_palette_[static_cast<size_t>(ti)][1];
-                sb = satellite_palette_[static_cast<size_t>(ti)][2];
-            }
-            verts.push_back(Vertex{
-                static_cast<float>(x) * cell_size_,
-                h,
-                static_cast<float>(z) * cell_size_,
-                h,
-                m,
-                sr, sg, sb});
-        }
-    }
-
-    std::vector<uint32_t> indices;
-    indices.reserve(static_cast<size_t>(grid_w_ - 1) * static_cast<size_t>(grid_h_ - 1) * 6);
-    for (int z = 0; z < grid_h_ - 1; ++z) {
-        for (int x = 0; x < grid_w_ - 1; ++x) {
-            const uint32_t i00 = static_cast<uint32_t>(z * grid_w_ + x);
-            const uint32_t i10 = static_cast<uint32_t>(z * grid_w_ + (x + 1));
-            const uint32_t i01 = static_cast<uint32_t>((z + 1) * grid_w_ + x);
-            const uint32_t i11 = static_cast<uint32_t>((z + 1) * grid_w_ + (x + 1));
-            indices.push_back(i00); indices.push_back(i01); indices.push_back(i10);
-            indices.push_back(i10); indices.push_back(i01); indices.push_back(i11);
-        }
-    }
-    terrain_index_count_ = static_cast<int>(indices.size());
-    terrain_visible_indices_ = indices;
-    terrain_visible_index_count_ = terrain_index_count_;
-
-    glGenVertexArrays(1, &terrain_vao_);
-    glGenBuffers(1, &terrain_vbo_);
-    glGenBuffers(1, &terrain_ebo_);
-
-    glBindVertexArray(terrain_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, terrain_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Vertex)),
-                 verts.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrain_ebo_);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(indices.size() * sizeof(uint32_t)),
-                 indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<void*>(4 * sizeof(float)));
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<void*>(5 * sizeof(float)));
-    glBindVertexArray(0);
+    rebuild_patch_buffers();
+    upload_texture_index();
 }
 
-void GLWrpTerrainView::update_visible_terrain_indices(const float* mvp, const float* eye) {
-    if (grid_w_ <= 1 || grid_h_ <= 1 || heights_.empty() || terrain_ebo_ == 0) {
-        terrain_visible_index_count_ = 0;
+int GLWrpTerrainView::choose_patch_lod(const TerrainPatch& patch, const float* eye) const {
+    const float dx = patch.center_x - eye[0];
+    const float dy = patch.center_y - eye[1];
+    const float dz = patch.center_z - eye[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    const float patch_span = static_cast<float>(patch_quads_) * cell_size_;
+    const float b0 = std::max(220.0f, patch_span * 1.25f);
+    const float b1 = b0 * 2.0f;
+    const float b2 = b0 * 4.0f;
+    const float b3 = b0 * 8.0f;
+    const std::array<float, 4> bounds = {b0, b1, b2, b3};
+
+    int lod = std::clamp(patch.current_lod, 0, 4);
+    const float hysteresis = std::max(40.0f, patch_span * 0.35f);
+
+    while (lod < 4 && dist > (bounds[static_cast<size_t>(lod)] + hysteresis)) lod++;
+    while (lod > 0 && dist < (bounds[static_cast<size_t>(lod - 1)] - hysteresis)) lod--;
+    return lod;
+}
+
+void GLWrpTerrainView::update_visible_patches(const float* mvp, const float* eye) {
+    visible_patch_indices_.clear();
+    visible_patch_count_ = 0;
+
+    if (terrain_patches_.empty()) return;
+
+    const auto frustum = extract_frustum_planes(mvp);
+    const float far2 = terrain_far_distance_ * terrain_far_distance_;
+
+    for (size_t i = 0; i < terrain_patches_.size(); ++i) {
+        auto& patch = terrain_patches_[i];
+
+        const float dx = patch.center_x - eye[0];
+        const float dy = patch.center_y - eye[1];
+        const float dz = patch.center_z - eye[2];
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > far2) continue;
+
+        if (!aabb_inside_frustum(frustum,
+                                 patch.min_x, patch.min_y, patch.min_z,
+                                 patch.max_x, patch.max_y, patch.max_z)) {
+            continue;
+        }
+
+        patch.current_lod = choose_patch_lod(patch, eye);
+        visible_patch_indices_.push_back(static_cast<int>(i));
+    }
+
+    visible_patch_count_ = static_cast<int>(visible_patch_indices_.size());
+}
+
+std::vector<int> GLWrpTerrainView::collect_visible_tile_indices() const {
+    std::vector<int> out;
+    if (tile_grid_w_ <= 0 || tile_grid_h_ <= 0 || tile_texture_indices_.empty()) return out;
+
+    std::unordered_set<int> uniq;
+    uniq.reserve(visible_patch_indices_.size() * 8);
+
+    for (int patch_idx : visible_patch_indices_) {
+        if (patch_idx < 0 || patch_idx >= static_cast<int>(terrain_patches_.size())) continue;
+        const auto& patch = terrain_patches_[static_cast<size_t>(patch_idx)];
+        for (int z = patch.tile_min_z; z <= patch.tile_max_z; ++z) {
+            for (int x = patch.tile_min_x; x <= patch.tile_max_x; ++x) {
+                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(tile_grid_w_)
+                                 + static_cast<size_t>(x);
+                if (idx >= tile_texture_indices_.size()) continue;
+                const int ti = static_cast<int>(tile_texture_indices_[idx]);
+                if (ti < 0 || ti >= static_cast<int>(texture_entries_.size())) continue;
+                uniq.insert(ti);
+            }
+        }
+    }
+
+    out.assign(uniq.begin(), uniq.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void GLWrpTerrainView::stream_visible_tile_textures() {
+    if (!texture_loader_ || texture_entries_.empty() || visible_patch_indices_.empty()) {
+        visible_tile_count_ = 0;
         return;
     }
 
-    terrain_visible_indices_.clear();
-    terrain_visible_indices_.reserve(static_cast<size_t>(grid_w_ - 1) * static_cast<size_t>(grid_h_ - 1) * 3);
-    const float max_dist = std::max(distance_ * 3.0f, cell_size_ * 48.0f);
-    const float max_dist2 = max_dist * max_dist;
-    const float cull_margin = 1.2f;
+    auto visible = collect_visible_tile_indices();
+    visible_tile_count_ = static_cast<int>(visible.size());
 
-    for (int z = 0; z < grid_h_ - 1; ++z) {
-        for (int x = 0; x < grid_w_ - 1; ++x) {
-            const float wx = (static_cast<float>(x) + 0.5f) * cell_size_;
-            const float wz = (static_cast<float>(z) + 0.5f) * cell_size_;
-            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid_w_) + static_cast<size_t>(x);
-            const float wy = (idx < heights_.size()) ? heights_[idx] : pivot_[1];
-            const float dx = wx - eye[0];
-            const float dy = wy - eye[1];
-            const float dz = wz - eye[2];
-            if ((dx * dx + dy * dy + dz * dz) > max_dist2)
-                continue;
+    std::vector<int> selected = visible;
+    static constexpr size_t kMaxAtlasTextures = 256;
+    if (selected.size() > kMaxAtlasTextures)
+        selected.resize(kMaxAtlasTextures);
 
-            const float clip_x = mvp[0] * wx + mvp[4] * wy + mvp[8] * wz + mvp[12];
-            const float clip_y = mvp[1] * wx + mvp[5] * wy + mvp[9] * wz + mvp[13];
-            const float clip_z = mvp[2] * wx + mvp[6] * wy + mvp[10] * wz + mvp[14];
-            const float clip_w = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15];
-            if (clip_w <= 0.0001f)
-                continue;
-            const float ndc_x = clip_x / clip_w;
-            const float ndc_y = clip_y / clip_w;
-            const float ndc_z = clip_z / clip_w;
-            if (ndc_x < -cull_margin || ndc_x > cull_margin
-                || ndc_y < -cull_margin || ndc_y > cull_margin
-                || ndc_z < -cull_margin || ndc_z > cull_margin) {
-                continue;
-            }
+    if (selected == last_visible_tile_indices_)
+        return;
 
-            const uint32_t i00 = static_cast<uint32_t>(z * grid_w_ + x);
-            const uint32_t i10 = static_cast<uint32_t>(z * grid_w_ + (x + 1));
-            const uint32_t i01 = static_cast<uint32_t>((z + 1) * grid_w_ + x);
-            const uint32_t i11 = static_cast<uint32_t>((z + 1) * grid_w_ + (x + 1));
-            terrain_visible_indices_.push_back(i00);
-            terrain_visible_indices_.push_back(i01);
-            terrain_visible_indices_.push_back(i10);
-            terrain_visible_indices_.push_back(i10);
-            terrain_visible_indices_.push_back(i01);
-            terrain_visible_indices_.push_back(i11);
+    const auto missing_tex = make_missing_checkerboard_rgba();
+
+    for (int ti : selected) {
+        auto it = tile_texture_cache_.find(ti);
+        if (it != tile_texture_cache_.end()) {
+            it->second.last_used_stamp = tile_cache_stamp_++;
+            texture_cache_hits_++;
+            continue;
         }
+
+        texture_cache_misses_++;
+
+        CachedTileTexture cache;
+        cache.last_used_stamp = tile_cache_stamp_++;
+
+        const auto& entry = texture_entries_[static_cast<size_t>(ti)];
+        std::vector<std::string> candidates;
+        if (!entry.filenames.empty()) candidates = entry.filenames;
+        if (!entry.filename.empty()) candidates.push_back(entry.filename);
+
+        bool loaded = false;
+        for (const auto& candidate : candidates) {
+            if (candidate.empty()) continue;
+            if (auto data = texture_loader_->load_terrain_texture_entry(candidate)) {
+                if (data->image.width > 0 && data->image.height > 0 && !data->image.pixels.empty()) {
+                    cache.missing = false;
+                    cache.width = data->image.width;
+                    cache.height = data->image.height;
+                    cache.rgba = data->image.pixels;
+                    loaded = true;
+                    break;
+                }
+            }
+        }
+
+        if (!loaded) {
+            cache.missing = true;
+            cache.width = 4;
+            cache.height = 4;
+            cache.rgba = missing_tex;
+            if (tile_missing_logged_once_.insert(ti).second) {
+                app_log(LogLevel::Warning,
+                        "GLWrpTerrainView: missing texture for tile material index "
+                        + std::to_string(ti));
+            }
+        }
+
+        tile_texture_cache_[ti] = std::move(cache);
     }
 
-    terrain_visible_index_count_ = static_cast<int>(terrain_visible_indices_.size());
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrain_ebo_);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(terrain_visible_indices_.size() * sizeof(uint32_t)),
-                 terrain_visible_indices_.empty() ? nullptr : terrain_visible_indices_.data(),
-                 GL_DYNAMIC_DRAW);
+    while (tile_texture_cache_.size() > tile_cache_budget_entries_) {
+        auto victim_it = tile_texture_cache_.end();
+        uint64_t oldest = std::numeric_limits<uint64_t>::max();
+        for (auto it = tile_texture_cache_.begin(); it != tile_texture_cache_.end(); ++it) {
+            if (it->second.last_used_stamp < oldest) {
+                oldest = it->second.last_used_stamp;
+                victim_it = it;
+            }
+        }
+        if (victim_it == tile_texture_cache_.end()) break;
+        tile_texture_cache_.erase(victim_it);
+    }
+
+    texture_lookup_uvs_.assign(texture_entries_.size(), {0.0f, 0.0f, 0.0f, 0.0f});
+    texture_lookup_size_ = static_cast<int>(texture_lookup_uvs_.size());
+
+    struct Packed {
+        int idx = -1;
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+    std::vector<Packed> packed;
+    packed.reserve(selected.size());
+
+    static constexpr int kPad = 2;
+    static constexpr int kRowMax = 4096;
+    int x = 0;
+    int y = 0;
+    int row_h = 0;
+    int row_w_max = 0;
+
+    for (int ti : selected) {
+        auto it = tile_texture_cache_.find(ti);
+        if (it == tile_texture_cache_.end()) continue;
+        const int w = std::max(1, it->second.width);
+        const int h = std::max(1, it->second.height);
+        const int pw = w + 2 * kPad;
+        const int ph = h + 2 * kPad;
+        if (x > 0 && (x + pw) > kRowMax) {
+            row_w_max = std::max(row_w_max, x);
+            x = 0;
+            y += row_h;
+            row_h = 0;
+        }
+        packed.push_back(Packed{ti, x + kPad, y + kPad, w, h});
+        x += pw;
+        row_h = std::max(row_h, ph);
+        row_w_max = std::max(row_w_max, x);
+    }
+
+    row_w_max = std::max(row_w_max, x);
+    const int atlas_w = std::max(1, row_w_max);
+    const int atlas_h = std::max(1, y + row_h);
+
+    texture_atlas_pixels_.assign(static_cast<size_t>(atlas_w) * static_cast<size_t>(atlas_h) * 4u, 0);
+
+    int resolved = 0;
+    for (const auto& p : packed) {
+        auto it = tile_texture_cache_.find(p.idx);
+        if (it == tile_texture_cache_.end()) continue;
+        const auto& tex = it->second;
+        if (tex.rgba.empty()) continue;
+
+        for (int row = 0; row < p.h; ++row) {
+            const size_t src_off = static_cast<size_t>(row) * static_cast<size_t>(p.w) * 4u;
+            const size_t dst_off = (static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w)
+                                   + static_cast<size_t>(p.x)) * 4u;
+            std::memcpy(texture_atlas_pixels_.data() + dst_off,
+                        tex.rgba.data() + src_off,
+                        static_cast<size_t>(p.w) * 4u);
+        }
+
+        for (int row = 0; row < p.h; ++row) {
+            const size_t row_off = static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w);
+            const size_t left_src = (row_off + static_cast<size_t>(p.x)) * 4u;
+            const size_t right_src = (row_off + static_cast<size_t>(p.x + p.w - 1)) * 4u;
+            for (int pad = 1; pad <= kPad; ++pad) {
+                std::memcpy(texture_atlas_pixels_.data() + (left_src - static_cast<size_t>(pad) * 4u),
+                            texture_atlas_pixels_.data() + left_src, 4u);
+                std::memcpy(texture_atlas_pixels_.data() + (right_src + static_cast<size_t>(pad) * 4u),
+                            texture_atlas_pixels_.data() + right_src, 4u);
+            }
+        }
+        for (int col = -kPad; col < p.w + kPad; ++col) {
+            const int sx = p.x + col;
+            const size_t top_src = (static_cast<size_t>(p.y) * static_cast<size_t>(atlas_w)
+                                   + static_cast<size_t>(sx)) * 4u;
+            const size_t bot_src = (static_cast<size_t>(p.y + p.h - 1) * static_cast<size_t>(atlas_w)
+                                   + static_cast<size_t>(sx)) * 4u;
+            for (int pad = 1; pad <= kPad; ++pad) {
+                const size_t top_dst = (static_cast<size_t>(p.y - pad) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                const size_t bot_dst = (static_cast<size_t>(p.y + p.h - 1 + pad) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                std::memcpy(texture_atlas_pixels_.data() + top_dst,
+                            texture_atlas_pixels_.data() + top_src, 4u);
+                std::memcpy(texture_atlas_pixels_.data() + bot_dst,
+                            texture_atlas_pixels_.data() + bot_src, 4u);
+            }
+        }
+
+        if (p.idx >= 0 && static_cast<size_t>(p.idx) < texture_lookup_uvs_.size()) {
+            texture_lookup_uvs_[static_cast<size_t>(p.idx)] = {
+                static_cast<float>(p.x) / static_cast<float>(atlas_w),
+                static_cast<float>(p.y) / static_cast<float>(atlas_h),
+                static_cast<float>(p.w) / static_cast<float>(atlas_w),
+                static_cast<float>(p.h) / static_cast<float>(atlas_h)
+            };
+        }
+        resolved++;
+    }
+
+    atlas_width_ = atlas_w;
+    atlas_height_ = atlas_h;
+    has_texture_atlas_ = resolved > 0 && !texture_atlas_pixels_.empty();
+    has_texture_lookup_ = !texture_lookup_uvs_.empty();
+    texture_world_scale_ = std::max(tile_cell_size_, cell_size_);
+    last_loaded_texture_count_ = resolved;
+
+    if (get_realized()) {
+        upload_texture_atlas();
+        upload_texture_lookup();
+    }
+
+    last_visible_tile_indices_ = std::move(selected);
 }
 
 void GLWrpTerrainView::rebuild_object_buffers() {
@@ -1393,12 +1767,11 @@ void GLWrpTerrainView::rebuild_object_buffers() {
 void GLWrpTerrainView::build_mvp(float* mvp) const {
     float eye[3] = {pivot_[0], pivot_[1] + distance_, pivot_[2]};
 
-    // Forward direction based on azimuth and elevation
     const float ce = std::cos(elevation_);
     const float se = std::sin(elevation_);
     const float ca = std::cos(azimuth_);
     const float sa = std::sin(azimuth_);
-    
+
     float center[3];
     center[0] = eye[0] + ce * sa;
     center[1] = eye[1] + se;
@@ -1412,8 +1785,23 @@ void GLWrpTerrainView::build_mvp(float* mvp) const {
     const int h = get_height();
     const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
     float proj[16];
-    mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.5f, 500000.0f);
+    mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 1.0f, 500000.0f);
     mat4_multiply(mvp, proj, view);
+}
+
+void GLWrpTerrainView::emit_terrain_stats() {
+    if (!on_terrain_stats_) return;
+    std::ostringstream ss;
+    ss << "Patches " << visible_patch_count_ << "/" << terrain_patches_.size()
+       << " | Draws " << terrain_draw_calls_
+       << " | Tiles " << visible_tile_count_
+       << " | Cache H/M " << texture_cache_hits_ << "/" << texture_cache_misses_
+       << " | Atlas textures " << last_loaded_texture_count_;
+    const auto next = ss.str();
+    if (next != last_terrain_stats_) {
+        last_terrain_stats_ = next;
+        on_terrain_stats_(next);
+    }
 }
 
 void GLWrpTerrainView::pick_object_at(double x, double y) {
@@ -1463,10 +1851,8 @@ void GLWrpTerrainView::move_camera_local(float forward, float right) {
     const float ca = std::cos(azimuth_);
     const float sa = std::sin(azimuth_);
 
-    // Forward direction on XZ plane
     const float fx = sa;
     const float fz = ca;
-    // Right vector on XZ plane
     const float rx = ca;
     const float rz = -sa;
 

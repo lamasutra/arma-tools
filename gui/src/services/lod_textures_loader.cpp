@@ -5,6 +5,7 @@
 #include <armatools/rvmat.h>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <regex>
 #include <sstream>
 
@@ -532,18 +533,56 @@ std::optional<LodTexturesLoaderService::TextureData>
 LodTexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path) {
     if (entry_path.empty()) return std::nullopt;
     auto normalized = armatools::armapath::to_slash_lower(entry_path);
-    const auto ext = std::filesystem::path(normalized).extension().string();
+    while (!normalized.empty() && (normalized.front() == '/' || normalized.front() == '\\'))
+        normalized.erase(normalized.begin());
+    if (normalized.empty()) return std::nullopt;
 
-    if (ext == ".rvmat") return load_single_material(entry_path, "");
-    if (ext == ".paa" || ext == ".pac") return load_single_texture(entry_path, "");
-
-    if (auto from_mat = load_single_material(entry_path, "")) return from_mat;
-    if (auto from_tex = load_single_texture(entry_path, "")) return from_tex;
-
-    if (ext.empty()) {
-        if (auto from_mat = load_single_material(entry_path + ".rvmat", "")) return from_mat;
-        if (auto from_tex = load_single_texture(entry_path + ".paa", "")) return from_tex;
-        if (auto from_tex = load_single_texture(entry_path + ".pac", "")) return from_tex;
+    {
+        std::lock_guard<std::mutex> lock(terrain_entry_cache_mutex_);
+        auto it = terrain_entry_cache_.find(normalized);
+        if (it != terrain_entry_cache_.end()) {
+            it->second.last_used = terrain_entry_cache_tick_++;
+            if (it->second.has_value) return it->second.value;
+            return std::nullopt;
+        }
     }
-    return std::nullopt;
+
+    const auto ext = std::filesystem::path(normalized).extension().string();
+    std::optional<TextureData> resolved;
+
+    if (ext == ".rvmat") resolved = load_single_material(entry_path, "");
+    else if (ext == ".paa" || ext == ".pac") resolved = load_single_texture(entry_path, "");
+    else {
+        if (auto from_mat_entry = load_single_material(entry_path, "")) resolved = std::move(from_mat_entry);
+        else if (auto from_tex_entry = load_single_texture(entry_path, "")) resolved = std::move(from_tex_entry);
+        else if (ext.empty()) {
+            if (auto from_mat_ext = load_single_material(entry_path + ".rvmat", "")) resolved = std::move(from_mat_ext);
+            else if (auto from_tex_paa = load_single_texture(entry_path + ".paa", "")) resolved = std::move(from_tex_paa);
+            else if (auto from_tex_pac = load_single_texture(entry_path + ".pac", "")) resolved = std::move(from_tex_pac);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(terrain_entry_cache_mutex_);
+        TerrainEntryCacheItem item;
+        item.has_value = resolved.has_value();
+        if (resolved) item.value = *resolved;
+        item.last_used = terrain_entry_cache_tick_++;
+        terrain_entry_cache_[normalized] = std::move(item);
+
+        while (terrain_entry_cache_.size() > terrain_entry_cache_capacity_) {
+            auto victim = terrain_entry_cache_.end();
+            uint64_t oldest = std::numeric_limits<uint64_t>::max();
+            for (auto it = terrain_entry_cache_.begin(); it != terrain_entry_cache_.end(); ++it) {
+                if (it->second.last_used < oldest) {
+                    oldest = it->second.last_used;
+                    victim = it;
+                }
+            }
+            if (victim == terrain_entry_cache_.end()) break;
+            terrain_entry_cache_.erase(victim);
+        }
+    }
+
+    return resolved;
 }

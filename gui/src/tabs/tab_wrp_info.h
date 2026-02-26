@@ -96,7 +96,17 @@ private:
     Gtk::ComboBoxText terrain3d_mode_combo_;
     Gtk::CheckButton terrain3d_wireframe_btn_{"Wireframe"};
     Gtk::CheckButton terrain3d_objects_btn_{"Objects"};
+    Gtk::CheckButton terrain3d_patch_bounds_btn_{"Patch Bounds"};
+    Gtk::CheckButton terrain3d_lod_tint_btn_{"LOD Colors"};
+    Gtk::CheckButton terrain3d_tile_bounds_btn_{"Tile Grid"};
+    Gtk::Label terrain3d_far_label_{"Far:"};
+    Gtk::Scale terrain3d_far_scale_{Gtk::Orientation::HORIZONTAL};
+    Gtk::Label terrain3d_mid_label_{"Mat Mid:"};
+    Gtk::Scale terrain3d_mid_scale_{Gtk::Orientation::HORIZONTAL};
+    Gtk::Label terrain3d_far_mat_label_{"Mat Far:"};
+    Gtk::Scale terrain3d_far_mat_scale_{Gtk::Orientation::HORIZONTAL};
     Gtk::Label terrain3d_status_label_;
+    std::string terrain3d_base_status_;
     Gtk::Overlay terrain3d_overlay_;
     GLWrpTerrainView terrain3d_view_;
     Gtk::Label terrain3d_debug_overlay_;
