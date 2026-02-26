@@ -182,7 +182,7 @@ void ModelViewPanel::set_model_loader_service(
 }
 
 void ModelViewPanel::set_texture_loader_service(
-    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    const std::shared_ptr<TexturesLoaderService>& service) {
     texture_loader_shared_ = service;
 }
 

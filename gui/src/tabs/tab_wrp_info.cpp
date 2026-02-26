@@ -318,7 +318,7 @@ void TabWrpInfo::set_model_loader_service(
 }
 
 void TabWrpInfo::set_texture_loader_service(
-    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    const std::shared_ptr<TexturesLoaderService>& service) {
     texture_loader_service_ = service;
     model_panel_.set_texture_loader_service(service);
     terrain3d_view_.set_texture_loader_service(service);

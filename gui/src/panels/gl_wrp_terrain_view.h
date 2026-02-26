@@ -18,7 +18,7 @@
 
 #include <armatools/wrp.h>
 
-class LodTexturesLoaderService;
+class TexturesLoaderService;
 
 class GLWrpTerrainView : public Gtk::GLArea {
 public:
@@ -35,7 +35,7 @@ public:
     void set_on_object_picked(std::function<void(size_t)> cb);
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_on_terrain_stats(std::function<void(const std::string&)> cb);
-    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_show_patch_boundaries(bool on);
     void set_show_patch_lod_colors(bool on);
     void set_show_tile_boundaries(bool on);
@@ -211,7 +211,7 @@ private:
     int active_surface_cap_ = 1;
     int debug_material_mode_ = 0; // 0=final,1=sat,2=mask,3+=surface channels
 
-    std::shared_ptr<LodTexturesLoaderService> texture_loader_;
+    std::shared_ptr<TexturesLoaderService> texture_loader_;
     std::vector<armatools::wrp::TextureEntry> texture_entries_;
     std::array<GLuint, kTerrainRoleCount> layer_atlas_tex_{};
     std::array<std::vector<uint8_t>, kTerrainRoleCount> layer_atlas_pixels_{};

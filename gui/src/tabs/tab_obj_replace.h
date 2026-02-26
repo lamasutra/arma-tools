@@ -1,7 +1,7 @@
 #pragma once
 
 #include "config.h"
-#include "lod_textures_loader.h"
+#include "textures_loader.h"
 #include "model_view_panel.h"
 #include "p3d_model_loader.h"
 #include "pbo_index_service.h"
@@ -75,7 +75,7 @@ public:
     void set_config(Config* cfg);
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
-    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
 
 private:
     Config* cfg_ = nullptr;
@@ -85,7 +85,7 @@ private:
     std::shared_ptr<armatools::pboindex::DB> db_;
     std::shared_ptr<armatools::pboindex::Index> index_;
     std::shared_ptr<P3dModelLoaderService> model_loader_shared_;
-    std::shared_ptr<LodTexturesLoaderService> texture_loader_shared_;
+    std::shared_ptr<TexturesLoaderService> texture_loader_shared_;
 
     // Toolbar rows
     Gtk::Box toolbar_{Gtk::Orientation::VERTICAL, 4};

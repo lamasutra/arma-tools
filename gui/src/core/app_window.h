@@ -18,7 +18,7 @@
 #include "tab_wrp_project.h"
 #include "pbo_index_service.h"
 #include "p3d_model_loader.h"
-#include "lod_textures_loader.h"
+#include "textures_loader.h"
 
 #include <libpanel.h>
 #include <gtkmm.h>
@@ -30,7 +30,7 @@
 struct Services {
     std::shared_ptr<PboIndexService> pbo_index_service;
     std::shared_ptr<P3dModelLoaderService> p3d_model_loader_service;
-    std::shared_ptr<LodTexturesLoaderService> lod_textures_loader_service;
+    std::shared_ptr<TexturesLoaderService> textures_loader_service;
 };
 
 // AppWindow owns the PanelDocumentWorkspace (a GtkWindow) and all tab widgets.

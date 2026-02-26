@@ -27,7 +27,7 @@ public:
     void set_config(Config* cfg);
     void set_pbo_index_service(const std::shared_ptr<PboIndexService>& service);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
-    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
 
 private:
     Config* cfg_ = nullptr;

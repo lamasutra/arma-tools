@@ -19,7 +19,7 @@
 
 struct Config;
 
-class LodTexturesLoaderService : public std::enable_shared_from_this<LodTexturesLoaderService> {
+class TexturesLoaderService : public std::enable_shared_from_this<TexturesLoaderService> {
 public:
     struct TerrainTextureLayer {
         bool present = false;
@@ -71,7 +71,7 @@ public:
     std::optional<TerrainLayeredMaterial> load_terrain_layered_material(
         const std::vector<std::string>& entry_paths);
 
-    LodTexturesLoaderService(const std::string& db_path_in,
+    TexturesLoaderService(const std::string& db_path_in,
                     Config* cfg_in,
                     const std::shared_ptr<armatools::pboindex::DB>& db_in,
                     const std::shared_ptr<armatools::pboindex::Index>& index_in);

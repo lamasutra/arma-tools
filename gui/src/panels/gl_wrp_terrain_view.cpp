@@ -1,6 +1,6 @@
 #include "gl_wrp_terrain_view.h"
 
-#include "lod_textures_loader.h"
+#include "textures_loader.h"
 #include "log_panel.h"
 #include "gl_error_log.h"
 #include <armatools/objcat.h>
@@ -1048,7 +1048,7 @@ void GLWrpTerrainView::schedule_texture_rebuild() {
 }
 
 void GLWrpTerrainView::set_texture_loader_service(
-    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    const std::shared_ptr<TexturesLoaderService>& service) {
     {
         std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
         texture_loader_ = service;
@@ -1945,7 +1945,7 @@ GLWrpTerrainView::CachedTileTexture GLWrpTerrainView::load_tile_texture_sync(con
     out.sat.height = 4;
     out.sat.rgba = make_missing_checkerboard_rgba();
 
-    std::shared_ptr<LodTexturesLoaderService> loader;
+    std::shared_ptr<TexturesLoaderService> loader;
     {
         std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
         loader = texture_loader_;
@@ -1954,7 +1954,7 @@ GLWrpTerrainView::CachedTileTexture GLWrpTerrainView::load_tile_texture_sync(con
 
     if (auto layered = loader->load_terrain_layered_material(job.candidates)) {
         auto copy_layer = [](CachedTileTexture::LayerImage& dst,
-                             const LodTexturesLoaderService::TerrainTextureLayer& src) {
+                             const TexturesLoaderService::TerrainTextureLayer& src) {
             if (!src.present || src.image.width <= 0 || src.image.height <= 0
                 || src.image.pixels.empty()) return;
             dst.present = true;

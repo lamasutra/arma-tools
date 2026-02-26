@@ -454,7 +454,7 @@ void TabAssetBrowser::set_model_loader_service(
 }
 
 void TabAssetBrowser::set_texture_loader_service(
-    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    const std::shared_ptr<TexturesLoaderService>& service) {
     model_panel_.set_texture_loader_service(service);
 }
 

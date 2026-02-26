@@ -478,7 +478,7 @@ AppWindow::AppWindow(GtkApplication* app) {
     layout_cfg_ = load_layout_config();
     services_.pbo_index_service = std::make_shared<PboIndexService>();
     services_.p3d_model_loader_service.reset();
-    services_.lod_textures_loader_service.reset();
+    services_.textures_loader_service.reset();
 
     // Create the workbench — manages multiple workspace windows for tear-off
     workbench_ = panel_workbench_new();
@@ -618,17 +618,17 @@ AppWindow::AppWindow(GtkApplication* app) {
             const std::string db_path = cfg_.a3db_path;
             services_.p3d_model_loader_service =
                 std::make_shared<P3dModelLoaderService>(&cfg_, db, index);
-            services_.lod_textures_loader_service =
-                std::make_shared<LodTexturesLoaderService>(db_path, &cfg_, db, index);
+                services_.textures_loader_service =
+                std::make_shared<TexturesLoaderService>(db_path, &cfg_, db, index);
 
             tab_asset_browser_.set_model_loader_service(services_.p3d_model_loader_service);
-            tab_asset_browser_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_asset_browser_.set_texture_loader_service(services_.textures_loader_service);
             tab_p3d_info_.set_model_loader_service(services_.p3d_model_loader_service);
-            tab_p3d_info_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_p3d_info_.set_texture_loader_service(services_.textures_loader_service);
             tab_wrp_info_.set_model_loader_service(services_.p3d_model_loader_service);
-            tab_wrp_info_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_wrp_info_.set_texture_loader_service(services_.textures_loader_service);
             tab_obj_replace_.set_model_loader_service(services_.p3d_model_loader_service);
-            tab_obj_replace_.set_texture_loader_service(services_.lod_textures_loader_service);
+            tab_obj_replace_.set_texture_loader_service(services_.textures_loader_service);
         };
 
     rebuild_model_services(nullptr, nullptr);

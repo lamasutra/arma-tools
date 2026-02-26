@@ -4,7 +4,7 @@
 #include <sigc++/connection.h>
 #include "gl_model_view.h"
 #include "p3d_model_loader.h"
-#include "lod_textures_loader.h"
+#include "textures_loader.h"
 
 #include <armatools/p3d.h>
 
@@ -35,7 +35,7 @@ public:
     void set_pboindex(armatools::pboindex::DB* db,
                       armatools::pboindex::Index* index);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
-    void set_texture_loader_service(const std::shared_ptr<LodTexturesLoaderService>& service);
+    void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_info_line(const std::string& text);
     void set_model_data(const std::shared_ptr<armatools::p3d::P3DFile>& model,
                         const std::string& model_path);
@@ -61,7 +61,7 @@ private:
     armatools::pboindex::Index* index_ = nullptr;
     std::shared_ptr<armatools::p3d::P3DFile> p3d_file_;
     std::shared_ptr<P3dModelLoaderService> model_loader_shared_;
-    std::shared_ptr<LodTexturesLoaderService> texture_loader_shared_;
+    std::shared_ptr<TexturesLoaderService> texture_loader_shared_;
 
     // Toolbars
     Gtk::Box toolbar_row_{Gtk::Orientation::HORIZONTAL, 4};

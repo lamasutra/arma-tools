@@ -496,7 +496,7 @@ void TabObjReplace::set_model_loader_service(
 }
 
 void TabObjReplace::set_texture_loader_service(
-    const std::shared_ptr<LodTexturesLoaderService>& service) {
+    const std::shared_ptr<TexturesLoaderService>& service) {
     texture_loader_shared_ = service;
     left_model_panel_.set_texture_loader_service(service);
     right_model_panel_.set_texture_loader_service(service);

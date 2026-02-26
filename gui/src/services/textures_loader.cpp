@@ -1,4 +1,4 @@
-#include "lod_textures_loader.h"
+#include "textures_loader.h"
 
 #include <armatools/armapath.h>
 #include <armatools/config.h>
@@ -46,7 +46,7 @@ std::string filename_lower(const std::string& p) {
 
 } // namespace
 
-LodTexturesLoaderService::LodTexturesLoaderService(const std::string& db_path_in,
+TexturesLoaderService::TexturesLoaderService(const std::string& db_path_in,
                                      Config* cfg_in,
                                      const std::shared_ptr<armatools::pboindex::DB>& db_in,
                                      const std::shared_ptr<armatools::pboindex::Index>& index_in) {
@@ -56,8 +56,8 @@ LodTexturesLoaderService::LodTexturesLoaderService(const std::string& db_path_in
     index = index_in;
 }
 
-std::vector<LodTexturesLoaderService::TextureData> 
-LodTexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string& model_path) {
+std::vector<TexturesLoaderService::TextureData> 
+TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string& model_path) {
     std::vector<TextureData> result;
     app_log(LogLevel::Debug,
             "LodTextures: load_textures model=" + model_path
@@ -99,8 +99,8 @@ LodTexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::str
     return result;
 }
 
-std::optional<LodTexturesLoaderService::TextureData> 
-LodTexturesLoaderService::load_single_texture(const std::string& tex_path, 
+std::optional<TexturesLoaderService::TextureData> 
+TexturesLoaderService::load_single_texture(const std::string& tex_path, 
                                             const std::string& model_path) 
                                             {
     auto try_decode_data = [&](const std::vector<uint8_t>& data)
@@ -174,8 +174,8 @@ LodTexturesLoaderService::load_single_texture(const std::string& tex_path,
     return std::nullopt;
 }
 
-std::optional<LodTexturesLoaderService::TextureData>
-LodTexturesLoaderService::load_single_material(const std::string& material_path,
+std::optional<TexturesLoaderService::TextureData>
+TexturesLoaderService::load_single_material(const std::string& material_path,
                                                const std::string& model_path) {
     app_log(LogLevel::Debug,
             "LodTextures: material begin raw='" + material_path
@@ -554,14 +554,14 @@ LodTexturesLoaderService::load_single_material(const std::string& material_path,
     return std::nullopt;
 }
 
-std::optional<LodTexturesLoaderService::TextureData>
-LodTexturesLoaderService::load_texture(const std::string& texture_path) {
+std::optional<TexturesLoaderService::TextureData>
+TexturesLoaderService::load_texture(const std::string& texture_path) {
     if (texture_path.empty()) return std::nullopt;
     return load_single_texture(texture_path, "");
 }
 
-std::optional<LodTexturesLoaderService::TerrainLayeredMaterial>
-LodTexturesLoaderService::load_terrain_layered_material(const std::vector<std::string>& entry_paths) {
+std::optional<TexturesLoaderService::TerrainLayeredMaterial>
+TexturesLoaderService::load_terrain_layered_material(const std::vector<std::string>& entry_paths) {
     std::vector<std::string> candidates;
     candidates.reserve(entry_paths.size());
     for (const auto& path : entry_paths) {
@@ -650,7 +650,7 @@ LodTexturesLoaderService::load_terrain_layered_material(const std::vector<std::s
     auto decode_texture_layer =
         [&](const std::string& material_path,
             const armatools::rvmat::TextureStage& stage)
-            -> LodTexturesLoaderService::TerrainTextureLayer {
+            -> TexturesLoaderService::TerrainTextureLayer {
         TerrainTextureLayer out;
         if (stage.texture_path.empty()) return out;
         std::string resolved = armatools::armapath::is_procedural_texture(stage.texture_path)
@@ -835,8 +835,8 @@ LodTexturesLoaderService::load_terrain_layered_material(const std::vector<std::s
     return resolved;
 }
 
-std::optional<LodTexturesLoaderService::TextureData>
-LodTexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path) {
+std::optional<TexturesLoaderService::TextureData>
+TexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path) {
     if (entry_path.empty()) return std::nullopt;
     auto normalized = normalize_asset_path(entry_path);
     if (normalized.empty()) return std::nullopt;
