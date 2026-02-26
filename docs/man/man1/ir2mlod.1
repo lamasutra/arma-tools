@@ -1,0 +1,46 @@
+.TH ir2mlod 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+ir2mlod \- export visual-upgrade IR to Arma MLOD
+.SH SYNOPSIS
+.B ir2mlod
+.I ir_dir
+.B -o
+.I out.p3d
+.RI [ flags ]
+.SH DESCRIPTION
+.B ir2mlod
+writes an editable MLOD from IR focused on visual LOD roundtrip workflows.
+The default mode tolerates missing UV/material channels and emits placeholders.
+.SH OPTIONS
+.TP
+.BR -o , " --output " \fIpath\fR
+Output MLOD path.
+.TP
+.B --mode \fIstrict|visual-upgrade\fR
+Validation/export mode. Default is
+.BR visual-upgrade .
+.TP
+.B --recompute-normals \fInever|if_missing|always\fR
+Normal handling policy. Default is
+.BR if_missing .
+.TP
+.B --deterministic
+Use deterministic ordering for emitted selections.
+.TP
+.B --report \fIpath\fR
+Write JSON diagnostics report.
+.TP
+.B --lod-only \fIcsv\fR
+Export only specified LODs (for example
+.BR 0.000,1.000,shadow ).
+.TP
+.B --autofix-selections
+In visual-upgrade mode, drop out-of-range selection indices.
+.TP
+.BR -h , " --help"
+Show help.
+.SH EXIT STATUS
+Returns non-zero on schema or validation failures.
+.SH SEE ALSO
+.BR mlod2ir (1),
+.BR p3d_info (1)

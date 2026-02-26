@@ -185,6 +185,8 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     make_text_toggle(rvmat_view_normal_, "Nrm", "Normal preview");
     make_text_toggle(rvmat_view_spec_, "SMDI", "Specular/SMDI preview");
     make_text_toggle(rvmat_view_ao_, "AO", "AO/AS preview");
+    make_text_toggle(rvmat_text_parsed_, "Parsed", "Show parsed RVMat details");
+    make_text_toggle(rvmat_text_source_, "Source", "Show source RVMat text");
 
     rvmat_view_final_.signal_toggled().connect([this]() {
         if (rvmat_view_updating_) return;
@@ -276,6 +278,34 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     rvmat_preview_toolbar_.append(rvmat_view_normal_);
     rvmat_preview_toolbar_.append(rvmat_view_spec_);
     rvmat_preview_toolbar_.append(rvmat_view_ao_);
+    rvmat_text_parsed_.signal_toggled().connect([this]() {
+        if (rvmat_text_updating_) return;
+        rvmat_text_updating_ = true;
+        if (rvmat_text_parsed_.get_active()) {
+            rvmat_text_source_.set_active(false);
+            rvmat_info_view_.get_buffer()->set_text(rvmat_text_parsed_cache_);
+        } else if (!rvmat_text_source_.get_active()) {
+            rvmat_text_parsed_.set_active(true);
+        }
+        rvmat_text_updating_ = false;
+    });
+    rvmat_text_source_.signal_toggled().connect([this]() {
+        if (rvmat_text_updating_) return;
+        rvmat_text_updating_ = true;
+        if (rvmat_text_source_.get_active()) {
+            rvmat_text_parsed_.set_active(false);
+            rvmat_info_view_.get_buffer()->set_text(rvmat_text_source_cache_);
+        } else if (!rvmat_text_parsed_.get_active()) {
+            rvmat_text_parsed_.set_active(true);
+        }
+        rvmat_text_updating_ = false;
+    });
+    rvmat_text_updating_ = true;
+    rvmat_text_parsed_.set_active(true);
+    rvmat_text_source_.set_active(false);
+    rvmat_text_updating_ = false;
+    rvmat_preview_toolbar_.append(rvmat_text_parsed_);
+    rvmat_preview_toolbar_.append(rvmat_text_source_);
     rvmat_preview_box_.append(rvmat_preview_toolbar_);
     rvmat_preview_box_.append(rvmat_preview_);
     rvmat_preview_box_.set_vexpand(true);
@@ -1026,6 +1056,8 @@ void TabAssetBrowser::show_file_info(const armatools::pboindex::FindResult& file
     preview_scroll_.set_visible(false);
     preview_picture_.set_paintable({});
     rvmat_paned_.set_visible(false);
+    rvmat_text_parsed_cache_.clear();
+    rvmat_text_source_cache_.clear();
     model_panel_.set_visible(false);
     audio_panel_.set_visible(false);
     audio_stop_all();
@@ -1158,8 +1190,9 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
         std::istringstream stream(str, std::ios::binary);
 
         armatools::config::Config cfg;
-        if (data.size() >= 4 && data[0] == 0x00 &&
-            data[1] == 'r' && data[2] == 'a' && data[3] == 'P') {
+        const bool is_rap = data.size() >= 4 && data[0] == 0x00 &&
+                            data[1] == 'r' && data[2] == 'a' && data[3] == 'P';
+        if (is_rap) {
             cfg = armatools::config::read(stream);
         } else {
             cfg = armatools::config::parse_text(stream);
@@ -1411,7 +1444,19 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
             for (const auto& w : warnings) out << "  " << w << "\n";
         }
 
-        rvmat_info_view_.get_buffer()->set_text(out.str());
+        rvmat_text_parsed_cache_ = out.str();
+        if (is_rap) {
+            std::ostringstream derap;
+            armatools::config::write_text(derap, cfg);
+            rvmat_text_source_cache_ = derap.str();
+        } else {
+            rvmat_text_source_cache_ = str;
+        }
+        rvmat_text_updating_ = true;
+        rvmat_text_parsed_.set_active(true);
+        rvmat_text_source_.set_active(false);
+        rvmat_text_updating_ = false;
+        rvmat_info_view_.get_buffer()->set_text(rvmat_text_parsed_cache_);
         info_scroll_.set_visible(false);
         rvmat_paned_.set_visible(true);
     } catch (const std::exception& e) {

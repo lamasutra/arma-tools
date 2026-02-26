@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "modelName": "multi_lod",
+  "lods": [
+    {
+      "id": "lod0",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 0.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,1,0]],
+        "indices": [[0,1,2]],
+        "uv0": [[0,0], [1,0], [0,1]]
+      },
+      "materials": ["\\a3\\data_f\\default.rvmat"],
+      "face_material_ids": [0]
+    },
+    {
+      "id": "lod1",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 1.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,0.7,0]],
+        "indices": [[0,1,2]],
+        "uv0": [[0,0], [1,0], [0,1]]
+      },
+      "materials": ["\\a3\\data_f\\default.rvmat"],
+      "face_material_ids": [0]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "modelName": "quad_with_selection",
+  "lods": [
+    {
+      "id": "lod0",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 0.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [1,1,0], [0,1,0]],
+        "indices": [[0,1,2,3]],
+        "uv0": [[0,0], [1,0], [1,1], [0,1]],
+        "normals": [[0,0,1], [0,0,1], [0,0,1], [0,0,1]]
+      },
+      "materials": ["\\a3\\data_f\\default.rvmat"],
+      "face_material_ids": [0],
+      "named_selections": {
+        "component01": [0,1,2,3]
+      }
+    }
+  ]
+}

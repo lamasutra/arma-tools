@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "modelName": "shadow_present",
+  "lods": [
+    {
+      "id": "lod0",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 0.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,1,0]],
+        "indices": [[0,1,2]],
+        "uv0": [[0,0], [1,0], [0,1]]
+      },
+      "materials": ["\\a3\\data_f\\default.rvmat"],
+      "face_material_ids": [0]
+    },
+    {
+      "id": "shadow0",
+      "lodId": "SHADOW_VOLUME",
+      "resolution": 10000.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,1,0]],
+        "indices": [[0,1,2]]
+      }
+    }
+  ]
+}

@@ -14,3 +14,13 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/libs/lzo/test ${CMAKE_CURRENT_BINARY_DIR}/l
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/pbo/test ${CMAKE_CURRENT_BINARY_DIR}/pbo_test)
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/heightpipe/test ${CMAKE_CURRENT_BINARY_DIR}/heightpipe_test)
 add_subdirectory(${CMAKE_SOURCE_DIR}/libs/rvmat/test ${CMAKE_CURRENT_BINARY_DIR}/rvmat_test)
+
+armatools_add_test(spec_validation_tests spec_validation_tests.cpp)
+target_compile_definitions(spec_validation_tests PRIVATE ARMATOOLS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+armatools_add_test(ir2mlod_roundtrip_tests ir2mlod_roundtrip_tests.cpp)
+target_link_libraries(ir2mlod_roundtrip_tests PRIVATE armatools::p3d nlohmann_json::nlohmann_json)
+add_dependencies(ir2mlod_roundtrip_tests ir2mlod mlod2ir)
+target_compile_definitions(ir2mlod_roundtrip_tests PRIVATE
+    ARMATOOLS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    ARMATOOLS_BINARY_DIR="${CMAKE_BINARY_DIR}")

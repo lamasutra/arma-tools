@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "modelName": "tri_minimal",
+  "lods": [
+    {
+      "id": "lod0",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 0.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,1,0]],
+        "indices": [[0,1,2]]
+      }
+    }
+  ]
+}

@@ -99,6 +99,11 @@ private:
     Gtk::ToggleButton rvmat_view_spec_;
     Gtk::ToggleButton rvmat_view_ao_;
     bool rvmat_view_updating_ = false;
+    Gtk::ToggleButton rvmat_text_parsed_;
+    Gtk::ToggleButton rvmat_text_source_;
+    bool rvmat_text_updating_ = false;
+    std::string rvmat_text_parsed_cache_;
+    std::string rvmat_text_source_cache_;
     GLRvmatPreview rvmat_preview_;
     ModelViewPanel model_panel_;
 

@@ -1,0 +1,69 @@
+.TH mlod2ir 1 "February 2026" "arma-tools" "User Commands"
+.SH NAME
+mlod2ir \- convert P3D models to normalized LOD IR and validate object-type requirements
+.SH SYNOPSIS
+.B mlod2ir
+.RI [ flags ]
+.I input.p3d
+.SH DESCRIPTION
+.B mlod2ir
+reads a P3D model (MLOD-first workflow), emits a normalized JSON IR, and
+runs requirement checks driven by object-type profiles.
+.SH OPTIONS
+.TP
+.B --object-type \fITYPE\fR
+Select profile (default:
+.BR STATIC_PROP ).
+.TP
+.B --list-object-types
+Print supported profile IDs.
+.TP
+.B --output \fIpath\fR
+Write JSON file to path.
+.TP
+.B --json
+Write JSON to stdout.
+.TP
+.B --pretty
+Pretty-print JSON output.
+.TP
+.B --validate-only
+Emit compact validation-centric JSON.
+.TP
+.B --enterable
+Enable conditional checks that require enterable LODs (for example
+.BR ROADWAY ).
+.TP
+.B --walkable
+Enable conditional checks for walkable surfaces.
+.TP
+.B --ai-pathing
+Enable conditional checks for AI pathing LODs (for example
+.BR PATH ).
+.TP
+.B --damage-zones
+Enable conditional checks for damage-zone LODs (for example
+.BR HITPOINTS ).
+.TP
+.B --driver-view
+Enable driver/pilot first-person view LOD checks.
+.TP
+.B --cargo-view
+Enable cargo first-person view LOD checks.
+.TP
+.B --gunner-view
+Enable gunner first-person view LOD checks.
+.TP
+.B --commander-view
+Enable commander first-person view LOD checks.
+.TP
+.BR -h , " --help"
+Show help.
+.SH OUTPUT
+By default, output is written to
+.BR <input_stem>_mlod2ir/model_ir.json .
+With
+.B --json
+it is written to stdout.
+.SH SEE ALSO
+.BR p3d_info (1)

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "modelName": "missing_uv_has_materials",
+  "lods": [
+    {
+      "id": "lod0",
+      "lodId": "VISUAL_RESOLUTION",
+      "resolution": 0.0,
+      "mesh": {
+        "positions": [[0,0,0], [1,0,0], [0,1,0]],
+        "indices": [[0,1,2]]
+      },
+      "materials": ["\\a3\\characters_f\\blufor\\data\\clothing1.rvmat"],
+      "face_material_ids": [0]
+    }
+  ]
+}
