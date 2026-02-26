@@ -5,6 +5,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -85,6 +89,18 @@ private:
         int width = 0;
         int height = 0;
         std::vector<uint8_t> rgba;
+    };
+
+    struct TileLoadJob {
+        int tile_index = -1;
+        uint64_t generation = 0;
+        std::vector<std::string> candidates;
+    };
+
+    struct TileLoadResult {
+        int tile_index = -1;
+        uint64_t generation = 0;
+        CachedTileTexture texture;
     };
 
     // Input world subset used for rendering.
@@ -195,6 +211,17 @@ private:
     int terrain_draw_calls_ = 0;
     int visible_patch_count_ = 0;
     int last_loaded_texture_count_ = 0;
+    uint64_t tile_generation_ = 1;
+    bool atlas_dirty_ = true;
+    bool atlas_empty_logged_ = false;
+    int atlas_rebuild_debounce_frames_ = 0;
+    std::mutex tile_jobs_mutex_;
+    std::condition_variable tile_jobs_cv_;
+    std::deque<TileLoadJob> tile_jobs_queue_;
+    std::deque<TileLoadResult> tile_ready_queue_;
+    std::unordered_set<int> tile_jobs_pending_;
+    std::vector<std::thread> tile_workers_;
+    bool tile_workers_stop_ = false;
 
     // Gesture controllers.
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
@@ -238,6 +265,13 @@ private:
     void update_visible_patches(const float* mvp, const float* eye);
     int choose_patch_lod(const TerrainPatch& patch, const float* eye) const;
     void stream_visible_tile_textures();
+    void enqueue_visible_tile_jobs(const std::vector<int>& selected_tiles);
+    int drain_ready_tile_results(int max_results);
+    void rebuild_tile_atlas_from_cache(const std::vector<int>& selected_tiles);
+    CachedTileTexture load_tile_texture_sync(const TileLoadJob& job);
+    void start_texture_workers();
+    void stop_texture_workers();
+    void texture_worker_loop();
     std::vector<int> collect_visible_tile_indices() const;
     void emit_terrain_stats();
     void pick_object_at(double x, double y);

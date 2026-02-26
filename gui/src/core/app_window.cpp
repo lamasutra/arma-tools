@@ -700,6 +700,7 @@ AppWindow::AppWindow(GtkApplication* app) {
 }
 
 AppWindow::~AppWindow() {
+    set_global_log({});
     if (services_.pbo_index_service)
         services_.pbo_index_service->unsubscribe(this);
     // Everything was already detached in close-request handler.

@@ -14,6 +14,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -106,8 +107,7 @@ void main() {
             && desired >= 0 && desired < uTextureLookupSize) {
             vec4 slot = texelFetch(uTextureLookup, ivec2(desired, 0), 0);
             if (slot.z > 0.0 && slot.w > 0.0) {
-                vec2 world_uv = vWorldXZ / max(uTextureWorldScale, 0.0001);
-                vec2 tile_uv = fract(world_uv);
+                vec2 tile_uv = fract(vWorldXZ / max(uTextureCellSize, 0.0001));
                 vec2 atlas_uv = slot.xy + tile_uv * slot.zw;
                 tex_color = texture(uTextureAtlas, atlas_uv).rgb;
                 has_texture = true;
@@ -471,11 +471,80 @@ GLWrpTerrainView::GLWrpTerrainView() {
             }
         });
     add_controller(key_move_);
+
+    start_texture_workers();
 }
 
-GLWrpTerrainView::~GLWrpTerrainView() = default;
+GLWrpTerrainView::~GLWrpTerrainView() {
+    stop_texture_workers();
+}
+
+void GLWrpTerrainView::start_texture_workers() {
+    stop_texture_workers();
+    tile_workers_stop_ = false;
+    const unsigned hc = std::thread::hardware_concurrency();
+    const unsigned desired = std::clamp(hc > 1 ? hc - 1 : 2u, 2u, 8u);
+    tile_workers_.reserve(desired);
+    for (unsigned i = 0; i < desired; ++i) {
+        tile_workers_.emplace_back([this]() { texture_worker_loop(); });
+    }
+}
+
+void GLWrpTerrainView::stop_texture_workers() {
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        tile_workers_stop_ = true;
+        tile_jobs_queue_.clear();
+        tile_ready_queue_.clear();
+        tile_jobs_pending_.clear();
+    }
+    tile_jobs_cv_.notify_all();
+    for (auto& worker : tile_workers_) {
+        if (worker.joinable()) worker.join();
+    }
+    tile_workers_.clear();
+}
+
+void GLWrpTerrainView::texture_worker_loop() {
+    for (;;) {
+        TileLoadJob job;
+        {
+            std::unique_lock<std::mutex> lock(tile_jobs_mutex_);
+            tile_jobs_cv_.wait(lock, [this]() {
+                return tile_workers_stop_ || !tile_jobs_queue_.empty();
+            });
+            if (tile_workers_stop_) return;
+            job = std::move(tile_jobs_queue_.front());
+            tile_jobs_queue_.pop_front();
+        }
+
+        auto tex = load_tile_texture_sync(job);
+
+        {
+            std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+            tile_jobs_pending_.erase(job.tile_index);
+            if (!tile_workers_stop_) {
+                TileLoadResult ready;
+                ready.tile_index = job.tile_index;
+                ready.generation = job.generation;
+                ready.texture = std::move(tex);
+                tile_ready_queue_.push_back(std::move(ready));
+            }
+        }
+    }
+}
 
 void GLWrpTerrainView::clear_world() {
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        tile_jobs_queue_.clear();
+        tile_ready_queue_.clear();
+        tile_jobs_pending_.clear();
+    }
+    tile_generation_++;
+    atlas_dirty_ = true;
+    atlas_empty_logged_ = false;
+    atlas_rebuild_debounce_frames_ = 0;
     texture_entries_.clear();
     texture_atlas_pixels_.clear();
     texture_lookup_uvs_.clear();
@@ -535,6 +604,17 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
         clear_world();
         return;
     }
+
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        tile_jobs_queue_.clear();
+        tile_ready_queue_.clear();
+        tile_jobs_pending_.clear();
+    }
+    tile_generation_++;
+    atlas_dirty_ = true;
+    atlas_empty_logged_ = false;
+    atlas_rebuild_debounce_frames_ = 0;
 
     grid_w_ = src_w;
     grid_h_ = src_h;
@@ -770,9 +850,16 @@ void GLWrpTerrainView::set_material_quality_distances(float mid_distance_m, floa
 }
 
 void GLWrpTerrainView::set_color_mode(int mode) {
+    const int prev_mode = color_mode_;
     color_mode_ = std::clamp(mode, 0, 3);
-    if (color_mode_ == 2 && !texture_entries_.empty() && !tile_texture_indices_.empty())
+    if (color_mode_ == 2 && !texture_entries_.empty() && !tile_texture_indices_.empty()) {
         schedule_texture_rebuild();
+    } else if (prev_mode == 2 && color_mode_ != 2) {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        tile_jobs_queue_.clear();
+        tile_ready_queue_.clear();
+        tile_jobs_pending_.clear();
+    }
     queue_render();
 }
 
@@ -798,17 +885,28 @@ void GLWrpTerrainView::set_on_terrain_stats(std::function<void(const std::string
 void GLWrpTerrainView::schedule_texture_rebuild() {
     if (!texture_loader_) return;
     if (texture_entries_.empty() || tile_texture_indices_.empty()) return;
-    if (texture_rebuild_idle_) return;
-    texture_rebuild_idle_ = Glib::signal_idle().connect([this]() {
-        stream_visible_tile_textures();
-        texture_rebuild_idle_.disconnect();
-        return false;
-    });
+    atlas_dirty_ = true;
+    if (!texture_rebuild_idle_) {
+        texture_rebuild_idle_ = Glib::signal_idle().connect([this]() {
+            queue_render();
+            texture_rebuild_idle_.disconnect();
+            return false;
+        });
+    }
 }
 
 void GLWrpTerrainView::set_texture_loader_service(
     const std::shared_ptr<LodTexturesLoaderService>& service) {
-    texture_loader_ = service;
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        texture_loader_ = service;
+        tile_jobs_queue_.clear();
+        tile_ready_queue_.clear();
+        tile_jobs_pending_.clear();
+    }
+    tile_generation_++;
+    atlas_dirty_ = true;
+    atlas_rebuild_debounce_frames_ = 0;
     if (!texture_loader_) {
         cleanup_texture_atlas_gl();
         cleanup_texture_lookup_gl();
@@ -838,6 +936,14 @@ void GLWrpTerrainView::upload_texture_atlas() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+#ifdef GL_TEXTURE_MAX_ANISOTROPY_EXT
+    float max_aniso = 0.0f;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+    if (max_aniso > 1.0f) {
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                        std::min(8.0f, max_aniso));
+    }
+#endif
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     has_texture_atlas_ = true;
@@ -1541,86 +1647,110 @@ std::vector<int> GLWrpTerrainView::collect_visible_tile_indices() const {
     return out;
 }
 
-void GLWrpTerrainView::stream_visible_tile_textures() {
-    if (!texture_loader_ || texture_entries_.empty() || visible_patch_indices_.empty()) {
-        visible_tile_count_ = 0;
-        return;
+GLWrpTerrainView::CachedTileTexture GLWrpTerrainView::load_tile_texture_sync(const TileLoadJob& job) {
+    CachedTileTexture out;
+    out.missing = true;
+    out.width = 4;
+    out.height = 4;
+    out.rgba = make_missing_checkerboard_rgba();
+
+    std::shared_ptr<LodTexturesLoaderService> loader;
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        loader = texture_loader_;
+    }
+    if (!loader) return out;
+
+    for (const auto& candidate : job.candidates) {
+        if (candidate.empty()) continue;
+        if (auto data = loader->load_terrain_texture_entry(candidate)) {
+            if (data->image.width > 0 && data->image.height > 0 && !data->image.pixels.empty()) {
+                out.missing = false;
+                out.width = data->image.width;
+                out.height = data->image.height;
+                out.rgba = data->image.pixels;
+                return out;
+            }
+        }
     }
 
-    auto visible = collect_visible_tile_indices();
-    visible_tile_count_ = static_cast<int>(visible.size());
+    return out;
+}
 
-    std::vector<int> selected = visible;
-    static constexpr size_t kMaxAtlasTextures = 256;
-    if (selected.size() > kMaxAtlasTextures)
-        selected.resize(kMaxAtlasTextures);
+void GLWrpTerrainView::enqueue_visible_tile_jobs(const std::vector<int>& selected_tiles) {
+    if (!texture_loader_) return;
+    if (texture_entries_.empty()) return;
 
-    if (selected == last_visible_tile_indices_)
-        return;
+    bool notify = false;
+    std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+    for (int ti : selected_tiles) {
+        if (ti < 0 || ti >= static_cast<int>(texture_entries_.size())) continue;
+        if (tile_texture_cache_.find(ti) != tile_texture_cache_.end()) continue;
+        if (tile_jobs_pending_.find(ti) != tile_jobs_pending_.end()) continue;
 
-    const auto missing_tex = make_missing_checkerboard_rgba();
+        TileLoadJob job;
+        job.tile_index = ti;
+        job.generation = tile_generation_;
+        const auto& entry = texture_entries_[static_cast<size_t>(ti)];
+        if (!entry.filenames.empty()) {
+            job.candidates = entry.filenames;
+        }
+        if (!entry.filename.empty()) {
+            if (std::find(job.candidates.begin(), job.candidates.end(), entry.filename)
+                == job.candidates.end()) {
+                job.candidates.push_back(entry.filename);
+            }
+        }
 
-    for (int ti : selected) {
-        auto it = tile_texture_cache_.find(ti);
-        if (it != tile_texture_cache_.end()) {
-            it->second.last_used_stamp = tile_cache_stamp_++;
-            texture_cache_hits_++;
+        if (job.candidates.empty()) {
+            CachedTileTexture missing;
+            missing.missing = true;
+            missing.width = 4;
+            missing.height = 4;
+            missing.rgba = make_missing_checkerboard_rgba();
+            missing.last_used_stamp = tile_cache_stamp_++;
+            tile_texture_cache_[ti] = std::move(missing);
+            atlas_dirty_ = true;
             continue;
         }
 
+        tile_jobs_pending_.insert(ti);
+        tile_jobs_queue_.push_back(std::move(job));
         texture_cache_misses_++;
+        notify = true;
+    }
+    if (notify) tile_jobs_cv_.notify_all();
+}
 
-        CachedTileTexture cache;
-        cache.last_used_stamp = tile_cache_stamp_++;
-
-        const auto& entry = texture_entries_[static_cast<size_t>(ti)];
-        std::vector<std::string> candidates;
-        if (!entry.filenames.empty()) candidates = entry.filenames;
-        if (!entry.filename.empty()) candidates.push_back(entry.filename);
-
-        bool loaded = false;
-        for (const auto& candidate : candidates) {
-            if (candidate.empty()) continue;
-            if (auto data = texture_loader_->load_terrain_texture_entry(candidate)) {
-                if (data->image.width > 0 && data->image.height > 0 && !data->image.pixels.empty()) {
-                    cache.missing = false;
-                    cache.width = data->image.width;
-                    cache.height = data->image.height;
-                    cache.rgba = data->image.pixels;
-                    loaded = true;
-                    break;
-                }
-            }
+int GLWrpTerrainView::drain_ready_tile_results(int max_results) {
+    std::vector<TileLoadResult> ready;
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        const int take = std::min(max_results, static_cast<int>(tile_ready_queue_.size()));
+        ready.reserve(static_cast<size_t>(take));
+        for (int i = 0; i < take; ++i) {
+            ready.push_back(std::move(tile_ready_queue_.front()));
+            tile_ready_queue_.pop_front();
         }
-
-        if (!loaded) {
-            cache.missing = true;
-            cache.width = 4;
-            cache.height = 4;
-            cache.rgba = missing_tex;
-            if (tile_missing_logged_once_.insert(ti).second) {
-                app_log(LogLevel::Warning,
-                        "GLWrpTerrainView: missing texture for tile material index "
-                        + std::to_string(ti));
-            }
-        }
-
-        tile_texture_cache_[ti] = std::move(cache);
     }
 
-    while (tile_texture_cache_.size() > tile_cache_budget_entries_) {
-        auto victim_it = tile_texture_cache_.end();
-        uint64_t oldest = std::numeric_limits<uint64_t>::max();
-        for (auto it = tile_texture_cache_.begin(); it != tile_texture_cache_.end(); ++it) {
-            if (it->second.last_used_stamp < oldest) {
-                oldest = it->second.last_used_stamp;
-                victim_it = it;
-            }
+    int applied = 0;
+    for (auto& result : ready) {
+        if (result.generation != tile_generation_) continue;
+        result.texture.last_used_stamp = tile_cache_stamp_++;
+        if (result.texture.missing && tile_missing_logged_once_.insert(result.tile_index).second) {
+            app_log(LogLevel::Warning,
+                    "GLWrpTerrainView: missing texture for tile material index "
+                    + std::to_string(result.tile_index));
         }
-        if (victim_it == tile_texture_cache_.end()) break;
-        tile_texture_cache_.erase(victim_it);
+        tile_texture_cache_[result.tile_index] = std::move(result.texture);
+        texture_cache_hits_++;
+        applied++;
     }
+    return applied;
+}
 
+void GLWrpTerrainView::rebuild_tile_atlas_from_cache(const std::vector<int>& selected_tiles) {
     texture_lookup_uvs_.assign(texture_entries_.size(), {0.0f, 0.0f, 0.0f, 0.0f});
     texture_lookup_size_ = static_cast<int>(texture_lookup_uvs_.size());
 
@@ -1631,17 +1761,19 @@ void GLWrpTerrainView::stream_visible_tile_textures() {
         int w = 0;
         int h = 0;
     };
-    std::vector<Packed> packed;
-    packed.reserve(selected.size());
 
     static constexpr int kPad = 2;
     static constexpr int kRowMax = 4096;
+
+    std::vector<Packed> packed;
+    packed.reserve(selected_tiles.size());
+
     int x = 0;
     int y = 0;
     int row_h = 0;
     int row_w_max = 0;
 
-    for (int ti : selected) {
+    for (int ti : selected_tiles) {
         auto it = tile_texture_cache_.find(ti);
         if (it == tile_texture_cache_.end()) continue;
         const int w = std::max(1, it->second.width);
@@ -1658,7 +1790,28 @@ void GLWrpTerrainView::stream_visible_tile_textures() {
         x += pw;
         row_h = std::max(row_h, ph);
         row_w_max = std::max(row_w_max, x);
+        it->second.last_used_stamp = tile_cache_stamp_++;
     }
+
+    if (packed.empty()) {
+        texture_atlas_pixels_.clear();
+        atlas_width_ = 0;
+        atlas_height_ = 0;
+        has_texture_atlas_ = false;
+        has_texture_lookup_ = !texture_lookup_uvs_.empty();
+        last_loaded_texture_count_ = 0;
+        texture_world_scale_ = std::max(tile_cell_size_, cell_size_);
+        if (get_realized()) {
+            cleanup_texture_atlas_gl();
+            upload_texture_lookup();
+        }
+        if (!atlas_empty_logged_) {
+            app_log(LogLevel::Debug, "GLWrpTerrainView: atlas empty (waiting for background tile loads)");
+            atlas_empty_logged_ = true;
+        }
+        return;
+    }
+    atlas_empty_logged_ = false;
 
     row_w_max = std::max(row_w_max, x);
     const int atlas_w = std::max(1, row_w_max);
@@ -1733,8 +1886,67 @@ void GLWrpTerrainView::stream_visible_tile_textures() {
         upload_texture_atlas();
         upload_texture_lookup();
     }
+}
 
-    last_visible_tile_indices_ = std::move(selected);
+void GLWrpTerrainView::stream_visible_tile_textures() {
+    if (!texture_loader_ || texture_entries_.empty()) {
+        visible_tile_count_ = 0;
+        return;
+    }
+
+    auto visible = collect_visible_tile_indices();
+    visible_tile_count_ = static_cast<int>(visible.size());
+
+    std::vector<int> selected = std::move(visible);
+    static constexpr size_t kMaxAtlasTextures = 256;
+    if (selected.size() > kMaxAtlasTextures) {
+        selected.resize(kMaxAtlasTextures);
+    }
+
+    enqueue_visible_tile_jobs(selected);
+    const int applied = drain_ready_tile_results(64);
+    if (applied > 0) {
+        atlas_dirty_ = true;
+        atlas_rebuild_debounce_frames_ = 0;
+    }
+
+    const bool selected_changed = (selected != last_visible_tile_indices_);
+    if (selected_changed) {
+        last_visible_tile_indices_ = selected;
+        if (!atlas_dirty_) {
+            atlas_rebuild_debounce_frames_++;
+            if (atlas_rebuild_debounce_frames_ >= 4) {
+                atlas_dirty_ = true;
+                atlas_rebuild_debounce_frames_ = 0;
+            }
+        }
+    }
+
+    if (atlas_dirty_) {
+        rebuild_tile_atlas_from_cache(selected);
+        atlas_dirty_ = false;
+        atlas_rebuild_debounce_frames_ = 0;
+    }
+
+    while (tile_texture_cache_.size() > tile_cache_budget_entries_) {
+        auto victim_it = tile_texture_cache_.end();
+        uint64_t oldest = std::numeric_limits<uint64_t>::max();
+        for (auto it = tile_texture_cache_.begin(); it != tile_texture_cache_.end(); ++it) {
+            if (it->second.last_used_stamp < oldest) {
+                oldest = it->second.last_used_stamp;
+                victim_it = it;
+            }
+        }
+        if (victim_it == tile_texture_cache_.end()) break;
+        tile_texture_cache_.erase(victim_it);
+    }
+
+    bool pending = false;
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        pending = !tile_jobs_pending_.empty() || !tile_ready_queue_.empty();
+    }
+    if (pending) queue_render();
 }
 
 void GLWrpTerrainView::rebuild_object_buffers() {
@@ -1791,10 +2003,18 @@ void GLWrpTerrainView::build_mvp(float* mvp) const {
 
 void GLWrpTerrainView::emit_terrain_stats() {
     if (!on_terrain_stats_) return;
+    size_t pending_jobs = 0;
+    size_t ready_jobs = 0;
+    {
+        std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
+        pending_jobs = tile_jobs_pending_.size();
+        ready_jobs = tile_ready_queue_.size();
+    }
     std::ostringstream ss;
     ss << "Patches " << visible_patch_count_ << "/" << terrain_patches_.size()
        << " | Draws " << terrain_draw_calls_
        << " | Tiles " << visible_tile_count_
+       << " | Jobs " << pending_jobs << "/" << ready_jobs
        << " | Cache H/M " << texture_cache_hits_ << "/" << texture_cache_misses_
        << " | Atlas textures " << last_loaded_texture_count_;
     const auto next = ss.str();

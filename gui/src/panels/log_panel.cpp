@@ -1,18 +1,74 @@
 #include "log_panel.h"
 
-namespace {
-LogFunc g_log_func;
-} // namespace
-
-void set_global_log(LogFunc func) { g_log_func = std::move(func); }
-void app_log(LogLevel level, const std::string& text) {
-    if (g_log_func) g_log_func(level, text);
-}
-
 #include <chrono>
+#include <deque>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
+
+namespace {
+LogFunc g_log_func;
+std::mutex g_log_mutex;
+std::deque<std::pair<LogLevel, std::string>> g_log_queue;
+bool g_log_flush_scheduled = false;
+} // namespace
+
+namespace {
+bool flush_log_queue_idle() {
+    std::deque<std::pair<LogLevel, std::string>> batch;
+    LogFunc sink;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        sink = g_log_func;
+        static constexpr size_t kBatchSize = 256;
+        size_t count = 0;
+        while (!g_log_queue.empty() && count < kBatchSize) {
+            batch.push_back(std::move(g_log_queue.front()));
+            g_log_queue.pop_front();
+            ++count;
+        }
+        if (g_log_queue.empty()) {
+            g_log_flush_scheduled = false;
+        }
+    }
+
+    if (sink) {
+        for (const auto& item : batch) {
+            sink(item.first, item.second);
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    return g_log_flush_scheduled;
+}
+} // namespace
+
+void set_global_log(LogFunc func) {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_log_func = std::move(func);
+}
+
+void app_log(LogLevel level, const std::string& text) {
+    bool schedule = false;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        g_log_queue.emplace_back(level, text);
+        if (!g_log_flush_scheduled) {
+            g_log_flush_scheduled = true;
+            schedule = true;
+        }
+    }
+    if (schedule) {
+        g_idle_add_full(
+            G_PRIORITY_DEFAULT_IDLE,
+            +[](gpointer) -> gboolean {
+                return flush_log_queue_idle() ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+            },
+            nullptr,
+            nullptr);
+    }
+}
 
 namespace {
 
