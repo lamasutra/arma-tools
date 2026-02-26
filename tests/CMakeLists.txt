@@ -31,3 +31,34 @@ armatools_add_test(gui_tab_config_presenter_tests
 target_include_directories(gui_tab_config_presenter_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/gui/src
     ${CMAKE_SOURCE_DIR}/gui/src/core)
+
+armatools_add_test(log_panel_presenter_tests
+    log_panel_presenter_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/log_panel_presenter.cpp)
+target_include_directories(log_panel_presenter_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(gl_model_camera_controller_tests
+    gl_model_camera_controller_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/gl_model_camera_controller.cpp)
+target_include_directories(gl_model_camera_controller_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(rvmat_preview_camera_controller_tests
+    rvmat_preview_camera_controller_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/rvmat_preview_camera_controller.cpp)
+target_include_directories(rvmat_preview_camera_controller_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(wrp_terrain_camera_controller_tests
+    wrp_terrain_camera_controller_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/wrp_terrain_camera_controller.cpp)
+target_include_directories(wrp_terrain_camera_controller_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(model_view_panel_presenter_tests
+    model_view_panel_presenter_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/app/model_view_panel_presenter.cpp)
+target_include_directories(model_view_panel_presenter_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src
+    ${CMAKE_SOURCE_DIR}/libs/p3d/include)

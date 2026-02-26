@@ -1,5 +1,8 @@
 #pragma once
 
+#include "app/wrp_terrain_camera_controller.h"
+#include "domain/wrp_terrain_camera_types.h"
+
 #include <gtkmm.h>
 #include <array>
 #include <cstdint>
@@ -137,11 +140,8 @@ private:
     std::vector<float> object_points_;
     std::vector<float> object_positions_;
 
-    // Camera.
-    float pivot_[3] = {0.0f, 0.0f, 0.0f};
-    float azimuth_ = 0.5f;
-    float elevation_ = 0.8f;
-    float distance_ = 500.0f;
+    // Camera state/behavior extracted for testability.
+    WrpTerrainCameraController camera_controller_;
     float drag_start_azimuth_ = 0.0f;
     float drag_start_elevation_ = 0.0f;
     float drag_start_pivot_[3] = {0.0f, 0.0f, 0.0f};

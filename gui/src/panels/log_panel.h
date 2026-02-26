@@ -1,11 +1,11 @@
 #pragma once
 
+#include "app/log_panel_presenter.h"
+#include "domain/log_level.h"
+
 #include <gtkmm.h>
 #include <functional>
 #include <string>
-#include <vector>
-
-enum class LogLevel { Debug, Info, Warning, Error };
 
 // Global log function — set by AppWindow, callable from any tab.
 using LogFunc = std::function<void(LogLevel, const std::string&)>;
@@ -23,14 +23,7 @@ public:
     void set_on_toggle_maximize(ToggleMaxFunc func);
 
 private:
-    // A single stored log entry
-    struct LogEntry {
-        LogLevel level;
-        std::string text; // fully formatted line including timestamp and prefix
-    };
-
-    // All log entries kept in memory for filtering/export
-    std::vector<LogEntry> entries_;
+    LogPanelPresenter presenter_;
 
     // --- Toolbar widgets ---
     Gtk::Box toolbar_{Gtk::Orientation::HORIZONTAL, 4};
@@ -65,14 +58,6 @@ private:
     Glib::RefPtr<Gtk::TextTag> tag_error_;
     Glib::RefPtr<Gtk::TextTag> tag_highlight_;
 
-    // --- Filter state ---
-    bool show_debug_   = true;
-    bool show_info_    = true;
-    bool show_warning_ = true;
-    bool show_error_   = true;
-
-    // --- Maximize state ---
-    bool maximized_ = false;
     ToggleMaxFunc on_toggle_maximize_;
 
     // --- Internal helpers ---

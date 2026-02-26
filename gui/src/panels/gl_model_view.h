@@ -1,5 +1,8 @@
 #pragma once
 
+#include "app/gl_model_camera_controller.h"
+#include "domain/gl_model_camera_types.h"
+
 #include <gtkmm.h>
 #include <armatools/p3d.h>
 #include <string>
@@ -44,7 +47,7 @@ public:
     // 5b. Background color
     void set_background_color(float r, float g, float b);
 
-    enum class CameraMode { Orbit, FirstPerson };
+    using CameraMode = glmodel::CameraMode;
     void set_camera_mode(CameraMode mode);
     CameraMode camera_mode() const;
 
@@ -53,12 +56,7 @@ public:
     void set_highlight_geometry(const std::vector<float>& positions, HighlightMode mode);
 
     // Camera state access (for synchronized views)
-    struct CameraState {
-        float azimuth;
-        float elevation;
-        float distance;
-        float pivot[3];
-    };
+    using CameraState = glmodel::CameraState;
     CameraState get_camera_state() const;
     void set_camera_state(const CameraState& state);
 
@@ -104,18 +102,8 @@ private:
     std::unordered_map<std::string, MaterialParams> material_params_;
     bool debug_group_report_pending_ = false;
 
-    // Camera state
-    float azimuth_ = 0.4f;
-    float elevation_ = 0.3f;
-    float distance_ = 5.0f;
-    float pivot_[3] = {0, 0, 0};
-    CameraMode camera_mode_ = CameraMode::Orbit;
-    float default_center_[3] = {0, 0, 0};
-    bool has_default_center_ = false;
-    float default_azimuth_ = 0.4f;
-    float default_elevation_ = 0.3f;
-    float default_distance_ = 5.0f;
-    bool has_default_camera_ = false;
+    // Camera state and math behavior (presentation-independent)
+    GlModelCameraController camera_controller_;
 
     // Rendering mode
     bool wireframe_ = false;

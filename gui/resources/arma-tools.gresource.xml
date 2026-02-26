@@ -2,5 +2,19 @@
 <gresources>
   <gresource prefix="/com/bigbangit/ArmaTools">
     <file>css/style.css</file>
+    <file>data/shaders/gl_model_view.vert</file>
+    <file>data/shaders/gl_model_view_solid.frag</file>
+    <file>data/shaders/gl_model_view_wire.frag</file>
+    <file>data/shaders/gl_model_view_es.vert</file>
+    <file>data/shaders/gl_model_view_solid_es.frag</file>
+    <file>data/shaders/gl_model_view_wire_es.frag</file>
+    <file>data/shaders/gl_model_view_wire.vert</file>
+    <file>data/shaders/gl_model_view_wire_es.vert</file>
+    <file>data/shaders/gl_rvmat_preview.vert</file>
+    <file>data/shaders/gl_rvmat_preview.frag</file>
+    <file>data/shaders/gl_wrp_terrain.vert</file>
+    <file>data/shaders/gl_wrp_terrain.frag</file>
+    <file>data/shaders/gl_wrp_point.vert</file>
+    <file>data/shaders/gl_wrp_point.frag</file>
   </gresource>
 </gresources>

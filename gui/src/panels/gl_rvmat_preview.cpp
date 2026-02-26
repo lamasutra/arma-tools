@@ -1,6 +1,7 @@
 #include "gl_rvmat_preview.h"
 
 #include "gl_error_log.h"
+#include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
 
 #include <epoxy/gl.h>
@@ -14,124 +15,10 @@
 
 namespace {
 
-static constexpr const char* kVertSrc = R"(
-#version 330 core
-layout(location=0) in vec3 aPos;
-layout(location=1) in vec3 aNormal;
-layout(location=2) in vec2 aUV;
-layout(location=3) in vec3 aTangent;
-layout(location=4) in vec2 aUV1;
-uniform mat4 uMVP;
-uniform mat4 uModel;
-uniform mat3 uNormalMat;
-out vec3 vWorldPos;
-out vec3 vNormal;
-out vec2 vUV;
-out vec3 vTangent;
-out vec2 vUV1;
-void main() {
-    vec4 wp = uModel * vec4(aPos, 1.0);
-    vWorldPos = wp.xyz;
-    vNormal = normalize(uNormalMat * aNormal);
-    vTangent = normalize(mat3(uModel) * aTangent);
-    vUV = aUV;
-    vUV1 = aUV1;
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}
-)";
-
-static constexpr const char* kFragSrc = R"(
-#version 330 core
-in vec3 vWorldPos;
-in vec3 vNormal;
-in vec2 vUV;
-in vec3 vTangent;
-in vec2 vUV1;
-uniform sampler2D uTexDiffuse;
-uniform sampler2D uTexNormal;
-uniform sampler2D uTexSpec;
-uniform sampler2D uTexAO;
-uniform bool uHasDiffuse;
-uniform bool uHasNormal;
-uniform bool uHasSpec;
-uniform bool uHasAO;
-uniform vec3 uLightDir;
-uniform vec3 uCamPos;
-uniform vec3 uMatAmbient;
-uniform vec3 uMatDiffuse;
-uniform vec3 uMatEmissive;
-uniform vec3 uMatSpecular;
-uniform float uMatSpecPower;
-uniform mat3 uUvDiffuse;
-uniform mat3 uUvNormal;
-uniform mat3 uUvSpec;
-uniform mat3 uUvAO;
-uniform int uUvSourceDiffuse;
-uniform int uUvSourceNormal;
-uniform int uUvSourceSpec;
-uniform int uUvSourceAO;
-uniform int uViewMode;
-uniform bool uDiffuseIsSRGB;
-out vec4 FragColor;
-void main() {
-    vec2 uvBaseDiff = (uUvSourceDiffuse == 1) ? vUV1 : vUV;
-    vec2 uvBaseNrm = (uUvSourceNormal == 1) ? vUV1 : vUV;
-    vec2 uvBaseSpec = (uUvSourceSpec == 1) ? vUV1 : vUV;
-    vec2 uvBaseAO = (uUvSourceAO == 1) ? vUV1 : vUV;
-    vec2 uvD = (uUvDiffuse * vec3(uvBaseDiff, 1.0)).xy;
-    vec2 uvN = (uUvNormal * vec3(uvBaseNrm, 1.0)).xy;
-    vec2 uvS = (uUvSpec * vec3(uvBaseSpec, 1.0)).xy;
-    vec2 uvA = (uUvAO * vec3(uvBaseAO, 1.0)).xy;
-    vec3 baseN = normalize(vNormal);
-    vec3 t = normalize(vTangent - dot(vTangent, baseN) * baseN);
-    vec3 b = normalize(cross(baseN, t));
-    if (!gl_FrontFacing) {
-        baseN = -baseN;
-        t = -t;
-        b = -b;
-    }
-    vec3 n = baseN;
-    if (uHasNormal) {
-        vec3 nTex = texture(uTexNormal, uvN).xyz * 2.0 - 1.0;
-        n = normalize(mat3(t, b, baseN) * nTex);
-    }
-
-    vec3 baseColor = uHasDiffuse ? texture(uTexDiffuse, uvD).rgb : vec3(0.7);
-    if (uDiffuseIsSRGB) baseColor = pow(baseColor, vec3(2.2));
-    vec3 ambient = clamp(uMatAmbient, 0.0, 1.0);
-    vec3 diffuseC = clamp(uMatDiffuse, 0.0, 1.0);
-    vec3 emissive = clamp(uMatEmissive, 0.0, 1.0);
-    vec3 specC = clamp(uMatSpecular, 0.0, 1.0);
-    float sp = max(2.0, uMatSpecPower);
-
-    float diff = max(dot(n, uLightDir), 0.0);
-    float backFill = max(dot(n, -uLightDir), 0.0) * 0.20;
-    vec3 v = normalize(uCamPos - vWorldPos);
-    vec3 h = normalize(uLightDir + v);
-    float spec = pow(max(dot(n, h), 0.0), sp);
-    float specMask = 1.0;
-    if (uHasSpec) specMask = dot(texture(uTexSpec, uvS).rgb, vec3(0.3333));
-    vec3 aoColor = uHasAO ? texture(uTexAO, uvA).rgb : vec3(1.0);
-
-    vec3 lit = baseColor * (ambient * 0.25 + diffuseC * min(1.0, diff + backFill))
-             + specC * spec * specMask * 0.35
-             + emissive;
-    vec3 outColor = lit;
-    if (uViewMode == 1) {
-        outColor = baseColor;
-        outColor = pow(clamp(outColor, 0.0, 1.0), vec3(1.0 / 2.2));
-    } else if (uViewMode == 2) {
-        outColor = n * 0.5 + 0.5;
-    } else if (uViewMode == 3) {
-        outColor = uHasSpec ? texture(uTexSpec, uvS).rgb : vec3(0.5);
-    } else if (uViewMode == 4) {
-        outColor = aoColor;
-    } else {
-        outColor = pow(clamp(outColor, 0.0, 1.0), vec3(1.0 / 2.2));
-    }
-    FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
-}
-)";
+static constexpr const char* kVertResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_rvmat_preview.vert";
+static constexpr const char* kFragResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_rvmat_preview.frag";
 
 static void mat4_identity(float* m) {
     std::memset(m, 0, sizeof(float) * 16);
@@ -211,13 +98,13 @@ GLRvmatPreview::GLRvmatPreview() {
     drag_orbit_->signal_drag_begin().connect([this](double x, double y) {
         drag_start_x_ = x;
         drag_start_y_ = y;
-        drag_start_azimuth_ = azimuth_;
-        drag_start_elevation_ = elevation_;
+        const auto state = camera_controller_.camera_state();
+        drag_start_azimuth_ = state.azimuth;
+        drag_start_elevation_ = state.elevation;
     });
     drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
-        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
-        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
-        elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
+        camera_controller_.orbit_from_drag(
+            drag_start_azimuth_, drag_start_elevation_, dx, dy);
         queue_render();
     });
     add_controller(drag_orbit_);
@@ -225,16 +112,11 @@ GLRvmatPreview::GLRvmatPreview() {
     drag_pan_ = Gtk::GestureDrag::create();
     drag_pan_->set_button(GDK_BUTTON_MIDDLE);
     drag_pan_->signal_drag_begin().connect([this](double, double) {
-        std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+        const auto state = camera_controller_.camera_state();
+        std::memcpy(drag_start_pivot_, state.pivot, sizeof(drag_start_pivot_));
     });
     drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
-        float scale = distance_ * 0.002f;
-        float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-        float rx = ca, rz = -sa;
-        float uy = 1.0f;
-        pivot_[0] = drag_start_pivot_[0] - static_cast<float>(dx) * scale * rx;
-        pivot_[1] = drag_start_pivot_[1] + static_cast<float>(dy) * scale * uy;
-        pivot_[2] = drag_start_pivot_[2] - static_cast<float>(dx) * scale * rz;
+        camera_controller_.pan_from_drag(drag_start_pivot_, dx, dy);
         queue_render();
     });
     add_controller(drag_pan_);
@@ -242,8 +124,7 @@ GLRvmatPreview::GLRvmatPreview() {
     scroll_zoom_ = Gtk::EventControllerScroll::create();
     scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
     scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
-        distance_ *= (dy > 0) ? 1.1f : 0.9f;
-        distance_ = std::max(distance_, 0.25f);
+        camera_controller_.zoom_from_scroll(dy);
         queue_render();
         return true;
     }, false);
@@ -360,8 +241,10 @@ void GLRvmatPreview::on_realize_gl() {
     if (has_error()) return;
 
     try {
-        auto vs = compile_shader(GL_VERTEX_SHADER, kVertSrc);
-        auto fs = compile_shader(GL_FRAGMENT_SHADER, kFragSrc);
+        const std::string vert_src = infra::gl::load_resource_text(kVertResource);
+        const std::string frag_src = infra::gl::load_resource_text(kFragResource);
+        auto vs = compile_shader(GL_VERTEX_SHADER, vert_src.c_str());
+        auto fs = compile_shader(GL_FRAGMENT_SHADER, frag_src.c_str());
         prog_ = link_program(vs, fs);
         glDeleteShader(vs);
         glDeleteShader(fs);
@@ -428,14 +311,9 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
                        / static_cast<float>(std::max(1, get_height()));
     float proj[16], view[16], model[16], vp[16], mvp[16];
     mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.1f, 100.0f);
-    float ce = std::cos(elevation_), se = std::sin(elevation_);
-    float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-    const float eye[3] = {
-        pivot_[0] + distance_ * ce * sa,
-        pivot_[1] + distance_ * se,
-        pivot_[2] + distance_ * ce * ca
-    };
-    const float center[3] = {pivot_[0], pivot_[1], pivot_[2]};
+    float eye[3] = {0.0f, 0.0f, 0.0f};
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    camera_controller_.build_eye_center(eye, center);
     const float up[3] = {0.0f, 1.0f, 0.0f};
     mat4_look_at(view, eye, center, up);
 

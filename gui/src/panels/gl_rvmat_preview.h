@@ -1,5 +1,8 @@
 #pragma once
 
+#include "app/rvmat_preview_camera_controller.h"
+#include "domain/rvmat_preview_camera_types.h"
+
 #include <gtkmm.h>
 
 #include <array>
@@ -116,10 +119,7 @@ private:
     int uv_src_spec_ = static_cast<int>(UVSource::Tex0);
     int uv_src_ao_ = static_cast<int>(UVSource::Tex0);
 
-    float azimuth_ = 0.3f;
-    float elevation_ = 0.2f;
-    float distance_ = 2.6f;
-    float pivot_[3] = {0.0f, 0.0f, 0.0f};
+    RvmatPreviewCameraController camera_controller_;
     double drag_start_x_ = 0.0;
     double drag_start_y_ = 0.0;
     float drag_start_azimuth_ = 0.0f;

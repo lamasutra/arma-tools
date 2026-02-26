@@ -1,6 +1,7 @@
 #include "gl_model_view.h"
 
 #include "gl_error_log.h"
+#include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
 
 #include <armatools/armapath.h>
@@ -10,207 +11,24 @@
 #include <cstring>
 #include <algorithm>
 
-// ---- Shaders ----
+// ---- Shader resources ----
 
-static constexpr const char* VERT_SRC = R"(
-#version 330 core
-layout(location=0) in vec3 aPos;
-layout(location=1) in vec3 aNormal;
-layout(location=2) in vec2 aUV;
-layout(location=3) in vec3 aTangent;
-uniform mat4 uMVP;
-uniform mat3 uNormalMat;
-out vec3 vNormal;
-out vec2 vUV;
-out vec3 vTangent;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vNormal = normalize(uNormalMat * aNormal);
-    vTangent = normalize(uNormalMat * aTangent);
-    vUV = aUV;
-}
-)";
-
-static constexpr const char* FRAG_SOLID_SRC = R"(
-#version 330 core
-in vec3 vNormal;
-in vec2 vUV;
-in vec3 vTangent;
-uniform sampler2D uTexture;
-uniform sampler2D uNormalMap;
-uniform sampler2D uSpecularMap;
-uniform bool uHasTexture;
-uniform bool uHasNormalMap;
-uniform bool uHasSpecularMap;
-uniform vec3 uLightDir;
-uniform bool uHasMaterial;
-uniform vec3 uMatAmbient;
-uniform vec3 uMatDiffuse;
-uniform vec3 uMatEmissive;
-uniform vec3 uMatSpecular;
-uniform float uMatSpecPower;
-uniform int uShaderMode;
-out vec4 FragColor;
-void main() {
-    vec3 n = normalize(vNormal);
-    if (uHasNormalMap) {
-        vec3 t = normalize(vTangent - dot(vTangent, n) * n);
-        vec3 b = normalize(cross(n, t));
-        vec3 nt = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
-        n = normalize(mat3(t, b, n) * nt);
-    }
-    vec3 v = vec3(0.0, 0.0, 1.0);
-    float diff = max(dot(n, -uLightDir), 0.0);
-    float back_fill = max(dot(n, uLightDir), 0.0);
-    vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
-    if (uShaderMode == 3 && baseColor.a < 0.35) discard;
-
-    vec3 ambient = clamp(uHasMaterial ? uMatAmbient : vec3(0.18), 0.0, 1.0);
-    vec3 diffuseC = clamp(uHasMaterial ? uMatDiffuse : vec3(1.0), 0.0, 1.0);
-    vec3 emissive = clamp(uHasMaterial ? uMatEmissive : vec3(0.0), 0.0, 1.0);
-    vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
-    float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
-
-    vec3 h = normalize(-uLightDir + v);
-    float spec = pow(max(dot(n, h), 0.0), sp);
-    if (uHasSpecularMap)
-        spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
-    float light = min(1.0, 0.15 + 0.85 * diff + 0.20 * back_fill);
-
-    if (uShaderMode == 1) {
-        spec *= 1.8;
-        light = min(1.0, light * 1.08);
-    } else if (uShaderMode == 2) {
-        emissive *= 1.6;
-    }
-
-    vec3 lit = baseColor.rgb * (ambient * 0.25 + diffuseC * light)
-             + specC * spec * 0.35
-             + emissive;
-    FragColor = vec4(clamp(lit, 0.0, 1.0), baseColor.a);
-    if (FragColor.a < 0.01) discard;
-}
-)";
-
-static constexpr const char* FRAG_WIRE_SRC = R"(
-#version 330 core
-uniform vec3 uColor;
-out vec4 FragColor;
-void main() { FragColor = vec4(uColor, 1.0); }
-)";
-
-// ---- GLES 3.2 shader variants ----
-
-static constexpr const char* VERT_ES_SRC = R"(
-#version 320 es
-layout(location=0) in vec3 aPos;
-layout(location=1) in vec3 aNormal;
-layout(location=2) in vec2 aUV;
-layout(location=3) in vec3 aTangent;
-uniform mat4 uMVP;
-uniform mat3 uNormalMat;
-out vec3 vNormal;
-out vec2 vUV;
-out vec3 vTangent;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vNormal = normalize(uNormalMat * aNormal);
-    vTangent = normalize(uNormalMat * aTangent);
-    vUV = aUV;
-}
-)";
-
-static constexpr const char* FRAG_SOLID_ES_SRC = R"(
-#version 320 es
-precision mediump float;
-in vec3 vNormal;
-in vec2 vUV;
-in vec3 vTangent;
-uniform sampler2D uTexture;
-uniform sampler2D uNormalMap;
-uniform sampler2D uSpecularMap;
-uniform bool uHasTexture;
-uniform bool uHasNormalMap;
-uniform bool uHasSpecularMap;
-uniform vec3 uLightDir;
-uniform bool uHasMaterial;
-uniform vec3 uMatAmbient;
-uniform vec3 uMatDiffuse;
-uniform vec3 uMatEmissive;
-uniform vec3 uMatSpecular;
-uniform float uMatSpecPower;
-uniform int uShaderMode;
-out vec4 FragColor;
-void main() {
-    vec3 n = normalize(vNormal);
-    if (uHasNormalMap) {
-        vec3 t = normalize(vTangent - dot(vTangent, n) * n);
-        vec3 b = normalize(cross(n, t));
-        vec3 nt = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
-        n = normalize(mat3(t, b, n) * nt);
-    }
-    vec3 v = vec3(0.0, 0.0, 1.0);
-    float diff = max(dot(n, -uLightDir), 0.0);
-    float back_fill = max(dot(n, uLightDir), 0.0);
-    vec4 baseColor = uHasTexture ? texture(uTexture, vUV) : vec4(0.7, 0.7, 0.7, 1.0);
-    if (uShaderMode == 3 && baseColor.a < 0.35) discard;
-
-    vec3 ambient = clamp(uHasMaterial ? uMatAmbient : vec3(0.18), 0.0, 1.0);
-    vec3 diffuseC = clamp(uHasMaterial ? uMatDiffuse : vec3(1.0), 0.0, 1.0);
-    vec3 emissive = clamp(uHasMaterial ? uMatEmissive : vec3(0.0), 0.0, 1.0);
-    vec3 specC = clamp(uHasMaterial ? uMatSpecular : vec3(0.08), 0.0, 1.0);
-    float sp = uHasMaterial ? max(2.0, uMatSpecPower) : 32.0;
-
-    vec3 h = normalize(-uLightDir + v);
-    float spec = pow(max(dot(n, h), 0.0), sp);
-    if (uHasSpecularMap)
-        spec *= dot(texture(uSpecularMap, vUV).rgb, vec3(0.3333));
-    float light = min(1.0, 0.15 + 0.85 * diff + 0.20 * back_fill);
-
-    if (uShaderMode == 1) {
-        spec *= 1.8;
-        light = min(1.0, light * 1.08);
-    } else if (uShaderMode == 2) {
-        emissive *= 1.6;
-    }
-
-    vec3 lit = baseColor.rgb * (ambient * 0.25 + diffuseC * light)
-             + specC * spec * 0.35
-             + emissive;
-    FragColor = vec4(clamp(lit, 0.0, 1.0), baseColor.a);
-    if (FragColor.a < 0.01) discard;
-}
-)";
-
-static constexpr const char* FRAG_WIRE_ES_SRC = R"(
-#version 320 es
-precision mediump float;
-uniform vec3 uColor;
-out vec4 FragColor;
-void main() { FragColor = vec4(uColor, 1.0); }
-)";
-
-// ---- Wireframe vertex shader (positions only, for GLES line buffer) ----
-
-static constexpr const char* VERT_WIRE_SRC = R"(
-#version 330 core
-layout(location=0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    gl_PointSize = 8.0;
-}
-)";
-
-static constexpr const char* VERT_WIRE_ES_SRC = R"(
-#version 320 es
-layout(location=0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    gl_PointSize = 8.0;
-}
-)";
+static constexpr const char* kVertResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view.vert";
+static constexpr const char* kFragSolidResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_solid.frag";
+static constexpr const char* kFragWireResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_wire.frag";
+static constexpr const char* kVertEsResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_es.vert";
+static constexpr const char* kFragSolidEsResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_solid_es.frag";
+static constexpr const char* kFragWireEsResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_wire_es.frag";
+static constexpr const char* kVertWireResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_wire.vert";
+static constexpr const char* kVertWireEsResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_model_view_wire_es.vert";
 
 // ---- Matrix math ----
 
@@ -299,13 +117,13 @@ GLModelView::GLModelView() {
     drag_orbit_->signal_drag_begin().connect([this](double x, double y) {
         drag_start_x_ = x;
         drag_start_y_ = y;
-        drag_start_azimuth_ = azimuth_;
-        drag_start_elevation_ = elevation_;
+        const auto state = camera_controller_.camera_state();
+        drag_start_azimuth_ = state.azimuth;
+        drag_start_elevation_ = state.elevation;
     });
     drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
-        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
-        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
-        elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
+        camera_controller_.orbit_from_drag(
+            drag_start_azimuth_, drag_start_elevation_, dx, dy);
         queue_render();
         if (!suppress_camera_signal_) signal_camera_changed_.emit();
     });
@@ -317,14 +135,13 @@ GLModelView::GLModelView() {
     drag_look_->signal_drag_begin().connect([this](double x, double y) {
         drag_start_x_ = x;
         drag_start_y_ = y;
-        drag_start_azimuth_ = azimuth_;
-        drag_start_elevation_ = elevation_;
+        const auto state = camera_controller_.camera_state();
+        drag_start_azimuth_ = state.azimuth;
+        drag_start_elevation_ = state.elevation;
     });
     drag_look_->signal_drag_update().connect([this](double dx, double dy) {
-        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.004f;
-        elevation_ = drag_start_elevation_ + static_cast<float>(dy) * 0.004f;
-        elevation_ = std::clamp(elevation_, -1.5f, 1.5f);
-
+        camera_controller_.orbit_from_drag(
+            drag_start_azimuth_, drag_start_elevation_, dx, dy);
         queue_render();
         if (!suppress_camera_signal_) signal_camera_changed_.emit();
     });
@@ -334,19 +151,11 @@ GLModelView::GLModelView() {
     drag_pan_ = Gtk::GestureDrag::create();
     drag_pan_->set_button(GDK_BUTTON_MIDDLE);
     drag_pan_->signal_drag_begin().connect([this](double, double) {
-        std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+        const auto state = camera_controller_.camera_state();
+        std::memcpy(drag_start_pivot_, state.pivot, sizeof(drag_start_pivot_));
     });
     drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
-        float scale = distance_ * 0.002f;
-        // Pan in screen-space: right and up
-        float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-        // Right vector (horizontal)
-        float rx = ca, rz = -sa;
-        // Up vector (approximation for small elevation)
-        float uy = 1.0f;
-        pivot_[0] = drag_start_pivot_[0] - static_cast<float>(dx) * scale * rx;
-        pivot_[1] = drag_start_pivot_[1] + static_cast<float>(dy) * scale * uy;
-        pivot_[2] = drag_start_pivot_[2] - static_cast<float>(dx) * scale * rz;
+        camera_controller_.pan_from_drag(drag_start_pivot_, dx, dy);
         queue_render();
         if (!suppress_camera_signal_) signal_camera_changed_.emit();
     });
@@ -356,13 +165,11 @@ GLModelView::GLModelView() {
     scroll_zoom_ = Gtk::EventControllerScroll::create();
     scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
     scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
-        if (camera_mode_ == CameraMode::Orbit) {
-            distance_ *= (dy > 0) ? 1.1f : 0.9f;
-            distance_ = std::max(distance_, 0.01f);
+        if (camera_controller_.scroll_zoom(dy)) {
             queue_render();
             if (!suppress_camera_signal_) signal_camera_changed_.emit();
         } else {
-            float step = std::max(0.02f, distance_ * 0.08f);
+            float step = std::max(0.02f, camera_controller_.distance() * 0.08f);
             move_camera_local((dy > 0) ? -step : step, 0.0f, 0.0f);
         }
         return true;
@@ -379,7 +186,7 @@ GLModelView::GLModelView() {
     key_move_ = Gtk::EventControllerKey::create();
     key_move_->signal_key_pressed().connect(
         [this](guint keyval, guint, Gdk::ModifierType state) -> bool {
-            if (camera_mode_ != CameraMode::FirstPerson) return false;
+            if (camera_controller_.camera_mode() != CameraMode::FirstPerson) return false;
             bool handled = true;
             switch (keyval) {
             case GDK_KEY_w:
@@ -424,7 +231,7 @@ GLModelView::GLModelView() {
         }, false);
     key_move_->signal_key_released().connect(
         [this](guint keyval, guint, Gdk::ModifierType state) {
-            if (camera_mode_ != CameraMode::FirstPerson) return;
+            if (camera_controller_.camera_mode() != CameraMode::FirstPerson) return;
             switch (keyval) {
             case GDK_KEY_w:
             case GDK_KEY_W: move_fwd_ = false; break;
@@ -468,16 +275,20 @@ void GLModelView::on_realize_gl() {
         " " + std::to_string(ver / 10) + "." + std::to_string(ver % 10));
 
     // Select shader sources based on API
-    const char* vert = is_desktop_gl_ ? VERT_SRC : VERT_ES_SRC;
-    const char* frag_solid = is_desktop_gl_ ? FRAG_SOLID_SRC : FRAG_SOLID_ES_SRC;
-    const char* frag_wire = is_desktop_gl_ ? FRAG_WIRE_SRC : FRAG_WIRE_ES_SRC;
-    const char* vert_wire = is_desktop_gl_ ? VERT_WIRE_SRC : VERT_WIRE_ES_SRC;
+    const std::string vert = infra::gl::load_resource_text(
+        is_desktop_gl_ ? kVertResource : kVertEsResource);
+    const std::string frag_solid = infra::gl::load_resource_text(
+        is_desktop_gl_ ? kFragSolidResource : kFragSolidEsResource);
+    const std::string frag_wire = infra::gl::load_resource_text(
+        is_desktop_gl_ ? kFragWireResource : kFragWireEsResource);
+    const std::string vert_wire = infra::gl::load_resource_text(
+        is_desktop_gl_ ? kVertWireResource : kVertWireEsResource);
 
     // Compile shaders
-    auto vs = compile_shader(GL_VERTEX_SHADER, vert);
-    auto fs_solid = compile_shader(GL_FRAGMENT_SHADER, frag_solid);
-    auto fs_wire = compile_shader(GL_FRAGMENT_SHADER, frag_wire);
-    auto vs_wire = compile_shader(GL_VERTEX_SHADER, vert_wire);
+    auto vs = compile_shader(GL_VERTEX_SHADER, vert.c_str());
+    auto fs_solid = compile_shader(GL_FRAGMENT_SHADER, frag_solid.c_str());
+    auto fs_wire = compile_shader(GL_FRAGMENT_SHADER, frag_wire.c_str());
+    auto vs_wire = compile_shader(GL_VERTEX_SHADER, vert_wire.c_str());
 
     prog_solid_ = link_program(vs, fs_solid);
     prog_wire_ = link_program(vs_wire, fs_wire);
@@ -951,36 +762,13 @@ void GLModelView::set_texture(const std::string& key, int width, int height,
 }
 
 void GLModelView::reset_camera() {
-    if (has_default_camera_) {
-        azimuth_ = default_azimuth_;
-        elevation_ = default_elevation_;
-        distance_ = default_distance_;
-        if (camera_mode_ == CameraMode::Orbit) {
-            pivot_[0] = default_center_[0];
-            pivot_[1] = default_center_[1];
-            pivot_[2] = default_center_[2];
-        } else {
-            const float ce = std::cos(elevation_);
-            const float se = std::sin(elevation_);
-            const float ca = std::cos(azimuth_);
-            const float sa = std::sin(azimuth_);
-            pivot_[0] = default_center_[0] + distance_ * ce * sa;
-            pivot_[1] = default_center_[1] + distance_ * se;
-            pivot_[2] = default_center_[2] + distance_ * ce * ca;
-        }
-    } else {
-        azimuth_ = 0.4f;
-        elevation_ = 0.3f;
-        distance_ = 5.0f;
-        pivot_[0] = 0.0f;
-        pivot_[1] = 0.0f;
-        pivot_[2] = 0.0f;
-    }
+    camera_controller_.reset_camera();
+    const auto state = camera_controller_.camera_state();
     drag_start_x_ = 0.0;
     drag_start_y_ = 0.0;
-    drag_start_azimuth_ = azimuth_;
-    drag_start_elevation_ = elevation_;
-    std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+    drag_start_azimuth_ = state.azimuth;
+    drag_start_elevation_ = state.elevation;
+    std::memcpy(drag_start_pivot_, state.pivot, sizeof(drag_start_pivot_));
     move_fwd_ = false;
     move_back_ = false;
     move_left_ = false;
@@ -993,48 +781,17 @@ void GLModelView::reset_camera() {
 }
 
 void GLModelView::set_camera_from_bounds(float cx, float cy, float cz, float radius) {
-    default_center_[0] = cx;
-    default_center_[1] = cy;
-    default_center_[2] = cz;
-    has_default_center_ = true;
-    default_distance_ = std::max(radius * 2.0f, 0.5f);
-    default_azimuth_ = 0.4f;
-    default_elevation_ = 0.3f;
-    has_default_camera_ = true;
-    distance_ = default_distance_;
-    azimuth_ = default_azimuth_;
-    elevation_ = default_elevation_;
-    if (camera_mode_ == CameraMode::Orbit) {
-        pivot_[0] = cx;
-        pivot_[1] = cy;
-        pivot_[2] = cz;
-    } else {
-        const float ce = std::cos(elevation_);
-        const float se = std::sin(elevation_);
-        const float ca = std::cos(azimuth_);
-        const float sa = std::sin(azimuth_);
-        pivot_[0] = cx + distance_ * ce * sa;
-        pivot_[1] = cy + distance_ * se;
-        pivot_[2] = cz + distance_ * ce * ca;
-    }
+    camera_controller_.set_camera_from_bounds(cx, cy, cz, radius);
     queue_render();
 }
 
 GLModelView::CameraState GLModelView::get_camera_state() const {
-    CameraState s;
-    s.azimuth = azimuth_;
-    s.elevation = elevation_;
-    s.distance = distance_;
-    std::memcpy(s.pivot, pivot_, sizeof(pivot_));
-    return s;
+    return camera_controller_.camera_state();
 }
 
 void GLModelView::set_camera_state(const CameraState& state) {
     suppress_camera_signal_ = true;
-    azimuth_ = state.azimuth;
-    elevation_ = state.elevation;
-    distance_ = state.distance;
-    std::memcpy(pivot_, state.pivot, sizeof(pivot_));
+    camera_controller_.set_camera_state(state);
     queue_render();
     suppress_camera_signal_ = false;
 }
@@ -1066,63 +823,15 @@ void GLModelView::set_background_color(float r, float g, float b) {
 }
 
 void GLModelView::set_camera_mode(CameraMode mode) {
-    if (camera_mode_ == mode) return;
-    const float ce = std::cos(elevation_);
-    const float se = std::sin(elevation_);
-    const float ca = std::cos(azimuth_);
-    const float sa = std::sin(azimuth_);
-    const float dir[3] = {ce * sa, se, ce * ca};
-    float eye[3];
-    float target[3];
-
-    if (camera_mode_ == CameraMode::Orbit) {
-        target[0] = pivot_[0];
-        target[1] = pivot_[1];
-        target[2] = pivot_[2];
-        eye[0] = pivot_[0] + dir[0] * distance_;
-        eye[1] = pivot_[1] + dir[1] * distance_;
-        eye[2] = pivot_[2] + dir[2] * distance_;
-    } else {
-        eye[0] = pivot_[0];
-        eye[1] = pivot_[1];
-        eye[2] = pivot_[2];
-        target[0] = eye[0] - dir[0];
-        target[1] = eye[1] - dir[1];
-        target[2] = eye[2] - dir[2];
-    }
-
-    camera_mode_ = mode;
-    if (camera_mode_ == CameraMode::Orbit) {
-        const float center[3] = {
-            has_default_center_ ? default_center_[0] : target[0],
-            has_default_center_ ? default_center_[1] : target[1],
-            has_default_center_ ? default_center_[2] : target[2],
-        };
-        pivot_[0] = center[0];
-        pivot_[1] = center[1];
-        pivot_[2] = center[2];
-        float dx = eye[0] - center[0];
-        float dy = eye[1] - center[1];
-        float dz = eye[2] - center[2];
-        distance_ = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 0.01f);
-        azimuth_ = std::atan2(dx, dz);
-        elevation_ = std::asin(std::clamp(dy / distance_, -1.0f, 1.0f));
-    } else {
-        pivot_[0] = eye[0];
-        pivot_[1] = eye[1];
-        pivot_[2] = eye[2];
-        float dx = eye[0] - target[0];
-        float dy = eye[1] - target[1];
-        float dz = eye[2] - target[2];
-        distance_ = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 0.01f);
-    }
+    if (!camera_controller_.set_camera_mode(mode)) return;
 
     // Reset transient input state after a mode switch.
+    const auto state = camera_controller_.camera_state();
     drag_start_x_ = 0.0;
     drag_start_y_ = 0.0;
-    drag_start_azimuth_ = azimuth_;
-    drag_start_elevation_ = elevation_;
-    std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+    drag_start_azimuth_ = state.azimuth;
+    drag_start_elevation_ = state.elevation;
+    std::memcpy(drag_start_pivot_, state.pivot, sizeof(drag_start_pivot_));
     move_fwd_ = false;
     move_back_ = false;
     move_left_ = false;
@@ -1137,7 +846,7 @@ void GLModelView::set_camera_mode(CameraMode mode) {
 }
 
 GLModelView::CameraMode GLModelView::camera_mode() const {
-    return camera_mode_;
+    return camera_controller_.camera_mode();
 }
 
 Glib::RefPtr<Gdk::Pixbuf> GLModelView::snapshot() const {
@@ -1230,19 +939,7 @@ void GLModelView::set_material_params(const std::string& key,
 }
 
 void GLModelView::move_camera_local(float forward, float right, float up) {
-    const float ce = std::cos(elevation_);
-    const float se = std::sin(elevation_);
-    const float ca = std::cos(azimuth_);
-    const float sa = std::sin(azimuth_);
-    const float fx = -ce * sa;
-    const float fy = -se;
-    const float fz = -ce * ca;
-    const float rx = ca;
-    const float rz = -sa;
-
-    pivot_[0] += fx * forward + rx * right;
-    pivot_[1] += fy * forward + up;
-    pivot_[2] += fz * forward + rz * right;
+    camera_controller_.move_local(forward, right, up);
     queue_render();
     if (!suppress_camera_signal_) signal_camera_changed_.emit();
 }
@@ -1259,7 +956,7 @@ bool GLModelView::movement_tick() {
     if (move_down_) vertical -= 1.0f;
     if (forward == 0.0f && right == 0.0f && vertical == 0.0f) return false;
 
-    float step = std::max(0.01f, distance_ * 0.006f);
+    float step = std::max(0.01f, camera_controller_.distance() * 0.006f);
     if (move_fast_) step *= 3.0f;
     move_camera_local(forward * step, right * step, vertical * step);
     return true;
@@ -1310,25 +1007,9 @@ void GLModelView::set_highlight_geometry(const std::vector<float>& positions,
 }
 
 void GLModelView::build_matrices(float* mvp, float* normal_mat) {
-    float eye[3];
-    float ce = std::cos(elevation_), se = std::sin(elevation_);
-    float ca = std::cos(azimuth_), sa = std::sin(azimuth_);
-    float center[3];
-    if (camera_mode_ == CameraMode::Orbit) {
-        eye[0] = pivot_[0] + distance_ * ce * sa;
-        eye[1] = pivot_[1] + distance_ * se;
-        eye[2] = pivot_[2] + distance_ * ce * ca;
-        center[0] = pivot_[0];
-        center[1] = pivot_[1];
-        center[2] = pivot_[2];
-    } else {
-        eye[0] = pivot_[0];
-        eye[1] = pivot_[1];
-        eye[2] = pivot_[2];
-        center[0] = eye[0] - ce * sa;
-        center[1] = eye[1] - se;
-        center[2] = eye[2] - ce * ca;
-    }
+    float eye[3] = {0.0f, 0.0f, 0.0f};
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    camera_controller_.build_eye_center(eye, center);
 
     float up[3] = {0, 1, 0};
 
@@ -1338,7 +1019,7 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
     int w = get_width();
     int h = get_height();
     float aspect = (h > 0) ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
-    float far_plane = std::max(distance_ * 10.0f, 100.0f);
+    float far_plane = camera_controller_.far_plane();
 
     float proj[16];
     mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.1f, far_plane);

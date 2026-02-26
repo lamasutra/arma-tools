@@ -14,6 +14,11 @@ find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
 
 set(GUI_GRESOURCE_XML ${CMAKE_CURRENT_SOURCE_DIR}/resources/arma-tools.gresource.xml)
 set(GUI_GRESOURCE_C ${CMAKE_CURRENT_BINARY_DIR}/arma-tools-resources.c)
+file(GLOB_RECURSE GUI_GRESOURCE_DEPENDS
+    CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/css/*
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/data/shaders/*
+)
 add_custom_command(
     OUTPUT ${GUI_GRESOURCE_C}
     COMMAND ${GLIB_COMPILE_RESOURCES}
@@ -23,7 +28,7 @@ add_custom_command(
         --sourcedir=${CMAKE_CURRENT_SOURCE_DIR}/resources
     DEPENDS
         ${GUI_GRESOURCE_XML}
-        ${CMAKE_CURRENT_SOURCE_DIR}/resources/css/style.css
+        ${GUI_GRESOURCE_DEPENDS}
     VERBATIM
 )
 

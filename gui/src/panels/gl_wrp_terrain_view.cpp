@@ -1,8 +1,9 @@
 #include "gl_wrp_terrain_view.h"
 
-#include "textures_loader.h"
-#include "log_panel.h"
 #include "gl_error_log.h"
+#include "infra/gl/load_resource_text.h"
+#include "log_panel.h"
+#include "textures_loader.h"
 #include <armatools/objcat.h>
 
 #include <epoxy/gl.h>
@@ -21,286 +22,14 @@
 
 namespace {
 
-static constexpr const char* TERRAIN_VERT = R"(#version 330 core
-layout(location=0) in vec3 aPos;
-layout(location=1) in float aHeight;
-layout(location=2) in float aMask;
-layout(location=3) in vec3 aSat;
-uniform mat4 uMVP;
-out float vHeight;
-out float vMask;
-out vec3 vSat;
-out vec2 vWorldXZ;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vHeight = aHeight;
-    vMask = aMask;
-    vSat = aSat;
-    vWorldXZ = vec2(aPos.x, aPos.z);
-}
-)";
-
-static constexpr const char* TERRAIN_FRAG_TEMPLATE = R"(#version 330 core
-in float vHeight;
-in float vMask;
-in vec3 vSat;
-in vec2 vWorldXZ;
-uniform float uMinH;
-uniform float uMaxH;
-uniform int uMode;
-uniform sampler2D uTextureIndex;
-uniform sampler2D uMaterialLookup;
-uniform sampler2D uLayerAtlas0;
-uniform sampler2D uLayerAtlas1;
-uniform sampler2D uLayerAtlas2;
-uniform sampler2D uLayerAtlas3;
-uniform sampler2D uLayerAtlas4;
-uniform sampler2D uLayerAtlas5;
-uniform sampler2D uLayerAtlas6;
-uniform sampler2D uLayerAtlas7;
-uniform sampler2D uLayerAtlas8;
-uniform sampler2D uLayerAtlas9;
-uniform sampler2D uLayerAtlas10;
-uniform sampler2D uLayerAtlas11;
-uniform sampler2D uLayerAtlas12;
-uniform sampler2D uLayerAtlas13;
-uniform int uMaterialLookupRows;
-uniform float uTextureCellSize;
-uniform int uTextureGridW;
-uniform int uTextureGridH;
-uniform bool uHasTextureIndex;
-uniform bool uHasMaterialLookup;
-uniform vec2 uCameraXZ;
-uniform float uMaterialMidDistance;
-uniform float uMaterialFarDistance;
-uniform bool uShowPatchBounds;
-uniform bool uShowTileBounds;
-uniform bool uShowLodTint;
-uniform vec4 uPatchBounds;
-uniform vec3 uPatchLodColor;
-uniform float uTileCellSize;
-uniform int uPatchLod;
-uniform int uSamplerCount;
-uniform int uDebugMode;
-out vec4 FragColor;
-
-#ifndef SURFACE_CAP
-#define SURFACE_CAP 4
-#endif
-
-#ifndef QUALITY_TIER
-#define QUALITY_TIER 2
-#endif
-
-#ifndef HAS_NORMALS
-#define HAS_NORMALS 1
-#endif
-
-#ifndef HAS_MACRO
-#define HAS_MACRO 1
-#endif
-
-vec3 hash_color(float n) {
-    uint h = uint(max(n, 0.0));
-    h ^= (h >> 16);
-    h *= 0x7feb352du;
-    h ^= (h >> 15);
-    h *= 0x846ca68bu;
-    h ^= (h >> 16);
-    float r = float((h >> 0) & 255u) / 255.0;
-    float g = float((h >> 8) & 255u) / 255.0;
-    float b = float((h >> 16) & 255u) / 255.0;
-    return vec3(0.20 + 0.75 * r, 0.20 + 0.75 * g, 0.20 + 0.75 * b);
-}
-
-vec4 sample_layer(int role, vec2 uv) {
-    if (role == 0) return texture(uLayerAtlas0, uv);
-    if (role == 1) return texture(uLayerAtlas1, uv);
-    if (role == 2) return texture(uLayerAtlas2, uv);
-    if (role == 3) return texture(uLayerAtlas3, uv);
-    if (role == 4) return texture(uLayerAtlas4, uv);
-    if (role == 5) return texture(uLayerAtlas5, uv);
-    if (role == 6) return texture(uLayerAtlas6, uv);
-    if (role == 7) return texture(uLayerAtlas7, uv);
-    if (role == 8) return texture(uLayerAtlas8, uv);
-    if (role == 9) return texture(uLayerAtlas9, uv);
-    if (role == 10) return texture(uLayerAtlas10, uv);
-    if (role == 11) return texture(uLayerAtlas11, uv);
-    if (role == 12) return texture(uLayerAtlas12, uv);
-    if (role == 13) return texture(uLayerAtlas13, uv);
-    return vec4(0.0);
-}
-
-vec4 sample_slot(int role, vec4 slot, vec2 uv01) {
-    if (slot.z <= 0.0 || slot.w <= 0.0) return vec4(0.0);
-    vec2 uv = slot.xy + fract(uv01) * slot.zw;
-    return sample_layer(role, uv);
-}
-
-vec3 decode_normal(vec3 packed_n) {
-    vec3 n = packed_n * 2.0 - 1.0;
-    n.z = max(0.001, n.z);
-    return normalize(n);
-}
-
-void main() {
-    vec3 c;
-    if (uMode == 3) {
-        c = vSat;
-    } else if (uMode == 2) {
-        vec3 tex_color = vSat;
-        int desired = -1;
-        float camera_dist = distance(vWorldXZ, uCameraXZ);
-        if (uHasTextureIndex && uTextureGridW > 0 && uTextureGridH > 0) {
-            float cell = max(uTextureCellSize, 0.0001);
-            int gx = int(floor(vWorldXZ.x / cell));
-            int gz = int(floor(vWorldXZ.y / cell));
-            gx = clamp(gx, 0, uTextureGridW - 1);
-            gz = clamp(gz, 0, uTextureGridH - 1);
-            desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
-        }
-
-        int lookup_w = textureSize(uMaterialLookup, 0).x;
-        if (uHasMaterialLookup && desired >= 0 && desired < lookup_w) {
-            vec2 world_uv = vWorldXZ / max(uTextureCellSize, 0.0001);
-            vec2 uv_sat = world_uv;
-            vec2 uv_mask = world_uv;
-            vec2 uv_tex0 = world_uv * 0.35;
-            vec2 uv_tex1 = world_uv * 0.55;
-            vec2 uv_tex2 = world_uv * 1.25;
-
-            vec4 meta = texelFetch(uMaterialLookup, ivec2(desired, 0), 0);
-            int surface_count = clamp(int(floor(meta.x + 0.5)), 0, SURFACE_CAP);
-            bool layered = (meta.y > 0.5) && (surface_count > 0);
-            vec4 sat_slot = texelFetch(uMaterialLookup, ivec2(desired, 1), 0);
-            vec4 mask_slot = texelFetch(uMaterialLookup, ivec2(desired, 2), 0);
-            vec3 sat = sample_slot(0, sat_slot, uv_sat).rgb;
-            if (sat_slot.z <= 0.0 || sat_slot.w <= 0.0) sat = vSat;
-            tex_color = sat;
-
-            if (QUALITY_TIER > 0 && layered && camera_dist <= uMaterialFarDistance) {
-                vec4 raw_mask = sample_slot(1, mask_slot, uv_mask);
-                vec4 weights = raw_mask;
-                float wsum = max(dot(weights, vec4(1.0)), 0.0001);
-                weights /= wsum;
-                vec3 near_color = vec3(0.0);
-                vec3 near_normal = vec3(0.0, 1.0, 0.0);
-                for (int i = 0; i < SURFACE_CAP; ++i) {
-                    if (i >= surface_count) break;
-                    int row_base = 3 + i * 3;
-                    vec4 macro_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 0), 0);
-                    vec4 normal_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 1), 0);
-                    vec4 detail_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 2), 0);
-
-                    vec3 detail = sample_slot(2 + i * 3 + 2, detail_slot, uv_tex2).rgb;
-                    vec3 macro = vec3(1.0);
-#if QUALITY_TIER >= 2 && HAS_MACRO
-                    vec3 sampled_macro = sample_slot(2 + i * 3 + 0, macro_slot, uv_tex0).rgb;
-                    if (macro_slot.z > 0.0 && macro_slot.w > 0.0) macro = sampled_macro;
-#endif
-                    vec3 nrm = vec3(0.0, 1.0, 0.0);
-#if QUALITY_TIER >= 2 && HAS_NORMALS
-                    if (normal_slot.z > 0.0 && normal_slot.w > 0.0) {
-                        nrm = decode_normal(sample_slot(2 + i * 3 + 1, normal_slot, uv_tex1).xyz);
-                    }
-#endif
-                    vec3 surface_color = detail * macro;
-                    near_color += weights[i] * surface_color;
-                    near_normal += weights[i] * nrm;
-                }
-
-#if QUALITY_TIER >= 2 && HAS_NORMALS
-                vec3 n = normalize(near_normal);
-                float ndotl = clamp(dot(n, normalize(vec3(0.22, 0.95, 0.18))), 0.0, 1.0);
-                near_color *= (0.72 + ndotl * 0.28);
-#endif
-                float t = clamp((camera_dist - uMaterialMidDistance)
-                                / max(1.0, uMaterialFarDistance - uMaterialMidDistance), 0.0, 1.0);
-                tex_color = mix(near_color, sat, t);
-
-                if (uDebugMode == 1) {
-                    tex_color = sat;
-                } else if (uDebugMode == 2) {
-                    tex_color = raw_mask.rgb;
-                } else if (uDebugMode >= 3 && uDebugMode < (3 + SURFACE_CAP)) {
-                    int sidx = uDebugMode - 3;
-                    if (sidx < surface_count) {
-                        int row_base = 3 + sidx * 3;
-                        vec4 detail_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 2), 0);
-                        tex_color = sample_slot(2 + sidx * 3 + 2, detail_slot, uv_tex2).rgb;
-                    }
-                }
-            }
-        }
-
-        if (desired >= 0 && desired < 65535) {
-            c = tex_color;
-        } else if (desired >= 0) {
-            c = vSat;
-        } else {
-            c = vec3(0.35, 0.0, 0.35);
-        }
-    } else if (uMode == 1) {
-        int cls = int(vMask + 0.5);
-        if (cls == 1) c = vec3(0.70, 0.60, 0.35);
-        else if (cls == 2) c = vec3(0.92, 0.86, 0.55);
-        else if (cls == 3) c = vec3(0.16, 0.38, 0.72);
-        else if (cls == 4) c = vec3(0.12, 0.46, 0.14);
-        else if (cls == 5) c = vec3(0.25, 0.25, 0.25);
-        else c = vec3(0.45, 0.36, 0.22);
-    } else {
-        float denom = max(0.001, uMaxH - uMinH);
-        float t = clamp((vHeight - uMinH) / denom, 0.0, 1.0);
-        vec3 low = vec3(0.10, 0.35, 0.12);
-        vec3 mid = vec3(0.55, 0.45, 0.25);
-        vec3 high = vec3(0.90, 0.90, 0.88);
-        c = t < 0.5 ? mix(low, mid, t * 2.0) : mix(mid, high, (t - 0.5) * 2.0);
-    }
-
-    if (uShowLodTint) {
-        c = mix(c, uPatchLodColor, 0.25);
-    }
-
-    if (uShowTileBounds && uTileCellSize > 0.0) {
-        vec2 tile_uv = fract(vWorldXZ / uTileCellSize);
-        float edge = min(min(tile_uv.x, 1.0 - tile_uv.x), min(tile_uv.y, 1.0 - tile_uv.y));
-        float line = 1.0 - smoothstep(0.0, 0.03, edge);
-        c = mix(c, vec3(0.0, 0.0, 0.0), line * 0.55);
-    }
-
-    if (uShowPatchBounds) {
-        float dx = min(abs(vWorldXZ.x - uPatchBounds.x), abs(uPatchBounds.z - vWorldXZ.x));
-        float dz = min(abs(vWorldXZ.y - uPatchBounds.y), abs(uPatchBounds.w - vWorldXZ.y));
-        float edge = min(dx, dz);
-        float line = 1.0 - smoothstep(0.0, 3.0, edge);
-        c = mix(c, vec3(0.95, 0.15, 0.15), line * 0.8);
-    }
-
-    FragColor = vec4(c, 1.0);
-}
-)";
-
-static constexpr const char* POINT_VERT = R"(
-#version 330 core
-layout(location=0) in vec3 aPos;
-layout(location=1) in vec3 aColor;
-uniform mat4 uMVP;
-out vec3 vColor;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    gl_PointSize = 4.0;
-    vColor = aColor;
-}
-)";
-
-static constexpr const char* POINT_FRAG = R"(
-#version 330 core
-in vec3 vColor;
-out vec4 FragColor;
-void main() {
-    FragColor = vec4(vColor, 1.0);
-}
-)";
+static constexpr const char* kTerrainVertResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_terrain.vert";
+static constexpr const char* kTerrainFragResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_terrain.frag";
+static constexpr const char* kPointVertResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.vert";
+static constexpr const char* kPointFragResource =
+    "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.frag";
 
 struct FrustumPlane {
     float a = 0.0f;
@@ -455,13 +184,13 @@ GLWrpTerrainView::GLWrpTerrainView() {
     drag_orbit_ = Gtk::GestureDrag::create();
     drag_orbit_->set_button(GDK_BUTTON_PRIMARY);
     drag_orbit_->signal_drag_begin().connect([this](double, double) {
-        drag_start_azimuth_ = azimuth_;
-        drag_start_elevation_ = elevation_;
+        const auto state = camera_controller_.camera_state();
+        drag_start_azimuth_ = state.azimuth;
+        drag_start_elevation_ = state.elevation;
     });
     drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
-        azimuth_ = drag_start_azimuth_ - static_cast<float>(dx) * 0.008f;
-        elevation_ = std::clamp(drag_start_elevation_ - static_cast<float>(dy) * 0.008f,
-                                -1.57f, 1.57f);
+        camera_controller_.orbit_from_drag(
+            drag_start_azimuth_, drag_start_elevation_, dx, dy);
         queue_render();
     });
     add_controller(drag_orbit_);
@@ -469,17 +198,11 @@ GLWrpTerrainView::GLWrpTerrainView() {
     drag_pan_ = Gtk::GestureDrag::create();
     drag_pan_->set_button(GDK_BUTTON_MIDDLE);
     drag_pan_->signal_drag_begin().connect([this](double, double) {
-        std::memcpy(drag_start_pivot_, pivot_, sizeof(pivot_));
+        const auto state = camera_controller_.camera_state();
+        std::memcpy(drag_start_pivot_, state.pivot, sizeof(drag_start_pivot_));
     });
     drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
-        const float scale = std::max(0.1f, distance_ * 0.002f);
-        const float ca = std::cos(azimuth_);
-        const float sa = std::sin(azimuth_);
-        const float rx = ca;
-        const float rz = -sa;
-        pivot_[0] = drag_start_pivot_[0] - static_cast<float>(dx) * scale * rx;
-        pivot_[2] = drag_start_pivot_[2] - static_cast<float>(dx) * scale * rz;
-        pivot_[1] = drag_start_pivot_[1] + static_cast<float>(dy) * scale;
+        camera_controller_.pan_from_drag(drag_start_pivot_, dx, dy);
         queue_render();
     });
     add_controller(drag_pan_);
@@ -487,8 +210,7 @@ GLWrpTerrainView::GLWrpTerrainView() {
     scroll_zoom_ = Gtk::EventControllerScroll::create();
     scroll_zoom_->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
     scroll_zoom_->signal_scroll().connect([this](double, double dy) -> bool {
-        distance_ *= (dy > 0.0) ? 0.9f : 1.1f;
-        distance_ = std::clamp(distance_, 5.0f, 250000.0f);
+        camera_controller_.zoom_from_scroll(dy);
         queue_render();
         return true;
     }, false);
@@ -904,14 +626,8 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
 
     set_objects(world.objects);
 
-    // Camera pivot at terrain center.
-    pivot_[0] = world_size_x_ * 0.5f;
-    pivot_[2] = world_size_z_ * 0.5f;
-    pivot_[1] = (min_elevation_ + max_elevation_) * 0.5f;
-    const float radius = std::max(world_size_x_, world_size_z_) * 0.75f;
-    distance_ = std::clamp(std::max(radius, 100.0f), 100.0f, 200000.0f);
-    azimuth_ = 0.65f;
-    elevation_ = 0.85f;
+    camera_controller_.set_world_defaults(
+        world_size_x_, world_size_z_, min_elevation_, max_elevation_);
 
     if (get_realized()) {
         rebuild_terrain_buffers();
@@ -1230,8 +946,10 @@ void GLWrpTerrainView::on_realize_gl() {
         return;
     }
 
-    auto pvs = compile_shader(GL_VERTEX_SHADER, POINT_VERT);
-    auto pfs = compile_shader(GL_FRAGMENT_SHADER, POINT_FRAG);
+    const std::string point_vert_src = infra::gl::load_resource_text(kPointVertResource);
+    const std::string point_frag_src = infra::gl::load_resource_text(kPointFragResource);
+    auto pvs = compile_shader(GL_VERTEX_SHADER, point_vert_src.c_str());
+    auto pfs = compile_shader(GL_FRAGMENT_SHADER, point_frag_src.c_str());
     prog_points_ = link_program(pvs, pfs);
     glDeleteShader(pvs);
     glDeleteShader(pfs);
@@ -1275,7 +993,9 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glClearColor(0.14f, 0.17f, 0.20f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    const float eye[3] = {pivot_[0], pivot_[1] + distance_, pivot_[2]};
+    float eye[3] = {0.0f, 0.0f, 0.0f};
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    camera_controller_.build_eye_center(eye, center);
 
     float mvp[16];
     build_mvp(mvp);
@@ -1302,8 +1022,9 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     }
 
     int desired_quality = 2;
-    if (distance_ > material_far_distance_) desired_quality = 0;
-    else if (distance_ > material_mid_distance_) desired_quality = 1;
+    const float camera_distance = camera_controller_.distance();
+    if (camera_distance > material_far_distance_) desired_quality = 0;
+    else if (camera_distance > material_mid_distance_) desired_quality = 1;
     desired_quality = std::clamp(desired_quality, 0, max_quality_supported_);
     active_quality_tier_ = desired_quality;
     const int surface_cap_hw = std::clamp((max_fragment_samplers_ - 4) / 3, 1, 4);
@@ -1412,9 +1133,10 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     if (on_texture_debug_info_) {
         std::string info;
         if (color_mode_ == 2 && tile_grid_w_ > 0 && tile_grid_h_ > 0 && !tile_texture_indices_.empty()) {
-            const int cx = std::clamp(static_cast<int>(std::floor(pivot_[0] / std::max(tile_cell_size_, 0.0001f))),
+            const float* pivot = camera_controller_.pivot();
+            const int cx = std::clamp(static_cast<int>(std::floor(pivot[0] / std::max(tile_cell_size_, 0.0001f))),
                                       0, tile_grid_w_ - 1);
-            const int cz = std::clamp(static_cast<int>(std::floor(pivot_[2] / std::max(tile_cell_size_, 0.0001f))),
+            const int cz = std::clamp(static_cast<int>(std::floor(pivot[2] / std::max(tile_cell_size_, 0.0001f))),
                                       0, tile_grid_h_ - 1);
             const size_t cidx = static_cast<size_t>(cz) * static_cast<size_t>(tile_grid_w_) + static_cast<size_t>(cx);
             const int ti = (cidx < tile_texture_indices_.size())
@@ -1551,7 +1273,11 @@ uint32_t GLWrpTerrainView::ensure_terrain_program(uint32_t key,
         return key;
     }
 
-    std::string fs_src(TERRAIN_FRAG_TEMPLATE);
+    static const std::string terrain_vert_src = infra::gl::load_resource_text(kTerrainVertResource);
+    static const std::string terrain_frag_template_src =
+        infra::gl::load_resource_text(kTerrainFragResource);
+
+    std::string fs_src(terrain_frag_template_src);
     const size_t first_nl = fs_src.find('\n');
     if (first_nl != std::string::npos) {
         std::ostringstream defs;
@@ -1562,7 +1288,7 @@ uint32_t GLWrpTerrainView::ensure_terrain_program(uint32_t key,
         fs_src.insert(first_nl + 1, defs.str());
     }
 
-    auto vs = compile_shader(GL_VERTEX_SHADER, TERRAIN_VERT);
+    auto vs = compile_shader(GL_VERTEX_SHADER, terrain_vert_src.c_str());
     auto fs = compile_shader(GL_FRAGMENT_SHADER, fs_src.c_str());
     auto prog = link_program(vs, fs);
     glDeleteShader(vs);
@@ -2376,17 +2102,9 @@ void GLWrpTerrainView::rebuild_object_buffers() {
 }
 
 void GLWrpTerrainView::build_mvp(float* mvp) const {
-    float eye[3] = {pivot_[0], pivot_[1] + distance_, pivot_[2]};
-
-    const float ce = std::cos(elevation_);
-    const float se = std::sin(elevation_);
-    const float ca = std::cos(azimuth_);
-    const float sa = std::sin(azimuth_);
-
-    float center[3];
-    center[0] = eye[0] + ce * sa;
-    center[1] = eye[1] + se;
-    center[2] = eye[2] + ce * ca;
+    float eye[3] = {0.0f, 0.0f, 0.0f};
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    camera_controller_.build_eye_center(eye, center);
 
     float view[16];
     float up[3] = {0.0f, 1.0f, 0.0f};
@@ -2467,16 +2185,7 @@ void GLWrpTerrainView::pick_object_at(double x, double y) {
 }
 
 void GLWrpTerrainView::move_camera_local(float forward, float right) {
-    const float ca = std::cos(azimuth_);
-    const float sa = std::sin(azimuth_);
-
-    const float fx = sa;
-    const float fz = ca;
-    const float rx = ca;
-    const float rz = -sa;
-
-    pivot_[0] += fx * forward + rx * right;
-    pivot_[2] += fz * forward + rz * right;
+    camera_controller_.move_local(forward, right, 0.0f);
     queue_render();
 }
 
@@ -2492,10 +2201,9 @@ bool GLWrpTerrainView::movement_tick() {
     if (move_down_) vertical -= 1.0f;
     if (forward == 0.0f && right == 0.0f && vertical == 0.0f) return false;
 
-    float step = std::max(0.5f, distance_ * 0.006f);
+    float step = std::max(0.5f, camera_controller_.distance() * 0.006f);
     if (move_fast_ && !alt_pressed_) step *= 3.0f;
-    move_camera_local(forward * step, right * step);
-    pivot_[1] += vertical * step;
+    camera_controller_.move_local(forward * step, right * step, vertical * step);
     queue_render();
     return true;
 }

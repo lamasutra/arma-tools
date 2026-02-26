@@ -228,7 +228,7 @@ LogPanel::LogPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
 
 void LogPanel::log(LogLevel level, const std::string& text) {
     auto line = timestamp() + " " + level_prefix(level) + text + "\n";
-    entries_.push_back({level, line});
+    presenter_.append(level, line);
 
     // If this level is currently visible, append directly instead of full rebuild
     if (is_level_visible(level)) {
@@ -244,8 +244,7 @@ void LogPanel::log(LogLevel level, const std::string& text) {
         buf->insert_with_tag(buf->end(), line, tag);
 
         // Re-apply highlight if there is an active search term
-        auto search_text = search_entry_.get_text();
-        if (!search_text.empty()) {
+        if (!presenter_.search_query().empty()) {
             apply_highlight();
         }
 
@@ -255,7 +254,7 @@ void LogPanel::log(LogLevel level, const std::string& text) {
 }
 
 void LogPanel::clear() {
-    entries_.clear();
+    presenter_.clear();
     text_view_.get_buffer()->set_text("");
 }
 
@@ -264,32 +263,23 @@ void LogPanel::set_on_toggle_maximize(ToggleMaxFunc func) {
 }
 
 bool LogPanel::is_level_visible(LogLevel level) const {
-    switch (level) {
-    case LogLevel::Debug:   return show_debug_;
-    case LogLevel::Info:    return show_info_;
-    case LogLevel::Warning: return show_warning_;
-    case LogLevel::Error:   return show_error_;
-    }
-    return true;
+    return presenter_.is_level_visible(level);
 }
 
 void LogPanel::rebuild_view() {
     auto buf = text_view_.get_buffer();
     buf->set_text("");
 
-    for (const auto& entry : entries_) {
-        if (!is_level_visible(entry.level))
-            continue;
-
+    for (const auto* entry : presenter_.visible_entries()) {
         Glib::RefPtr<Gtk::TextTag> tag;
-        switch (entry.level) {
+        switch (entry->level) {
         case LogLevel::Debug:   tag = tag_debug_;   break;
         case LogLevel::Info:    tag = tag_info_;     break;
         case LogLevel::Warning: tag = tag_warning_;  break;
         case LogLevel::Error:   tag = tag_error_;    break;
         }
 
-        buf->insert_with_tag(buf->end(), entry.text, tag);
+        buf->insert_with_tag(buf->end(), entry->line, tag);
     }
 
     // Re-apply search highlighting after rebuild
@@ -307,7 +297,7 @@ void LogPanel::apply_highlight() {
     // Remove all existing highlight tags
     buf->remove_tag(tag_highlight_, buf->begin(), buf->end());
 
-    auto search_text = search_entry_.get_text();
+    const auto& search_text = presenter_.search_query();
     if (search_text.empty())
         return;
 
@@ -328,21 +318,16 @@ void LogPanel::apply_highlight() {
 }
 
 void LogPanel::on_filter_toggled() {
-    show_debug_   = filter_debug_.get_active();
-    show_info_    = filter_info_.get_active();
-    show_warning_ = filter_warning_.get_active();
-    show_error_   = filter_error_.get_active();
+    presenter_.set_level_visible(LogLevel::Debug, filter_debug_.get_active());
+    presenter_.set_level_visible(LogLevel::Info, filter_info_.get_active());
+    presenter_.set_level_visible(LogLevel::Warning, filter_warning_.get_active());
+    presenter_.set_level_visible(LogLevel::Error, filter_error_.get_active());
     rebuild_view();
 }
 
 void LogPanel::on_copy_all() {
     auto clipboard = get_clipboard();
-    // Build text from all entries (unfiltered — copy everything)
-    std::string all_text;
-    for (const auto& entry : entries_) {
-        all_text += entry.text;
-    }
-    clipboard->set_text(all_text);
+    clipboard->set_text(presenter_.all_text());
 }
 
 void LogPanel::on_save_log() {
@@ -373,9 +358,7 @@ void LogPanel::on_save_log() {
                 std::string path = file->get_path();
                 std::ofstream ofs(path);
                 if (ofs.is_open()) {
-                    for (const auto& entry : entries_) {
-                        ofs << entry.text;
-                    }
+                    ofs << presenter_.all_text();
                 }
             }
         } catch (const Gtk::DialogError&) {
@@ -385,18 +368,19 @@ void LogPanel::on_save_log() {
 }
 
 void LogPanel::on_search_changed() {
+    presenter_.set_search_query(search_entry_.get_text());
     apply_highlight();
 }
 
 void LogPanel::on_maximize() {
-    maximized_ = true;
+    if (!presenter_.set_maximized(true)) return;
     maximize_button_.set_visible(false);
     restore_button_.set_visible(true);
     if (on_toggle_maximize_) on_toggle_maximize_(true);
 }
 
 void LogPanel::on_restore() {
-    maximized_ = false;
+    if (!presenter_.set_maximized(false)) return;
     maximize_button_.set_visible(true);
     restore_button_.set_visible(false);
     if (on_toggle_maximize_) on_toggle_maximize_(false);

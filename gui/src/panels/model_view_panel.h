@@ -2,6 +2,7 @@
 
 #include <gtkmm.h>
 #include <sigc++/connection.h>
+#include "app/model_view_panel_presenter.h"
 #include "gl_model_view.h"
 #include "p3d_model_loader.h"
 #include "textures_loader.h"
@@ -105,21 +106,7 @@ private:
     sigc::connection realize_connection_;
 
     std::string current_model_path_;
-    std::unordered_set<int> active_lod_indices_;
-    std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_vertices_;
-    std::unordered_map<std::string, std::vector<uint32_t>> current_named_selection_faces_;
-    std::vector<armatools::p3d::Vector3P> highlight_lod_vertices_;
-    const std::vector<std::vector<uint32_t>>* highlight_lod_faces_ = nullptr;
-    std::unordered_map<std::string, std::vector<float>> named_selection_face_geometry_;
-    std::unordered_set<std::string> active_named_selections_;
-    struct FaceGeometryJob {
-        std::string name;
-        std::vector<uint32_t> face_indices;
-        size_t next_face = 0;
-        std::vector<float> buffer;
-    };
-    std::unordered_map<std::string, FaceGeometryJob> face_geometry_jobs_;
-    sigc::connection face_geometry_idle_conn_;
+    ModelViewPanelPresenter presenter_;
     struct AsyncLoadResult {
         uint64_t request_id = 0;
         std::string model_path;
@@ -147,15 +134,8 @@ private:
     void setup_bg_color_popover();
     void on_screenshot();
     void setup_lods_menu();
-    void setup_named_selections_menu(const armatools::p3d::LOD& lod);
-    void cache_named_selection_geometry(const armatools::p3d::LOD& lod);
+    void setup_named_selections_menu();
     void update_named_selection_highlight();
-    void reset_named_selection_cache(const armatools::p3d::LOD& lod, int lod_index);
-    void start_face_geometry_job(const std::string& name);
-    void process_face_geometry_jobs_chunk();
-    void schedule_face_geometry_idle();
-    bool on_face_geometry_idle();
     void set_loading_state(bool loading);
     bool on_load_poll();
-    int resolve_lod_index(const armatools::p3d::LOD& lod) const;
 };
