@@ -376,6 +376,7 @@ void TabWrpInfo::set_pbo_index_service(const std::shared_ptr<PboIndexService>& s
 void TabWrpInfo::set_model_loader_service(
     const std::shared_ptr<P3dModelLoaderService>& service) {
     model_panel_.set_model_loader_service(service);
+    terrain3d_view_.set_model_loader_service(service);
 }
 
 void TabWrpInfo::set_texture_loader_service(

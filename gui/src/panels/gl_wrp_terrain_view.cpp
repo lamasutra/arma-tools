@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "p3d_model_loader.h"
 #include "textures_loader.h"
 #include <armatools/objcat.h>
 
@@ -31,6 +32,30 @@ static constexpr const char* kPointVertResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.vert";
 static constexpr const char* kPointFragResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.frag";
+static constexpr const char* kSelectedObjectVertSrc = R"(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uMVP;
+uniform vec3 uOffset;
+out vec3 vNormal;
+void main() {
+    gl_Position = uMVP * vec4(aPos + uOffset, 1.0);
+    vNormal = normalize(aNormal);
+}
+)";
+static constexpr const char* kSelectedObjectFragSrc = R"(
+#version 330 core
+in vec3 vNormal;
+uniform vec3 uLightDir;
+uniform vec3 uColor;
+out vec4 FragColor;
+void main() {
+    float ndotl = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    float lit = 0.30 + 0.70 * ndotl;
+    FragColor = vec4(uColor * lit, 1.0);
+}
+)";
 
 struct FrustumPlane {
     float a = 0.0f;
@@ -166,6 +191,10 @@ static uint32_t make_shader_key(int surface_cap, int quality_tier, bool has_norm
     const uint32_t n = has_normals ? 1u : 0u;
     const uint32_t m = has_macro ? 1u : 0u;
     return (s << 4) | (q << 2) | (n << 1) | m;
+}
+
+static bool is_visual_resolution_name(const std::string& resolution_name) {
+    return !resolution_name.empty() && resolution_name[0] >= '0' && resolution_name[0] <= '9';
 }
 
 static float wrap_degrees(float deg) {
@@ -490,6 +519,8 @@ void GLWrpTerrainView::clear_world() {
     tile_cell_size_ = 1.0f;
     object_points_.clear();
     object_positions_.clear();
+    objects_.clear();
+    clear_selected_object_render();
     min_elevation_ = 0.0f;
     max_elevation_ = 1.0f;
     texture_index_max_ = 1.0f;
@@ -688,6 +719,7 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
 }
 
 void GLWrpTerrainView::set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects) {
+    objects_ = objects;
     object_points_.clear();
     object_positions_.clear();
     object_points_.reserve(objects.size() * 6);
@@ -715,6 +747,7 @@ void GLWrpTerrainView::set_objects(const std::vector<armatools::wrp::ObjectRecor
         object_positions_.push_back(py);
         object_positions_.push_back(pz);
     }
+    clear_selected_object_render();
     if (get_realized()) rebuild_object_buffers();
     queue_render();
 }
@@ -811,6 +844,11 @@ void GLWrpTerrainView::set_on_compass_info(std::function<void(const std::string&
         }
         on_compass_info_(last_compass_info_);
     }
+}
+
+void GLWrpTerrainView::set_model_loader_service(
+    const std::shared_ptr<P3dModelLoaderService>& service) {
+    model_loader_ = service;
 }
 
 void GLWrpTerrainView::schedule_texture_rebuild() {
@@ -1017,7 +1055,17 @@ void GLWrpTerrainView::on_realize_gl() {
     glDeleteShader(pvs);
     glDeleteShader(pfs);
 
+    auto ovs = compile_shader(GL_VERTEX_SHADER, kSelectedObjectVertSrc);
+    auto ofs = compile_shader(GL_FRAGMENT_SHADER, kSelectedObjectFragSrc);
+    prog_selected_object_ = link_program(ovs, ofs);
+    glDeleteShader(ovs);
+    glDeleteShader(ofs);
+
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
+    loc_mvp_selected_object_ = glGetUniformLocation(prog_selected_object_, "uMVP");
+    loc_offset_selected_object_ = glGetUniformLocation(prog_selected_object_, "uOffset");
+    loc_light_dir_selected_object_ = glGetUniformLocation(prog_selected_object_, "uLightDir");
+    loc_color_selected_object_ = glGetUniformLocation(prog_selected_object_, "uColor");
     glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_fragment_samplers_);
     if (max_fragment_samplers_ <= 0) max_fragment_samplers_ = 16;
 
@@ -1187,6 +1235,38 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
+    if (show_objects_ && selected_object_.valid && prog_selected_object_
+        && !selected_object_.lod_meshes.empty()) {
+        const int lod = choose_selected_object_lod(eye);
+        if (lod >= 0 && lod < static_cast<int>(selected_object_.lod_meshes.size())) {
+            const auto& mesh = selected_object_.lod_meshes[static_cast<size_t>(lod)];
+            if (mesh.vao != 0 && mesh.vertex_count > 0) {
+                glUseProgram(prog_selected_object_);
+                if (loc_mvp_selected_object_ >= 0)
+                    glUniformMatrix4fv(loc_mvp_selected_object_, 1, GL_FALSE, mvp);
+                if (loc_offset_selected_object_ >= 0) {
+                    glUniform3f(loc_offset_selected_object_,
+                                selected_object_.offset[0],
+                                selected_object_.offset[1],
+                                selected_object_.offset[2]);
+                }
+                if (loc_light_dir_selected_object_ >= 0)
+                    glUniform3f(loc_light_dir_selected_object_, 0.26f, 0.93f, 0.19f);
+                if (loc_color_selected_object_ >= 0) {
+                    glUniform3f(loc_color_selected_object_,
+                                selected_object_.color[0],
+                                selected_object_.color[1],
+                                selected_object_.color[2]);
+                }
+                if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                glBindVertexArray(mesh.vao);
+                glDrawArrays(GL_TRIANGLES, 0, mesh.vertex_count);
+                terrain_draw_calls_++;
+                if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            }
+        }
+    }
+
     if (show_objects_ && points_vao_ && points_count_ > 0 && prog_points_) {
         glUseProgram(prog_points_);
         glUniformMatrix4fv(loc_mvp_points_, 1, GL_FALSE, mvp);
@@ -1290,6 +1370,7 @@ void GLWrpTerrainView::cleanup_lod_buffers() {
 void GLWrpTerrainView::cleanup_gl() {
     cleanup_patch_buffers();
     cleanup_lod_buffers();
+    clear_selected_object_render();
 
     if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
     if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
@@ -1302,6 +1383,10 @@ void GLWrpTerrainView::cleanup_gl() {
     terrain_program_cache_.clear();
     active_terrain_program_key_ = 0;
     if (prog_points_) { glDeleteProgram(prog_points_); prog_points_ = 0; }
+    if (prog_selected_object_) {
+        glDeleteProgram(prog_selected_object_);
+        prog_selected_object_ = 0;
+    }
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
     cleanup_texture_index_gl();
@@ -2262,6 +2347,205 @@ void GLWrpTerrainView::rebuild_object_buffers() {
     glBindVertexArray(0);
 }
 
+void GLWrpTerrainView::clear_selected_object_render() {
+    const bool can_delete = get_realized();
+    if (can_delete) {
+        make_current();
+    }
+    if (can_delete && !has_error()) {
+        for (auto& lod : selected_object_.lod_meshes) {
+            if (lod.vao) glDeleteVertexArrays(1, &lod.vao);
+            if (lod.vbo) glDeleteBuffers(1, &lod.vbo);
+            lod.vao = 0;
+            lod.vbo = 0;
+            lod.vertex_count = 0;
+        }
+    }
+    selected_object_ = SelectedObjectRender{};
+}
+
+bool GLWrpTerrainView::is_renderable_object_lod(const armatools::p3d::LOD& lod) {
+    if (lod.face_data.empty() || lod.vertices.empty()) return false;
+    if (is_visual_resolution_name(lod.resolution_name)) return true;
+    return lod.resolution >= 0.0f && lod.resolution < 10000.0f;
+}
+
+int GLWrpTerrainView::choose_selected_object_lod(const float* eye) {
+    if (!selected_object_.valid || selected_object_.lod_meshes.empty()) return 0;
+    const float dx = selected_object_.offset[0] - eye[0];
+    const float dy = selected_object_.offset[1] - eye[1];
+    const float dz = selected_object_.offset[2] - eye[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const int max_lod = static_cast<int>(selected_object_.lod_meshes.size()) - 1;
+    int lod = std::clamp(selected_object_.current_lod, 0, max_lod);
+    while (lod < max_lod) {
+        const float bound = selected_object_.lod_base_distance * std::pow(2.0f, static_cast<float>(lod));
+        if (dist <= bound * 1.18f) break;
+        ++lod;
+    }
+    while (lod > 0) {
+        const float prev_bound =
+            selected_object_.lod_base_distance * std::pow(2.0f, static_cast<float>(lod - 1));
+        if (dist >= prev_bound * 0.82f) break;
+        --lod;
+    }
+    selected_object_.current_lod = lod;
+    return lod;
+}
+
+bool GLWrpTerrainView::build_selected_object_render(
+    size_t object_index, const armatools::p3d::P3DFile& model) {
+    if (object_index >= objects_.size() || !get_realized()) return false;
+
+    make_current();
+    if (has_error()) return false;
+    clear_selected_object_render();
+
+    std::vector<const armatools::p3d::LOD*> render_lods;
+    render_lods.reserve(model.lods.size());
+    for (const auto& lod : model.lods) {
+        if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
+    }
+    if (render_lods.empty()) return false;
+
+    std::sort(render_lods.begin(), render_lods.end(),
+              [](const armatools::p3d::LOD* a, const armatools::p3d::LOD* b) {
+                  return a->resolution < b->resolution;
+              });
+    if (render_lods.size() > 6) render_lods.resize(6);
+
+    const auto& obj = objects_[object_index];
+    const float scale = (std::isfinite(obj.scale) && obj.scale > 0.0)
+        ? static_cast<float>(obj.scale)
+        : 1.0f;
+    float model_radius = 0.0f;
+
+    for (const auto* lod : render_lods) {
+        std::vector<float> verts;
+        verts.reserve(static_cast<size_t>(lod->face_data.size()) * 18u);
+        for (const auto& face : lod->face_data) {
+            if (face.vertices.size() < 3) continue;
+            for (size_t i = 1; i + 1 < face.vertices.size(); ++i) {
+                const size_t tri[3] = {0, i, i + 1};
+                float tri_pos[3][3] = {};
+                float tri_nrm[3][3] = {};
+                bool has_vertex_normals = true;
+                for (int t = 0; t < 3; ++t) {
+                    const auto& fv = face.vertices[tri[t]];
+                    if (fv.point_index >= lod->vertices.size()) {
+                        tri_pos[t][0] = 0.0f;
+                        tri_pos[t][1] = 0.0f;
+                        tri_pos[t][2] = 0.0f;
+                    } else {
+                        const auto& p = lod->vertices[fv.point_index];
+                        tri_pos[t][0] = -p[0] * scale;
+                        tri_pos[t][1] = p[1] * scale;
+                        tri_pos[t][2] = p[2] * scale;
+                    }
+
+                    if (fv.normal_index >= 0
+                        && static_cast<size_t>(fv.normal_index) < lod->normals.size()) {
+                        const auto& n = lod->normals[static_cast<size_t>(fv.normal_index)];
+                        tri_nrm[t][0] = -n[0];
+                        tri_nrm[t][1] = n[1];
+                        tri_nrm[t][2] = n[2];
+                        vec3_normalize(tri_nrm[t]);
+                    } else {
+                        has_vertex_normals = false;
+                    }
+                }
+
+                if (!has_vertex_normals) {
+                    float e1[3] = {
+                        tri_pos[1][0] - tri_pos[0][0],
+                        tri_pos[1][1] - tri_pos[0][1],
+                        tri_pos[1][2] - tri_pos[0][2]};
+                    float e2[3] = {
+                        tri_pos[2][0] - tri_pos[0][0],
+                        tri_pos[2][1] - tri_pos[0][1],
+                        tri_pos[2][2] - tri_pos[0][2]};
+                    float fn[3];
+                    vec3_cross(fn, e1, e2);
+                    vec3_normalize(fn);
+                    if (!std::isfinite(fn[0]) || !std::isfinite(fn[1]) || !std::isfinite(fn[2])) {
+                        fn[0] = 0.0f; fn[1] = 1.0f; fn[2] = 0.0f;
+                    }
+                    for (int t = 0; t < 3; ++t) {
+                        tri_nrm[t][0] = fn[0];
+                        tri_nrm[t][1] = fn[1];
+                        tri_nrm[t][2] = fn[2];
+                    }
+                }
+
+                for (int t = 0; t < 3; ++t) {
+                    verts.push_back(tri_pos[t][0]);
+                    verts.push_back(tri_pos[t][1]);
+                    verts.push_back(tri_pos[t][2]);
+                    verts.push_back(tri_nrm[t][0]);
+                    verts.push_back(tri_nrm[t][1]);
+                    verts.push_back(tri_nrm[t][2]);
+                }
+            }
+        }
+
+        if (verts.empty()) continue;
+
+        SelectedObjectLodMesh out;
+        out.vertex_count = static_cast<int>(verts.size() / 6u);
+        out.resolution = lod->resolution;
+        glGenVertexArrays(1, &out.vao);
+        glGenBuffers(1, &out.vbo);
+        glBindVertexArray(out.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, out.vbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                     verts.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glBindVertexArray(0);
+        selected_object_.lod_meshes.push_back(out);
+
+        float lod_radius = lod->bounding_radius * scale;
+        if (lod_radius <= 0.001f) {
+            const float dx = (lod->bounding_box_max[0] - lod->bounding_box_min[0]) * scale;
+            const float dy = (lod->bounding_box_max[1] - lod->bounding_box_min[1]) * scale;
+            const float dz = (lod->bounding_box_max[2] - lod->bounding_box_min[2]) * scale;
+            lod_radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        model_radius = std::max(model_radius, lod_radius);
+    }
+
+    if (selected_object_.lod_meshes.empty()) {
+        clear_selected_object_render();
+        return false;
+    }
+
+    selected_object_.valid = true;
+    selected_object_.object_index = object_index;
+    selected_object_.model_name = obj.model_name;
+    selected_object_.offset[0] = static_cast<float>(obj.position[0]);
+    selected_object_.offset[1] = static_cast<float>(obj.position[1]);
+    selected_object_.offset[2] = flip_terrain_z_
+        ? (terrain_max_z_ - static_cast<float>(obj.position[2]))
+        : static_cast<float>(obj.position[2]);
+    selected_object_.current_lod = 0;
+    selected_object_.lod_base_distance = std::max(40.0f, std::max(4.0f, model_radius * 2.0f) * 22.0f);
+
+    const auto cat = armatools::objcat::category(obj.model_name);
+    if (cat == "vegetation") selected_object_.color = {0.20f, 0.72f, 0.24f};
+    else if (cat == "buildings") selected_object_.color = {0.88f, 0.33f, 0.30f};
+    else if (cat == "rocks") selected_object_.color = {0.65f, 0.65f, 0.68f};
+    else if (cat == "walls") selected_object_.color = {0.78f, 0.70f, 0.58f};
+    else if (cat == "military") selected_object_.color = {0.74f, 0.75f, 0.40f};
+    else if (cat == "infrastructure") selected_object_.color = {0.48f, 0.48f, 0.48f};
+    else selected_object_.color = {0.94f, 0.82f, 0.26f};
+
+    return true;
+}
+
 void GLWrpTerrainView::build_mvp(float* mvp) const {
     float eye[3] = {0.0f, 0.0f, 0.0f};
     float center[3] = {0.0f, 0.0f, 0.0f};
@@ -2295,6 +2579,10 @@ void GLWrpTerrainView::emit_terrain_stats() {
        << " | Jobs " << pending_jobs << "/" << ready_jobs
        << " | Cache H/M " << texture_cache_hits_ << "/" << texture_cache_misses_
        << " | Atlas textures " << last_loaded_texture_count_;
+    if (selected_object_.valid) {
+        ss << " | SelLOD " << (selected_object_.current_lod + 1)
+           << "/" << selected_object_.lod_meshes.size();
+    }
     const auto next = ss.str();
     if (next != last_terrain_stats_) {
         last_terrain_stats_ = next;
@@ -2303,7 +2591,7 @@ void GLWrpTerrainView::emit_terrain_stats() {
 }
 
 void GLWrpTerrainView::pick_object_at(double x, double y) {
-    if (!on_object_picked_ || object_positions_.empty()) return;
+    if (object_positions_.empty()) return;
 
     float mvp[16];
     build_mvp(mvp);
@@ -2341,7 +2629,24 @@ void GLWrpTerrainView::pick_object_at(double x, double y) {
     }
 
     if (best_idx != static_cast<size_t>(-1) && best_d2 <= 144.0) {
-        on_object_picked_(best_idx);
+        bool selected_built = false;
+        if (model_loader_ && best_idx < objects_.size()) {
+            try {
+                auto model = model_loader_->load_p3d(objects_[best_idx].model_name);
+                selected_built = build_selected_object_render(best_idx, model);
+            } catch (const std::exception& e) {
+                app_log(LogLevel::Warning,
+                        "GLWrpTerrainView: selected object model load failed: "
+                        + objects_[best_idx].model_name + " | " + e.what());
+            } catch (...) {
+                app_log(LogLevel::Warning,
+                        "GLWrpTerrainView: selected object model load failed: "
+                        + objects_[best_idx].model_name);
+            }
+        }
+        if (!selected_built) clear_selected_object_render();
+        if (on_object_picked_) on_object_picked_(best_idx);
+        queue_render();
     }
 }
 

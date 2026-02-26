@@ -19,9 +19,11 @@
 
 #include <epoxy/gl.h>
 
+#include <armatools/p3d.h>
 #include <armatools/wrp.h>
 
 class TexturesLoaderService;
+class P3dModelLoaderService;
 
 class GLWrpTerrainView : public Gtk::GLArea {
 public:
@@ -39,6 +41,7 @@ public:
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_on_terrain_stats(std::function<void(const std::string&)> cb);
     void set_on_compass_info(std::function<void(const std::string&)> cb);
+    void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
     void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_show_patch_boundaries(bool on);
     void set_show_patch_lod_colors(bool on);
@@ -147,6 +150,7 @@ private:
     std::vector<std::array<float, 3>> satellite_palette_;
     std::vector<float> object_points_;
     std::vector<float> object_positions_;
+    std::vector<armatools::wrp::ObjectRecord> objects_;
 
     // Camera state/behavior extracted for testability.
     WrpTerrainCameraController camera_controller_;
@@ -181,6 +185,29 @@ private:
     uint32_t points_vao_ = 0;
     uint32_t points_vbo_ = 0;
     int points_count_ = 0;
+    uint32_t prog_selected_object_ = 0;
+    int loc_mvp_selected_object_ = -1;
+    int loc_offset_selected_object_ = -1;
+    int loc_light_dir_selected_object_ = -1;
+    int loc_color_selected_object_ = -1;
+
+    struct SelectedObjectLodMesh {
+        uint32_t vao = 0;
+        uint32_t vbo = 0;
+        int vertex_count = 0;
+        float resolution = 0.0f;
+    };
+
+    struct SelectedObjectRender {
+        bool valid = false;
+        size_t object_index = static_cast<size_t>(-1);
+        std::string model_name;
+        float offset[3] = {0.0f, 0.0f, 0.0f};
+        std::array<float, 3> color = {0.95f, 0.82f, 0.25f};
+        float lod_base_distance = 120.0f;
+        std::vector<SelectedObjectLodMesh> lod_meshes;
+        int current_lod = 0;
+    };
 
     struct TerrainProgram {
         uint32_t program = 0;
@@ -223,7 +250,9 @@ private:
     int debug_material_mode_ = 0; // 0=final,1=sat,2=mask,3+=surface channels
     int seam_debug_mode_ = 0; // 0=final,1=depth-only,2=normals
     bool flip_terrain_z_ = true;
+    SelectedObjectRender selected_object_;
 
+    std::shared_ptr<P3dModelLoaderService> model_loader_;
     std::shared_ptr<TexturesLoaderService> texture_loader_;
     std::vector<armatools::wrp::TextureEntry> texture_entries_;
     std::array<GLuint, kTerrainRoleCount> layer_atlas_tex_{};
@@ -309,6 +338,10 @@ private:
     void cleanup_patch_buffers();
     void cleanup_lod_buffers();
     void rebuild_object_buffers();
+    bool build_selected_object_render(size_t object_index, const armatools::p3d::P3DFile& model);
+    void clear_selected_object_render();
+    int choose_selected_object_lod(const float* eye);
+    static bool is_renderable_object_lod(const armatools::p3d::LOD& lod);
     void build_mvp(float* mvp) const;
     float render_z_from_grid(int gz) const;
     float source_z_from_render(float wz) const;
