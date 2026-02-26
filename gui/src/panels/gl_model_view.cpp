@@ -1,5 +1,6 @@
 #include "gl_model_view.h"
 
+#include "gl_error_log.h"
 #include "log_panel.h"
 
 #include <armatools/armapath.h>
@@ -513,12 +514,14 @@ void GLModelView::on_realize_gl() {
 
     // Build grid and axis geometry
     build_grid_and_axis();
+    log_gl_errors("GLModelView::on_realize_gl");
 }
 
 void GLModelView::on_unrealize_gl() {
     make_current();
     if (has_error()) return;
     cleanup_gl();
+    log_gl_errors("GLModelView::on_unrealize_gl");
 }
 
 void GLModelView::cleanup_gl() {
@@ -569,6 +572,7 @@ uint32_t GLModelView::compile_shader(uint32_t type, const char* source) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        app_log(LogLevel::Error, std::string("GLModelView shader compile error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Shader compile error: ") + log));
     }
     return shader;
@@ -584,6 +588,7 @@ uint32_t GLModelView::link_program(uint32_t vert, uint32_t frag) {
     if (!ok) {
         char log[512];
         glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+        app_log(LogLevel::Error, std::string("GLModelView program link error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Program link error: ") + log));
     }
     return prog;
@@ -1527,5 +1532,6 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
 
+    log_gl_errors("GLModelView::on_render_gl");
     return true;
 }

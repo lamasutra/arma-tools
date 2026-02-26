@@ -43,6 +43,9 @@ public:
     void set_material_quality_distances(float mid_distance_m, float far_distance_m);
 
 private:
+    static constexpr int kMaxTerrainSurfaces = 4;
+    static constexpr int kTerrainRoleCount = 14; // sat, mask, (macro/normal/detail)*4
+
     struct Vertex {
         float x = 0.0f;
         float y = 0.0f;
@@ -85,10 +88,23 @@ private:
 
     struct CachedTileTexture {
         bool missing = false;
+        bool layered = false;
         uint64_t last_used_stamp = 0;
-        int width = 0;
-        int height = 0;
-        std::vector<uint8_t> rgba;
+        int surface_count = 0;
+        struct LayerImage {
+            bool present = false;
+            int width = 0;
+            int height = 0;
+            std::vector<uint8_t> rgba;
+        };
+        LayerImage sat;
+        LayerImage mask;
+        struct SurfaceImages {
+            LayerImage macro;
+            LayerImage normal;
+            LayerImage detail;
+        };
+        std::array<SurfaceImages, kMaxTerrainSurfaces> surfaces{};
     };
 
     struct TileLoadJob {
@@ -152,53 +168,65 @@ private:
     float skirt_drop_m_ = 6.0f;
 
     // GL resources.
-    uint32_t prog_terrain_ = 0;
     uint32_t prog_points_ = 0;
-    int loc_mvp_terrain_ = -1;
-    int loc_hmin_terrain_ = -1;
-    int loc_hmax_terrain_ = -1;
-    int loc_mode_terrain_ = -1;
     int loc_mvp_points_ = -1;
     uint32_t points_vao_ = 0;
     uint32_t points_vbo_ = 0;
     int points_count_ = 0;
 
+    struct TerrainProgram {
+        uint32_t program = 0;
+        int loc_mvp = -1;
+        int loc_hmin = -1;
+        int loc_hmax = -1;
+        int loc_mode = -1;
+        int loc_texture_index = -1;
+        int loc_material_lookup = -1;
+        int loc_material_lookup_rows = -1;
+        int loc_texture_cell_size = -1;
+        int loc_texture_grid_w = -1;
+        int loc_texture_grid_h = -1;
+        int loc_has_texture_index = -1;
+        int loc_has_material_lookup = -1;
+        int loc_camera_xz = -1;
+        int loc_material_mid_distance = -1;
+        int loc_material_far_distance = -1;
+        int loc_show_patch_bounds = -1;
+        int loc_show_tile_bounds = -1;
+        int loc_show_lod_tint = -1;
+        int loc_patch_bounds = -1;
+        int loc_patch_lod_color = -1;
+        int loc_tile_cell_size = -1;
+        int loc_patch_lod = -1;
+        int loc_sampler_count = -1;
+        int loc_debug_mode = -1;
+        std::array<int, kTerrainRoleCount> loc_layer_atlas{};
+    };
+    std::unordered_map<uint32_t, TerrainProgram> terrain_program_cache_;
+    uint32_t active_terrain_program_key_ = 0;
+    int max_fragment_samplers_ = 16;
+    int max_quality_supported_ = 2;
+    int active_quality_tier_ = 0;
+    int active_sampler_count_ = 0;
+    int active_surface_cap_ = 1;
+    int debug_material_mode_ = 0; // 0=final,1=sat,2=mask,3+=surface channels
+
     std::shared_ptr<LodTexturesLoaderService> texture_loader_;
     std::vector<armatools::wrp::TextureEntry> texture_entries_;
-    GLuint texture_atlas_ = 0;
-    std::vector<uint8_t> texture_atlas_pixels_;
-    int atlas_width_ = 0;
-    int atlas_height_ = 0;
-    std::vector<std::array<float, 4>> texture_lookup_uvs_;
-    GLuint texture_lookup_tex_ = 0;
-    int texture_lookup_size_ = 0;
+    std::array<GLuint, kTerrainRoleCount> layer_atlas_tex_{};
+    std::array<std::vector<uint8_t>, kTerrainRoleCount> layer_atlas_pixels_{};
+    std::array<int, kTerrainRoleCount> layer_atlas_w_{};
+    std::array<int, kTerrainRoleCount> layer_atlas_h_{};
+    std::array<bool, kTerrainRoleCount> has_layer_atlas_{};
+    GLuint material_lookup_tex_ = 0;
+    std::vector<float> material_lookup_pixels_;
+    int material_lookup_w_ = 0;
+    int material_lookup_rows_ = 0;
     GLuint texture_index_tex_ = 0;
     int texture_index_tex_w_ = 0;
     int texture_index_tex_h_ = 0;
-    float texture_world_scale_ = 32.0f;
-    bool has_texture_atlas_ = false;
-    bool has_texture_lookup_ = false;
     bool has_texture_index_ = false;
-    int loc_texture_atlas_ = -1;
-    int loc_texture_lookup_ = -1;
-    int loc_texture_index_ = -1;
-    int loc_texture_lookup_size_ = -1;
-    int loc_texture_world_scale_ = -1;
-    int loc_texture_cell_size_ = -1;
-    int loc_texture_grid_w_ = -1;
-    int loc_texture_grid_h_ = -1;
-    int loc_has_texture_atlas_ = -1;
-    int loc_has_texture_lookup_ = -1;
-    int loc_has_texture_index_ = -1;
-    int loc_camera_xz_ = -1;
-    int loc_material_mid_distance_ = -1;
-    int loc_material_far_distance_ = -1;
-    int loc_show_patch_bounds_ = -1;
-    int loc_show_tile_bounds_ = -1;
-    int loc_show_lod_tint_ = -1;
-    int loc_patch_bounds_ = -1;
-    int loc_patch_lod_color_ = -1;
-    int loc_tile_cell_size_ = -1;
+    bool has_material_lookup_ = false;
     sigc::connection texture_rebuild_idle_;
     std::unordered_map<int, CachedTileTexture> tile_texture_cache_;
     std::unordered_set<int> tile_missing_logged_once_;
@@ -255,6 +283,11 @@ private:
     void cleanup_gl();
     uint32_t compile_shader(uint32_t type, const char* src);
     uint32_t link_program(uint32_t vs, uint32_t fs);
+    uint32_t ensure_terrain_program(uint32_t key,
+                                    int surface_cap,
+                                    int quality_tier,
+                                    bool has_normals,
+                                    bool has_macro);
     void rebuild_terrain_buffers();
     void rebuild_patch_buffers();
     void rebuild_shared_lod_buffers();

@@ -1,5 +1,8 @@
 #include "gl_rvmat_preview.h"
 
+#include "gl_error_log.h"
+#include "log_panel.h"
+
 #include <epoxy/gl.h>
 
 #include <algorithm>
@@ -356,11 +359,17 @@ void GLRvmatPreview::on_realize_gl() {
     make_current();
     if (has_error()) return;
 
-    auto vs = compile_shader(GL_VERTEX_SHADER, kVertSrc);
-    auto fs = compile_shader(GL_FRAGMENT_SHADER, kFragSrc);
-    prog_ = link_program(vs, fs);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    try {
+        auto vs = compile_shader(GL_VERTEX_SHADER, kVertSrc);
+        auto fs = compile_shader(GL_FRAGMENT_SHADER, kFragSrc);
+        prog_ = link_program(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+    } catch (const std::exception& e) {
+        app_log(LogLevel::Error, std::string("GLRvmatPreview: ") + e.what());
+        set_error(Glib::Error(GDK_GL_ERROR, 0, e.what()));
+        return;
+    }
 
     loc_mvp_ = glGetUniformLocation(prog_, "uMVP");
     loc_model_ = glGetUniformLocation(prog_, "uModel");
@@ -397,12 +406,14 @@ void GLRvmatPreview::on_realize_gl() {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
+    log_gl_errors("GLRvmatPreview::on_realize_gl");
 }
 
 void GLRvmatPreview::on_unrealize_gl() {
     make_current();
     if (has_error()) return;
     cleanup_gl();
+    log_gl_errors("GLRvmatPreview::on_unrealize_gl");
 }
 
 bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
@@ -499,6 +510,7 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 
+    log_gl_errors("GLRvmatPreview::on_render_gl");
     return true;
 }
 
@@ -534,6 +546,7 @@ uint32_t GLRvmatPreview::compile_shader(uint32_t type, const char* src) {
         GLsizei len = 0;
         glGetShaderInfoLog(s, sizeof(log), &len, log);
         glDeleteShader(s);
+        app_log(LogLevel::Error, std::string("GLRvmatPreview shader compile failed: ") + log);
         throw std::runtime_error(std::string("RVMat preview shader compile failed: ") + log);
     }
     return s;
@@ -551,6 +564,7 @@ uint32_t GLRvmatPreview::link_program(uint32_t vs, uint32_t fs) {
         GLsizei len = 0;
         glGetProgramInfoLog(p, sizeof(log), &len, log);
         glDeleteProgram(p);
+        app_log(LogLevel::Error, std::string("GLRvmatPreview program link failed: ") + log);
         throw std::runtime_error(std::string("RVMat preview program link failed: ") + log);
     }
     return p;
@@ -569,6 +583,7 @@ void GLRvmatPreview::upload_texture(uint32_t& tex, int width, int height, const 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glBindTexture(GL_TEXTURE_2D, 0);
+    log_gl_errors("GLRvmatPreview::upload_texture");
 }
 
 void GLRvmatPreview::build_sphere_mesh() {

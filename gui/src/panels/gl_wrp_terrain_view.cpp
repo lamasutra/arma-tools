@@ -2,6 +2,7 @@
 
 #include "lod_textures_loader.h"
 #include "log_panel.h"
+#include "gl_error_log.h"
 #include <armatools/objcat.h>
 
 #include <epoxy/gl.h>
@@ -20,8 +21,7 @@
 
 namespace {
 
-static constexpr const char* TERRAIN_VERT = R"(
-#version 330 core
+static constexpr const char* TERRAIN_VERT = R"(#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in float aHeight;
 layout(location=2) in float aMask;
@@ -40,8 +40,7 @@ void main() {
 }
 )";
 
-static constexpr const char* TERRAIN_FRAG = R"(
-#version 330 core
+static constexpr const char* TERRAIN_FRAG_TEMPLATE = R"(#version 330 core
 in float vHeight;
 in float vMask;
 in vec3 vSat;
@@ -49,17 +48,28 @@ in vec2 vWorldXZ;
 uniform float uMinH;
 uniform float uMaxH;
 uniform int uMode;
-uniform sampler2D uTextureAtlas;
-uniform sampler2D uTextureLookup;
 uniform sampler2D uTextureIndex;
-uniform int uTextureLookupSize;
-uniform float uTextureWorldScale;
+uniform sampler2D uMaterialLookup;
+uniform sampler2D uLayerAtlas0;
+uniform sampler2D uLayerAtlas1;
+uniform sampler2D uLayerAtlas2;
+uniform sampler2D uLayerAtlas3;
+uniform sampler2D uLayerAtlas4;
+uniform sampler2D uLayerAtlas5;
+uniform sampler2D uLayerAtlas6;
+uniform sampler2D uLayerAtlas7;
+uniform sampler2D uLayerAtlas8;
+uniform sampler2D uLayerAtlas9;
+uniform sampler2D uLayerAtlas10;
+uniform sampler2D uLayerAtlas11;
+uniform sampler2D uLayerAtlas12;
+uniform sampler2D uLayerAtlas13;
+uniform int uMaterialLookupRows;
 uniform float uTextureCellSize;
 uniform int uTextureGridW;
 uniform int uTextureGridH;
-uniform bool uHasTextureAtlas;
-uniform bool uHasTextureLookup;
 uniform bool uHasTextureIndex;
+uniform bool uHasMaterialLookup;
 uniform vec2 uCameraXZ;
 uniform float uMaterialMidDistance;
 uniform float uMaterialFarDistance;
@@ -69,7 +79,26 @@ uniform bool uShowLodTint;
 uniform vec4 uPatchBounds;
 uniform vec3 uPatchLodColor;
 uniform float uTileCellSize;
+uniform int uPatchLod;
+uniform int uSamplerCount;
+uniform int uDebugMode;
 out vec4 FragColor;
+
+#ifndef SURFACE_CAP
+#define SURFACE_CAP 4
+#endif
+
+#ifndef QUALITY_TIER
+#define QUALITY_TIER 2
+#endif
+
+#ifndef HAS_NORMALS
+#define HAS_NORMALS 1
+#endif
+
+#ifndef HAS_MACRO
+#define HAS_MACRO 1
+#endif
 
 vec3 hash_color(float n) {
     uint h = uint(max(n, 0.0));
@@ -84,13 +113,42 @@ vec3 hash_color(float n) {
     return vec3(0.20 + 0.75 * r, 0.20 + 0.75 * g, 0.20 + 0.75 * b);
 }
 
+vec4 sample_layer(int role, vec2 uv) {
+    if (role == 0) return texture(uLayerAtlas0, uv);
+    if (role == 1) return texture(uLayerAtlas1, uv);
+    if (role == 2) return texture(uLayerAtlas2, uv);
+    if (role == 3) return texture(uLayerAtlas3, uv);
+    if (role == 4) return texture(uLayerAtlas4, uv);
+    if (role == 5) return texture(uLayerAtlas5, uv);
+    if (role == 6) return texture(uLayerAtlas6, uv);
+    if (role == 7) return texture(uLayerAtlas7, uv);
+    if (role == 8) return texture(uLayerAtlas8, uv);
+    if (role == 9) return texture(uLayerAtlas9, uv);
+    if (role == 10) return texture(uLayerAtlas10, uv);
+    if (role == 11) return texture(uLayerAtlas11, uv);
+    if (role == 12) return texture(uLayerAtlas12, uv);
+    if (role == 13) return texture(uLayerAtlas13, uv);
+    return vec4(0.0);
+}
+
+vec4 sample_slot(int role, vec4 slot, vec2 uv01) {
+    if (slot.z <= 0.0 || slot.w <= 0.0) return vec4(0.0);
+    vec2 uv = slot.xy + fract(uv01) * slot.zw;
+    return sample_layer(role, uv);
+}
+
+vec3 decode_normal(vec3 packed_n) {
+    vec3 n = packed_n * 2.0 - 1.0;
+    n.z = max(0.001, n.z);
+    return normalize(n);
+}
+
 void main() {
     vec3 c;
     if (uMode == 3) {
         c = vSat;
     } else if (uMode == 2) {
-        vec3 tex_color = vec3(0.0);
-        bool has_texture = false;
+        vec3 tex_color = vSat;
         int desired = -1;
         float camera_dist = distance(vWorldXZ, uCameraXZ);
         if (uHasTextureIndex && uTextureGridW > 0 && uTextureGridH > 0) {
@@ -102,30 +160,85 @@ void main() {
             desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
         }
 
-        if (camera_dist <= uMaterialFarDistance
-            && uHasTextureAtlas && uHasTextureLookup && uTextureLookupSize > 0
-            && desired >= 0 && desired < uTextureLookupSize) {
-            vec4 slot = texelFetch(uTextureLookup, ivec2(desired, 0), 0);
-            if (slot.z > 0.0 && slot.w > 0.0) {
-                vec2 tile_uv = fract(vWorldXZ / max(uTextureCellSize, 0.0001));
-                vec2 atlas_uv = slot.xy + tile_uv * slot.zw;
-                tex_color = texture(uTextureAtlas, atlas_uv).rgb;
-                has_texture = true;
+        int lookup_w = textureSize(uMaterialLookup, 0).x;
+        if (uHasMaterialLookup && desired >= 0 && desired < lookup_w) {
+            vec2 world_uv = vWorldXZ / max(uTextureCellSize, 0.0001);
+            vec2 uv_sat = world_uv;
+            vec2 uv_mask = world_uv;
+            vec2 uv_tex0 = world_uv * 0.35;
+            vec2 uv_tex1 = world_uv * 0.55;
+            vec2 uv_tex2 = world_uv * 1.25;
+
+            vec4 meta = texelFetch(uMaterialLookup, ivec2(desired, 0), 0);
+            int surface_count = clamp(int(floor(meta.x + 0.5)), 0, SURFACE_CAP);
+            bool layered = (meta.y > 0.5) && (surface_count > 0);
+            vec4 sat_slot = texelFetch(uMaterialLookup, ivec2(desired, 1), 0);
+            vec4 mask_slot = texelFetch(uMaterialLookup, ivec2(desired, 2), 0);
+            vec3 sat = sample_slot(0, sat_slot, uv_sat).rgb;
+            if (sat_slot.z <= 0.0 || sat_slot.w <= 0.0) sat = vSat;
+            tex_color = sat;
+
+            if (QUALITY_TIER > 0 && layered && camera_dist <= uMaterialFarDistance) {
+                vec4 raw_mask = sample_slot(1, mask_slot, uv_mask);
+                vec4 weights = raw_mask;
+                float wsum = max(dot(weights, vec4(1.0)), 0.0001);
+                weights /= wsum;
+                vec3 near_color = vec3(0.0);
+                vec3 near_normal = vec3(0.0, 1.0, 0.0);
+                for (int i = 0; i < SURFACE_CAP; ++i) {
+                    if (i >= surface_count) break;
+                    int row_base = 3 + i * 3;
+                    vec4 macro_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 0), 0);
+                    vec4 normal_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 1), 0);
+                    vec4 detail_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 2), 0);
+
+                    vec3 detail = sample_slot(2 + i * 3 + 2, detail_slot, uv_tex2).rgb;
+                    vec3 macro = vec3(1.0);
+#if QUALITY_TIER >= 2 && HAS_MACRO
+                    vec3 sampled_macro = sample_slot(2 + i * 3 + 0, macro_slot, uv_tex0).rgb;
+                    if (macro_slot.z > 0.0 && macro_slot.w > 0.0) macro = sampled_macro;
+#endif
+                    vec3 nrm = vec3(0.0, 1.0, 0.0);
+#if QUALITY_TIER >= 2 && HAS_NORMALS
+                    if (normal_slot.z > 0.0 && normal_slot.w > 0.0) {
+                        nrm = decode_normal(sample_slot(2 + i * 3 + 1, normal_slot, uv_tex1).xyz);
+                    }
+#endif
+                    vec3 surface_color = detail * macro;
+                    near_color += weights[i] * surface_color;
+                    near_normal += weights[i] * nrm;
+                }
+
+#if QUALITY_TIER >= 2 && HAS_NORMALS
+                vec3 n = normalize(near_normal);
+                float ndotl = clamp(dot(n, normalize(vec3(0.22, 0.95, 0.18))), 0.0, 1.0);
+                near_color *= (0.72 + ndotl * 0.28);
+#endif
+                float t = clamp((camera_dist - uMaterialMidDistance)
+                                / max(1.0, uMaterialFarDistance - uMaterialMidDistance), 0.0, 1.0);
+                tex_color = mix(near_color, sat, t);
+
+                if (uDebugMode == 1) {
+                    tex_color = sat;
+                } else if (uDebugMode == 2) {
+                    tex_color = raw_mask.rgb;
+                } else if (uDebugMode >= 3 && uDebugMode < (3 + SURFACE_CAP)) {
+                    int sidx = uDebugMode - 3;
+                    if (sidx < surface_count) {
+                        int row_base = 3 + sidx * 3;
+                        vec4 detail_slot = texelFetch(uMaterialLookup, ivec2(desired, row_base + 2), 0);
+                        tex_color = sample_slot(2 + sidx * 3 + 2, detail_slot, uv_tex2).rgb;
+                    }
+                }
             }
         }
 
-        if (has_texture) {
-            if (camera_dist > uMaterialMidDistance) {
-                float t = clamp((camera_dist - uMaterialMidDistance)
-                                / max(1.0, uMaterialFarDistance - uMaterialMidDistance), 0.0, 1.0);
-                tex_color = mix(tex_color, vSat, t * 0.35);
-            }
+        if (desired >= 0 && desired < 65535) {
             c = tex_color;
-        } else if (desired >= 0 && desired < 65535) {
+        } else if (desired >= 0) {
             c = vSat;
         } else {
-            if (desired < 0) c = vec3(0.35, 0.0, 0.35);
-            else c = hash_color(float(desired + 1));
+            c = vec3(0.35, 0.0, 0.35);
         }
     } else if (uMode == 1) {
         int cls = int(vMask + 0.5);
@@ -317,6 +430,14 @@ static std::vector<uint8_t> make_missing_checkerboard_rgba() {
     return out;
 }
 
+static uint32_t make_shader_key(int surface_cap, int quality_tier, bool has_normals, bool has_macro) {
+    const uint32_t s = static_cast<uint32_t>(std::clamp(surface_cap, 1, 4));
+    const uint32_t q = static_cast<uint32_t>(std::clamp(quality_tier, 0, 2));
+    const uint32_t n = has_normals ? 1u : 0u;
+    const uint32_t m = has_macro ? 1u : 0u;
+    return (s << 4) | (q << 2) | (n << 1) | m;
+}
+
 } // namespace
 
 GLWrpTerrainView::GLWrpTerrainView() {
@@ -424,6 +545,34 @@ GLWrpTerrainView::GLWrpTerrainView() {
             case GDK_KEY_Alt_L:
             case GDK_KEY_Alt_R:
                 alt_pressed_ = true;
+                break;
+            case GDK_KEY_0:
+                debug_material_mode_ = 0;
+                queue_render();
+                break;
+            case GDK_KEY_1:
+                debug_material_mode_ = 1;
+                queue_render();
+                break;
+            case GDK_KEY_2:
+                debug_material_mode_ = 2;
+                queue_render();
+                break;
+            case GDK_KEY_3:
+                debug_material_mode_ = 3;
+                queue_render();
+                break;
+            case GDK_KEY_4:
+                debug_material_mode_ = 4;
+                queue_render();
+                break;
+            case GDK_KEY_5:
+                debug_material_mode_ = 5;
+                queue_render();
+                break;
+            case GDK_KEY_6:
+                debug_material_mode_ = 6;
+                queue_render();
                 break;
             default:
                 handled = false;
@@ -546,14 +695,16 @@ void GLWrpTerrainView::clear_world() {
     atlas_empty_logged_ = false;
     atlas_rebuild_debounce_frames_ = 0;
     texture_entries_.clear();
-    texture_atlas_pixels_.clear();
-    texture_lookup_uvs_.clear();
-    texture_lookup_size_ = 0;
+    for (auto& p : layer_atlas_pixels_) p.clear();
+    layer_atlas_w_.fill(0);
+    layer_atlas_h_.fill(0);
+    has_layer_atlas_.fill(false);
+    material_lookup_pixels_.clear();
+    material_lookup_w_ = 0;
+    material_lookup_rows_ = 0;
     texture_index_tex_w_ = 0;
     texture_index_tex_h_ = 0;
-    texture_world_scale_ = 32.0f;
-    has_texture_atlas_ = false;
-    has_texture_lookup_ = false;
+    has_material_lookup_ = false;
     has_texture_index_ = false;
     tile_texture_cache_.clear();
     tile_missing_logged_once_.clear();
@@ -738,8 +889,9 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
     }
 
     texture_entries_ = world.textures;
-    texture_lookup_size_ = static_cast<int>(texture_entries_.size());
-    texture_lookup_uvs_.assign(texture_entries_.size(), {0.0f, 0.0f, 0.0f, 0.0f});
+    material_lookup_w_ = static_cast<int>(texture_entries_.size());
+    material_lookup_rows_ = 0;
+    material_lookup_pixels_.clear();
     tile_texture_cache_.clear();
     tile_missing_logged_once_.clear();
     last_visible_tile_indices_.clear();
@@ -921,52 +1073,69 @@ void GLWrpTerrainView::rebuild_texture_atlas(const std::vector<armatools::wrp::T
 }
 
 void GLWrpTerrainView::upload_texture_atlas() {
-    if (!get_realized() || texture_atlas_pixels_.empty()) return;
+    if (!get_realized()) return;
     make_current();
     if (has_error()) return;
-    if (texture_atlas_) {
-        glDeleteTextures(1, &texture_atlas_);
-        texture_atlas_ = 0;
-    }
-    glGenTextures(1, &texture_atlas_);
-    glBindTexture(GL_TEXTURE_2D, texture_atlas_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlas_width_, atlas_height_, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, texture_atlas_pixels_.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    for (int role = 0; role < kTerrainRoleCount; ++role) {
+        auto& tex = layer_atlas_tex_[static_cast<size_t>(role)];
+        const auto& pixels = layer_atlas_pixels_[static_cast<size_t>(role)];
+        const int w = layer_atlas_w_[static_cast<size_t>(role)];
+        const int h = layer_atlas_h_[static_cast<size_t>(role)];
+        if (pixels.empty() || w <= 0 || h <= 0) {
+            if (tex) {
+                glDeleteTextures(1, &tex);
+                tex = 0;
+            }
+            has_layer_atlas_[static_cast<size_t>(role)] = false;
+            continue;
+        }
+        if (tex) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 #ifdef GL_TEXTURE_MAX_ANISOTROPY_EXT
-    float max_aniso = 0.0f;
-    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
-    if (max_aniso > 1.0f) {
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                        std::min(8.0f, max_aniso));
-    }
+        float max_aniso = 0.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+        if (max_aniso > 1.0f) {
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                            std::min(4.0f, max_aniso));
+        }
 #endif
-    glGenerateMipmap(GL_TEXTURE_2D);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        has_layer_atlas_[static_cast<size_t>(role)] = true;
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
-    has_texture_atlas_ = true;
 }
 
 void GLWrpTerrainView::upload_texture_lookup() {
-    if (!get_realized() || texture_lookup_uvs_.empty() || texture_lookup_size_ <= 0) return;
+    if (!get_realized() || material_lookup_pixels_.empty()
+        || material_lookup_w_ <= 0 || material_lookup_rows_ <= 0) {
+        return;
+    }
     make_current();
     if (has_error()) return;
-    if (texture_lookup_tex_) {
-        glDeleteTextures(1, &texture_lookup_tex_);
-        texture_lookup_tex_ = 0;
+    if (material_lookup_tex_) {
+        glDeleteTextures(1, &material_lookup_tex_);
+        material_lookup_tex_ = 0;
     }
-    glGenTextures(1, &texture_lookup_tex_);
-    glBindTexture(GL_TEXTURE_2D, texture_lookup_tex_);
+    glGenTextures(1, &material_lookup_tex_);
+    glBindTexture(GL_TEXTURE_2D, material_lookup_tex_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, texture_lookup_size_, 1, 0,
-                 GL_RGBA, GL_FLOAT, texture_lookup_uvs_.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, material_lookup_w_, material_lookup_rows_, 0,
+                 GL_RGBA, GL_FLOAT, material_lookup_pixels_.data());
     glBindTexture(GL_TEXTURE_2D, 0);
-    has_texture_lookup_ = true;
+    has_material_lookup_ = true;
 }
 
 void GLWrpTerrainView::upload_texture_index() {
@@ -999,27 +1168,43 @@ void GLWrpTerrainView::upload_texture_index() {
 }
 
 void GLWrpTerrainView::cleanup_texture_atlas_gl() {
-    if (texture_atlas_ == 0) return;
+    bool any = false;
+    for (auto tex : layer_atlas_tex_) {
+        if (tex != 0) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) return;
     if (!get_realized()) {
-        texture_atlas_ = 0;
+        layer_atlas_tex_.fill(0);
+        has_layer_atlas_.fill(false);
         return;
     }
     make_current();
-    glDeleteTextures(1, &texture_atlas_);
-    texture_atlas_ = 0;
-    has_texture_atlas_ = false;
+    for (auto& tex : layer_atlas_tex_) {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+    }
+    has_layer_atlas_.fill(false);
 }
 
 void GLWrpTerrainView::cleanup_texture_lookup_gl() {
-    if (texture_lookup_tex_ == 0) return;
+    if (material_lookup_tex_ == 0) {
+        has_material_lookup_ = false;
+        return;
+    }
     if (!get_realized()) {
-        texture_lookup_tex_ = 0;
+        material_lookup_tex_ = 0;
+        has_material_lookup_ = false;
         return;
     }
     make_current();
-    glDeleteTextures(1, &texture_lookup_tex_);
-    texture_lookup_tex_ = 0;
-    has_texture_lookup_ = false;
+    glDeleteTextures(1, &material_lookup_tex_);
+    material_lookup_tex_ = 0;
+    has_material_lookup_ = false;
 }
 
 void GLWrpTerrainView::cleanup_texture_index_gl() {
@@ -1045,53 +1230,28 @@ void GLWrpTerrainView::on_realize_gl() {
         return;
     }
 
-    auto vs = compile_shader(GL_VERTEX_SHADER, TERRAIN_VERT);
-    auto fs = compile_shader(GL_FRAGMENT_SHADER, TERRAIN_FRAG);
-    prog_terrain_ = link_program(vs, fs);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
     auto pvs = compile_shader(GL_VERTEX_SHADER, POINT_VERT);
     auto pfs = compile_shader(GL_FRAGMENT_SHADER, POINT_FRAG);
     prog_points_ = link_program(pvs, pfs);
     glDeleteShader(pvs);
     glDeleteShader(pfs);
 
-    loc_mvp_terrain_ = glGetUniformLocation(prog_terrain_, "uMVP");
-    loc_hmin_terrain_ = glGetUniformLocation(prog_terrain_, "uMinH");
-    loc_hmax_terrain_ = glGetUniformLocation(prog_terrain_, "uMaxH");
-    loc_mode_terrain_ = glGetUniformLocation(prog_terrain_, "uMode");
-    loc_texture_atlas_ = glGetUniformLocation(prog_terrain_, "uTextureAtlas");
-    loc_texture_lookup_ = glGetUniformLocation(prog_terrain_, "uTextureLookup");
-    loc_texture_index_ = glGetUniformLocation(prog_terrain_, "uTextureIndex");
-    loc_texture_lookup_size_ = glGetUniformLocation(prog_terrain_, "uTextureLookupSize");
-    loc_texture_world_scale_ = glGetUniformLocation(prog_terrain_, "uTextureWorldScale");
-    loc_texture_cell_size_ = glGetUniformLocation(prog_terrain_, "uTextureCellSize");
-    loc_texture_grid_w_ = glGetUniformLocation(prog_terrain_, "uTextureGridW");
-    loc_texture_grid_h_ = glGetUniformLocation(prog_terrain_, "uTextureGridH");
-    loc_has_texture_atlas_ = glGetUniformLocation(prog_terrain_, "uHasTextureAtlas");
-    loc_has_texture_lookup_ = glGetUniformLocation(prog_terrain_, "uHasTextureLookup");
-    loc_has_texture_index_ = glGetUniformLocation(prog_terrain_, "uHasTextureIndex");
-    loc_camera_xz_ = glGetUniformLocation(prog_terrain_, "uCameraXZ");
-    loc_material_mid_distance_ = glGetUniformLocation(prog_terrain_, "uMaterialMidDistance");
-    loc_material_far_distance_ = glGetUniformLocation(prog_terrain_, "uMaterialFarDistance");
-    loc_show_patch_bounds_ = glGetUniformLocation(prog_terrain_, "uShowPatchBounds");
-    loc_show_tile_bounds_ = glGetUniformLocation(prog_terrain_, "uShowTileBounds");
-    loc_show_lod_tint_ = glGetUniformLocation(prog_terrain_, "uShowLodTint");
-    loc_patch_bounds_ = glGetUniformLocation(prog_terrain_, "uPatchBounds");
-    loc_patch_lod_color_ = glGetUniformLocation(prog_terrain_, "uPatchLodColor");
-    loc_tile_cell_size_ = glGetUniformLocation(prog_terrain_, "uTileCellSize");
-
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_fragment_samplers_);
+    if (max_fragment_samplers_ <= 0) max_fragment_samplers_ = 16;
 
-    glUseProgram(prog_terrain_);
-    if (loc_texture_atlas_ >= 0)
-        glUniform1i(loc_texture_atlas_, 0);
-    if (loc_texture_lookup_ >= 0)
-        glUniform1i(loc_texture_lookup_, 1);
-    if (loc_texture_index_ >= 0)
-        glUniform1i(loc_texture_index_, 2);
-    glUseProgram(0);
+    // 2 fixed samplers (index + material lookup) plus quality-dependent layered channels.
+    const int need_mid = 8;   // index + lookup + sat + mask + 4 detail maps
+    const int need_near = 16; // index + lookup + sat + mask + (macro/normal/detail)*4
+    if (max_fragment_samplers_ >= need_near) max_quality_supported_ = 2;
+    else if (max_fragment_samplers_ >= need_mid) max_quality_supported_ = 1;
+    else max_quality_supported_ = 0;
+
+    active_quality_tier_ = max_quality_supported_;
+    active_surface_cap_ = 4;
+    active_terrain_program_key_ = ensure_terrain_program(
+        make_shader_key(active_surface_cap_, active_quality_tier_, true, true),
+        active_surface_cap_, active_quality_tier_, true, true);
 
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
@@ -1101,19 +1261,19 @@ void GLWrpTerrainView::on_realize_gl() {
     upload_texture_atlas();
     upload_texture_lookup();
     upload_texture_index();
+    log_gl_errors("GLWrpTerrainView::on_realize_gl");
 }
 
 void GLWrpTerrainView::on_unrealize_gl() {
     make_current();
     if (has_error()) return;
     cleanup_gl();
+    log_gl_errors("GLWrpTerrainView::on_unrealize_gl");
 }
 
 bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glClearColor(0.14f, 0.17f, 0.20f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    if (!prog_terrain_) return true;
 
     const float eye[3] = {pivot_[0], pivot_[1] + distance_, pivot_[2]};
 
@@ -1124,53 +1284,85 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     if (color_mode_ == 2)
         stream_visible_tile_textures();
 
+    bool has_normals = false;
+    bool has_macro = false;
+    if (color_mode_ == 2) {
+        for (int ti : last_visible_tile_indices_) {
+            auto it = tile_texture_cache_.find(ti);
+            if (it == tile_texture_cache_.end()) continue;
+            const int surf = std::clamp(it->second.surface_count, 0, 4);
+            for (int i = 0; i < surf; ++i) {
+                has_normals = has_normals
+                    || it->second.surfaces[static_cast<size_t>(i)].normal.present;
+                has_macro = has_macro
+                    || it->second.surfaces[static_cast<size_t>(i)].macro.present;
+            }
+            if (has_normals && has_macro) break;
+        }
+    }
+
+    int desired_quality = 2;
+    if (distance_ > material_far_distance_) desired_quality = 0;
+    else if (distance_ > material_mid_distance_) desired_quality = 1;
+    desired_quality = std::clamp(desired_quality, 0, max_quality_supported_);
+    active_quality_tier_ = desired_quality;
+    const int surface_cap_hw = std::clamp((max_fragment_samplers_ - 4) / 3, 1, 4);
+    const int render_surface_cap = std::clamp(
+        std::min(active_surface_cap_, surface_cap_hw), 1, 4);
+    active_surface_cap_ = render_surface_cap;
+    const uint32_t shader_key = make_shader_key(
+        render_surface_cap,
+        active_quality_tier_,
+        has_normals,
+        has_macro);
+    active_terrain_program_key_ = ensure_terrain_program(
+        shader_key,
+        render_surface_cap,
+        active_quality_tier_,
+        has_normals,
+        has_macro);
+    auto program_it = terrain_program_cache_.find(active_terrain_program_key_);
+    if (program_it == terrain_program_cache_.end() || program_it->second.program == 0) return true;
+    TerrainProgram& tp = program_it->second;
+
+    int features_per_surface = 0;
+    if (active_quality_tier_ == 1) features_per_surface = 1;
+    else if (active_quality_tier_ >= 2) features_per_surface = (has_macro || has_normals) ? 3 : 1;
+    active_sampler_count_ = 2 + 1 + ((active_quality_tier_ > 0) ? 1 : 0)
+        + render_surface_cap * features_per_surface;
+
     terrain_draw_calls_ = 0;
 
     if (!terrain_patches_.empty() && !visible_patch_indices_.empty()) {
-        glUseProgram(prog_terrain_);
-        glUniformMatrix4fv(loc_mvp_terrain_, 1, GL_FALSE, mvp);
-        glUniform1f(loc_hmin_terrain_, min_elevation_);
-        glUniform1f(loc_hmax_terrain_, max_elevation_);
-        glUniform1i(loc_mode_terrain_, color_mode_);
-        if (loc_camera_xz_ >= 0)
-            glUniform2f(loc_camera_xz_, eye[0], eye[2]);
-        if (loc_material_mid_distance_ >= 0)
-            glUniform1f(loc_material_mid_distance_, material_mid_distance_);
-        if (loc_material_far_distance_ >= 0)
-            glUniform1f(loc_material_far_distance_, material_far_distance_);
+        glUseProgram(tp.program);
+        if (tp.loc_mvp >= 0) glUniformMatrix4fv(tp.loc_mvp, 1, GL_FALSE, mvp);
+        if (tp.loc_hmin >= 0) glUniform1f(tp.loc_hmin, min_elevation_);
+        if (tp.loc_hmax >= 0) glUniform1f(tp.loc_hmax, max_elevation_);
+        if (tp.loc_mode >= 0) glUniform1i(tp.loc_mode, color_mode_);
+        if (tp.loc_camera_xz >= 0) glUniform2f(tp.loc_camera_xz, eye[0], eye[2]);
+        if (tp.loc_material_mid_distance >= 0)
+            glUniform1f(tp.loc_material_mid_distance, material_mid_distance_);
+        if (tp.loc_material_far_distance >= 0)
+            glUniform1f(tp.loc_material_far_distance, material_far_distance_);
+        if (tp.loc_texture_cell_size >= 0) glUniform1f(tp.loc_texture_cell_size, tile_cell_size_);
+        if (tp.loc_texture_grid_w >= 0) glUniform1i(tp.loc_texture_grid_w, texture_index_tex_w_);
+        if (tp.loc_texture_grid_h >= 0) glUniform1i(tp.loc_texture_grid_h, texture_index_tex_h_);
+        if (tp.loc_material_lookup_rows >= 0) glUniform1i(tp.loc_material_lookup_rows, material_lookup_rows_);
+        if (tp.loc_has_texture_index >= 0) glUniform1i(tp.loc_has_texture_index, has_texture_index_ ? 1 : 0);
+        if (tp.loc_has_material_lookup >= 0) glUniform1i(tp.loc_has_material_lookup, has_material_lookup_ ? 1 : 0);
+        if (tp.loc_sampler_count >= 0) glUniform1i(tp.loc_sampler_count, active_sampler_count_);
+        if (tp.loc_debug_mode >= 0) glUniform1i(tp.loc_debug_mode, debug_material_mode_);
 
-        if (loc_has_texture_atlas_ >= 0)
-            glUniform1i(loc_has_texture_atlas_, has_texture_atlas_ ? 1 : 0);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, has_texture_atlas_ ? texture_atlas_ : 0);
-
-        if (loc_texture_lookup_ >= 0) {
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, has_texture_lookup_ ? texture_lookup_tex_ : 0);
-            glUniform1i(loc_texture_lookup_, 1);
-            glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, has_texture_index_ ? texture_index_tex_ : 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, has_material_lookup_ ? material_lookup_tex_ : 0);
+        for (int role = 0; role < kTerrainRoleCount; ++role) {
+            glActiveTexture(static_cast<GLenum>(GL_TEXTURE2 + role));
+            const bool has = has_layer_atlas_[static_cast<size_t>(role)];
+            glBindTexture(GL_TEXTURE_2D, has ? layer_atlas_tex_[static_cast<size_t>(role)] : 0);
         }
-        if (loc_texture_lookup_size_ >= 0)
-            glUniform1i(loc_texture_lookup_size_, texture_lookup_size_);
-        if (loc_has_texture_lookup_ >= 0)
-            glUniform1i(loc_has_texture_lookup_, has_texture_lookup_ ? 1 : 0);
-
-        if (loc_texture_index_ >= 0) {
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, has_texture_index_ ? texture_index_tex_ : 0);
-            glUniform1i(loc_texture_index_, 2);
-            glActiveTexture(GL_TEXTURE0);
-        }
-        if (loc_texture_cell_size_ >= 0)
-            glUniform1f(loc_texture_cell_size_, tile_cell_size_);
-        if (loc_texture_grid_w_ >= 0)
-            glUniform1i(loc_texture_grid_w_, texture_index_tex_w_);
-        if (loc_texture_grid_h_ >= 0)
-            glUniform1i(loc_texture_grid_h_, texture_index_tex_h_);
-        if (loc_has_texture_index_ >= 0)
-            glUniform1i(loc_has_texture_index_, has_texture_index_ ? 1 : 0);
-        if (loc_texture_world_scale_ >= 0)
-            glUniform1f(loc_texture_world_scale_, texture_world_scale_);
+        glActiveTexture(GL_TEXTURE0);
 
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
@@ -1181,19 +1373,21 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             const auto& ib = lod_index_buffers_[static_cast<size_t>(lod)];
             if (patch.vao == 0 || ib.ibo == 0 || ib.index_count <= 0) continue;
 
-            if (loc_show_patch_bounds_ >= 0)
-                glUniform1i(loc_show_patch_bounds_, show_patch_boundaries_ ? 1 : 0);
-            if (loc_show_tile_bounds_ >= 0)
-                glUniform1i(loc_show_tile_bounds_, show_tile_boundaries_ ? 1 : 0);
-            if (loc_show_lod_tint_ >= 0)
-                glUniform1i(loc_show_lod_tint_, show_patch_lod_colors_ ? 1 : 0);
-            if (loc_tile_cell_size_ >= 0)
-                glUniform1f(loc_tile_cell_size_, tile_cell_size_);
-            if (loc_patch_bounds_ >= 0)
-                glUniform4f(loc_patch_bounds_, patch.min_x, patch.min_z, patch.max_x, patch.max_z);
-            if (loc_patch_lod_color_ >= 0) {
+            if (tp.loc_show_patch_bounds >= 0)
+                glUniform1i(tp.loc_show_patch_bounds, show_patch_boundaries_ ? 1 : 0);
+            if (tp.loc_show_tile_bounds >= 0)
+                glUniform1i(tp.loc_show_tile_bounds, show_tile_boundaries_ ? 1 : 0);
+            if (tp.loc_show_lod_tint >= 0)
+                glUniform1i(tp.loc_show_lod_tint, show_patch_lod_colors_ ? 1 : 0);
+            if (tp.loc_tile_cell_size >= 0)
+                glUniform1f(tp.loc_tile_cell_size, tile_cell_size_);
+            if (tp.loc_patch_bounds >= 0)
+                glUniform4f(tp.loc_patch_bounds, patch.min_x, patch.min_z, patch.max_x, patch.max_z);
+            if (tp.loc_patch_lod >= 0)
+                glUniform1i(tp.loc_patch_lod, lod);
+            if (tp.loc_patch_lod_color >= 0) {
                 const auto tint = lod_tint_color(lod);
-                glUniform3f(loc_patch_lod_color_, tint[0], tint[1], tint[2]);
+                glUniform3f(tp.loc_patch_lod_color, tint[0], tint[1], tint[2]);
             }
 
             glBindVertexArray(patch.vao);
@@ -1226,15 +1420,28 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             const int ti = (cidx < tile_texture_indices_.size())
                 ? static_cast<int>(tile_texture_indices_[cidx]) : -1;
             std::string state = "invalid";
-            if (ti >= 0 && ti < texture_lookup_size_ && ti < static_cast<int>(texture_lookup_uvs_.size())) {
-                const auto& slot = texture_lookup_uvs_[static_cast<size_t>(ti)];
-                state = (slot[2] > 0.0f && slot[3] > 0.0f) ? "resolved" : "missing";
+            int surface_count = 0;
+            if (ti >= 0 && ti < static_cast<int>(texture_entries_.size())) {
+                auto it = tile_texture_cache_.find(ti);
+                if (it != tile_texture_cache_.end()) {
+                    surface_count = std::clamp(it->second.surface_count, 0, 4);
+                    state = it->second.missing ? "missing" : "resolved";
+                } else {
+                    state = "pending";
+                }
             }
             std::ostringstream ss;
-            ss << "Tile[" << cx << "," << cz << "] idx=" << ti << " slot=" << state
+            ss << "Tile[" << cx << "," << cz << "] idx=" << ti
+               << " state=" << state
+               << " surfaces=" << surface_count
+               << " cap=" << active_surface_cap_
+               << " tier=" << active_quality_tier_
+               << " key=0x" << std::hex << active_terrain_program_key_ << std::dec
+               << " samplers=" << active_sampler_count_
                << " | patches " << visible_patch_count_ << "/" << terrain_patches_.size()
                << " draws " << terrain_draw_calls_
-               << " tiles " << visible_tile_count_;
+               << " tiles " << visible_tile_count_
+               << " dbg(" << debug_material_mode_ << ")";
             info = ss.str();
         }
         if (info != last_texture_debug_info_) {
@@ -1244,6 +1451,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     }
 
     emit_terrain_stats();
+    log_gl_errors("GLWrpTerrainView::on_render_gl");
     return true;
 }
 
@@ -1290,7 +1498,12 @@ void GLWrpTerrainView::cleanup_gl() {
     if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
     points_count_ = 0;
 
-    if (prog_terrain_) { glDeleteProgram(prog_terrain_); prog_terrain_ = 0; }
+    for (auto& [_, program] : terrain_program_cache_) {
+        if (program.program) glDeleteProgram(program.program);
+        program.program = 0;
+    }
+    terrain_program_cache_.clear();
+    active_terrain_program_key_ = 0;
     if (prog_points_) { glDeleteProgram(prog_points_); prog_points_ = 0; }
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
@@ -1306,6 +1519,7 @@ uint32_t GLWrpTerrainView::compile_shader(uint32_t type, const char* src) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        app_log(LogLevel::Error, std::string("GLWrpTerrainView shader compile error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Shader compile error: ") + log));
     }
     return shader;
@@ -1321,9 +1535,83 @@ uint32_t GLWrpTerrainView::link_program(uint32_t vs, uint32_t fs) {
     if (!ok) {
         char log[512];
         glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+        app_log(LogLevel::Error, std::string("GLWrpTerrainView program link error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Program link error: ") + log));
     }
     return prog;
+}
+
+uint32_t GLWrpTerrainView::ensure_terrain_program(uint32_t key,
+                                                  int surface_cap,
+                                                  int quality_tier,
+                                                  bool has_normals,
+                                                  bool has_macro) {
+    auto found = terrain_program_cache_.find(key);
+    if (found != terrain_program_cache_.end() && found->second.program != 0) {
+        return key;
+    }
+
+    std::string fs_src(TERRAIN_FRAG_TEMPLATE);
+    const size_t first_nl = fs_src.find('\n');
+    if (first_nl != std::string::npos) {
+        std::ostringstream defs;
+        defs << "#define SURFACE_CAP " << std::clamp(surface_cap, 1, 4) << "\n";
+        defs << "#define QUALITY_TIER " << std::clamp(quality_tier, 0, 2) << "\n";
+        defs << "#define HAS_NORMALS " << (has_normals ? 1 : 0) << "\n";
+        defs << "#define HAS_MACRO " << (has_macro ? 1 : 0) << "\n";
+        fs_src.insert(first_nl + 1, defs.str());
+    }
+
+    auto vs = compile_shader(GL_VERTEX_SHADER, TERRAIN_VERT);
+    auto fs = compile_shader(GL_FRAGMENT_SHADER, fs_src.c_str());
+    auto prog = link_program(vs, fs);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    TerrainProgram p;
+    p.program = prog;
+    p.loc_layer_atlas.fill(-1);
+    p.loc_mvp = glGetUniformLocation(prog, "uMVP");
+    p.loc_hmin = glGetUniformLocation(prog, "uMinH");
+    p.loc_hmax = glGetUniformLocation(prog, "uMaxH");
+    p.loc_mode = glGetUniformLocation(prog, "uMode");
+    p.loc_texture_index = glGetUniformLocation(prog, "uTextureIndex");
+    p.loc_material_lookup = glGetUniformLocation(prog, "uMaterialLookup");
+    p.loc_material_lookup_rows = glGetUniformLocation(prog, "uMaterialLookupRows");
+    p.loc_texture_cell_size = glGetUniformLocation(prog, "uTextureCellSize");
+    p.loc_texture_grid_w = glGetUniformLocation(prog, "uTextureGridW");
+    p.loc_texture_grid_h = glGetUniformLocation(prog, "uTextureGridH");
+    p.loc_has_texture_index = glGetUniformLocation(prog, "uHasTextureIndex");
+    p.loc_has_material_lookup = glGetUniformLocation(prog, "uHasMaterialLookup");
+    p.loc_camera_xz = glGetUniformLocation(prog, "uCameraXZ");
+    p.loc_material_mid_distance = glGetUniformLocation(prog, "uMaterialMidDistance");
+    p.loc_material_far_distance = glGetUniformLocation(prog, "uMaterialFarDistance");
+    p.loc_show_patch_bounds = glGetUniformLocation(prog, "uShowPatchBounds");
+    p.loc_show_tile_bounds = glGetUniformLocation(prog, "uShowTileBounds");
+    p.loc_show_lod_tint = glGetUniformLocation(prog, "uShowLodTint");
+    p.loc_patch_bounds = glGetUniformLocation(prog, "uPatchBounds");
+    p.loc_patch_lod_color = glGetUniformLocation(prog, "uPatchLodColor");
+    p.loc_tile_cell_size = glGetUniformLocation(prog, "uTileCellSize");
+    p.loc_patch_lod = glGetUniformLocation(prog, "uPatchLod");
+    p.loc_sampler_count = glGetUniformLocation(prog, "uSamplerCount");
+    p.loc_debug_mode = glGetUniformLocation(prog, "uDebugMode");
+    for (int i = 0; i < kTerrainRoleCount; ++i) {
+        std::ostringstream name;
+        name << "uLayerAtlas" << i;
+        p.loc_layer_atlas[static_cast<size_t>(i)] = glGetUniformLocation(prog, name.str().c_str());
+    }
+
+    glUseProgram(prog);
+    if (p.loc_texture_index >= 0) glUniform1i(p.loc_texture_index, 0);
+    if (p.loc_material_lookup >= 0) glUniform1i(p.loc_material_lookup, 1);
+    for (int i = 0; i < kTerrainRoleCount; ++i) {
+        if (p.loc_layer_atlas[static_cast<size_t>(i)] >= 0)
+            glUniform1i(p.loc_layer_atlas[static_cast<size_t>(i)], 2 + i);
+    }
+    glUseProgram(0);
+
+    terrain_program_cache_[key] = p;
+    return key;
 }
 
 void GLWrpTerrainView::rebuild_shared_lod_buffers() {
@@ -1650,9 +1938,12 @@ std::vector<int> GLWrpTerrainView::collect_visible_tile_indices() const {
 GLWrpTerrainView::CachedTileTexture GLWrpTerrainView::load_tile_texture_sync(const TileLoadJob& job) {
     CachedTileTexture out;
     out.missing = true;
-    out.width = 4;
-    out.height = 4;
-    out.rgba = make_missing_checkerboard_rgba();
+    out.layered = false;
+    out.surface_count = 0;
+    out.sat.present = true;
+    out.sat.width = 4;
+    out.sat.height = 4;
+    out.sat.rgba = make_missing_checkerboard_rgba();
 
     std::shared_ptr<LodTexturesLoaderService> loader;
     {
@@ -1661,14 +1952,51 @@ GLWrpTerrainView::CachedTileTexture GLWrpTerrainView::load_tile_texture_sync(con
     }
     if (!loader) return out;
 
+    if (auto layered = loader->load_terrain_layered_material(job.candidates)) {
+        auto copy_layer = [](CachedTileTexture::LayerImage& dst,
+                             const LodTexturesLoaderService::TerrainTextureLayer& src) {
+            if (!src.present || src.image.width <= 0 || src.image.height <= 0
+                || src.image.pixels.empty()) return;
+            dst.present = true;
+            dst.width = src.image.width;
+            dst.height = src.image.height;
+            dst.rgba = src.image.pixels;
+        };
+
+        out.layered = layered->layered;
+        out.surface_count = std::clamp(layered->surface_count, 0, 4);
+        copy_layer(out.sat, layered->satellite);
+        copy_layer(out.mask, layered->mask);
+        for (int i = 0; i < out.surface_count; ++i) {
+            copy_layer(out.surfaces[static_cast<size_t>(i)].macro, layered->surfaces[static_cast<size_t>(i)].macro);
+            copy_layer(out.surfaces[static_cast<size_t>(i)].normal, layered->surfaces[static_cast<size_t>(i)].normal);
+            copy_layer(out.surfaces[static_cast<size_t>(i)].detail, layered->surfaces[static_cast<size_t>(i)].detail);
+        }
+        out.missing = !out.sat.present && !out.mask.present;
+        if (!out.sat.present) {
+            out.sat.present = true;
+            out.sat.width = 4;
+            out.sat.height = 4;
+            out.sat.rgba = make_missing_checkerboard_rgba();
+        }
+        if (out.surface_count <= 0) {
+            out.layered = false;
+            out.surface_count = 0;
+        }
+        return out;
+    }
+
     for (const auto& candidate : job.candidates) {
         if (candidate.empty()) continue;
         if (auto data = loader->load_terrain_texture_entry(candidate)) {
             if (data->image.width > 0 && data->image.height > 0 && !data->image.pixels.empty()) {
                 out.missing = false;
-                out.width = data->image.width;
-                out.height = data->image.height;
-                out.rgba = data->image.pixels;
+                out.layered = false;
+                out.surface_count = 0;
+                out.sat.present = true;
+                out.sat.width = data->image.width;
+                out.sat.height = data->image.height;
+                out.sat.rgba = data->image.pixels;
                 return out;
             }
         }
@@ -1705,9 +2033,12 @@ void GLWrpTerrainView::enqueue_visible_tile_jobs(const std::vector<int>& selecte
         if (job.candidates.empty()) {
             CachedTileTexture missing;
             missing.missing = true;
-            missing.width = 4;
-            missing.height = 4;
-            missing.rgba = make_missing_checkerboard_rgba();
+            missing.layered = false;
+            missing.surface_count = 0;
+            missing.sat.present = true;
+            missing.sat.width = 4;
+            missing.sat.height = 4;
+            missing.sat.rgba = make_missing_checkerboard_rgba();
             missing.last_used_stamp = tile_cache_stamp_++;
             tile_texture_cache_[ti] = std::move(missing);
             atlas_dirty_ = true;
@@ -1751,136 +2082,204 @@ int GLWrpTerrainView::drain_ready_tile_results(int max_results) {
 }
 
 void GLWrpTerrainView::rebuild_tile_atlas_from_cache(const std::vector<int>& selected_tiles) {
-    texture_lookup_uvs_.assign(texture_entries_.size(), {0.0f, 0.0f, 0.0f, 0.0f});
-    texture_lookup_size_ = static_cast<int>(texture_lookup_uvs_.size());
-
-    struct Packed {
-        int idx = -1;
-        int x = 0;
-        int y = 0;
-        int w = 0;
-        int h = 0;
-    };
-
     static constexpr int kPad = 2;
     static constexpr int kRowMax = 4096;
+    static constexpr int kLookupRows = 15; // meta + sat + mask + 12 surface rows
 
-    std::vector<Packed> packed;
-    packed.reserve(selected_tiles.size());
+    material_lookup_w_ = static_cast<int>(texture_entries_.size());
+    material_lookup_rows_ = kLookupRows;
+    material_lookup_pixels_.assign(
+        static_cast<size_t>(std::max(material_lookup_w_, 1))
+            * static_cast<size_t>(kLookupRows) * 4u,
+        0.0f);
 
-    int x = 0;
-    int y = 0;
-    int row_h = 0;
-    int row_w_max = 0;
+    auto lookup_ptr = [&](int tile_idx, int row) -> float* {
+        if (tile_idx < 0 || tile_idx >= material_lookup_w_) return nullptr;
+        if (row < 0 || row >= material_lookup_rows_) return nullptr;
+        const size_t off = (static_cast<size_t>(row) * static_cast<size_t>(material_lookup_w_)
+                            + static_cast<size_t>(tile_idx)) * 4u;
+        return material_lookup_pixels_.data() + off;
+    };
+
+    auto write_slot = [&](int tile_idx, int row, float u, float v, float w, float h) {
+        float* p = lookup_ptr(tile_idx, row);
+        if (!p) return;
+        p[0] = u;
+        p[1] = v;
+        p[2] = w;
+        p[3] = h;
+    };
+
+    auto get_layer_for_role =
+        [&](const CachedTileTexture& tex, int role) -> const CachedTileTexture::LayerImage* {
+        if (role == 0) return &tex.sat;
+        if (role == 1) return &tex.mask;
+        if (role >= 2) {
+            const int idx = role - 2;
+            const int surface = idx / 3;
+            const int channel = idx % 3;
+            if (surface < 0 || surface >= 4) return nullptr;
+            if (channel == 0) return &tex.surfaces[static_cast<size_t>(surface)].macro;
+            if (channel == 1) return &tex.surfaces[static_cast<size_t>(surface)].normal;
+            return &tex.surfaces[static_cast<size_t>(surface)].detail;
+        }
+        return nullptr;
+    };
+
+    int max_surface_count = 1;
+    int resolved_layers = 0;
 
     for (int ti : selected_tiles) {
         auto it = tile_texture_cache_.find(ti);
         if (it == tile_texture_cache_.end()) continue;
-        const int w = std::max(1, it->second.width);
-        const int h = std::max(1, it->second.height);
-        const int pw = w + 2 * kPad;
-        const int ph = h + 2 * kPad;
-        if (x > 0 && (x + pw) > kRowMax) {
-            row_w_max = std::max(row_w_max, x);
-            x = 0;
-            y += row_h;
-            row_h = 0;
-        }
-        packed.push_back(Packed{ti, x + kPad, y + kPad, w, h});
-        x += pw;
-        row_h = std::max(row_h, ph);
-        row_w_max = std::max(row_w_max, x);
         it->second.last_used_stamp = tile_cache_stamp_++;
+        auto* meta = lookup_ptr(ti, 0);
+        if (meta) {
+            int surf_count = std::clamp(it->second.surface_count, 0, 4);
+            meta[0] = static_cast<float>(surf_count);
+            meta[1] = (it->second.layered && surf_count > 0) ? 1.0f : 0.0f;
+            bool has_normals = false;
+            bool has_macro = false;
+            for (int i = 0; i < surf_count; ++i) {
+                const auto& s = it->second.surfaces[static_cast<size_t>(i)];
+                has_normals = has_normals || s.normal.present;
+                has_macro = has_macro || s.macro.present;
+            }
+            meta[2] = has_normals ? 1.0f : 0.0f;
+            meta[3] = has_macro ? 1.0f : 0.0f;
+            max_surface_count = std::max(max_surface_count, std::max(1, surf_count));
+        }
     }
 
-    if (packed.empty()) {
-        texture_atlas_pixels_.clear();
-        atlas_width_ = 0;
-        atlas_height_ = 0;
-        has_texture_atlas_ = false;
-        has_texture_lookup_ = !texture_lookup_uvs_.empty();
-        last_loaded_texture_count_ = 0;
-        texture_world_scale_ = std::max(tile_cell_size_, cell_size_);
-        if (get_realized()) {
-            cleanup_texture_atlas_gl();
-            upload_texture_lookup();
-        }
-        if (!atlas_empty_logged_) {
-            app_log(LogLevel::Debug, "GLWrpTerrainView: atlas empty (waiting for background tile loads)");
-            atlas_empty_logged_ = true;
-        }
-        return;
-    }
-    atlas_empty_logged_ = false;
+    for (int role = 0; role < kTerrainRoleCount; ++role) {
+        struct Packed {
+            int tile_idx = -1;
+            int x = 0;
+            int y = 0;
+            int w = 0;
+            int h = 0;
+        };
 
-    row_w_max = std::max(row_w_max, x);
-    const int atlas_w = std::max(1, row_w_max);
-    const int atlas_h = std::max(1, y + row_h);
+        std::vector<Packed> packed;
+        packed.reserve(selected_tiles.size());
+        int x = 0;
+        int y = 0;
+        int row_h = 0;
+        int row_w_max = 0;
 
-    texture_atlas_pixels_.assign(static_cast<size_t>(atlas_w) * static_cast<size_t>(atlas_h) * 4u, 0);
-
-    int resolved = 0;
-    for (const auto& p : packed) {
-        auto it = tile_texture_cache_.find(p.idx);
-        if (it == tile_texture_cache_.end()) continue;
-        const auto& tex = it->second;
-        if (tex.rgba.empty()) continue;
-
-        for (int row = 0; row < p.h; ++row) {
-            const size_t src_off = static_cast<size_t>(row) * static_cast<size_t>(p.w) * 4u;
-            const size_t dst_off = (static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w)
-                                   + static_cast<size_t>(p.x)) * 4u;
-            std::memcpy(texture_atlas_pixels_.data() + dst_off,
-                        tex.rgba.data() + src_off,
-                        static_cast<size_t>(p.w) * 4u);
-        }
-
-        for (int row = 0; row < p.h; ++row) {
-            const size_t row_off = static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w);
-            const size_t left_src = (row_off + static_cast<size_t>(p.x)) * 4u;
-            const size_t right_src = (row_off + static_cast<size_t>(p.x + p.w - 1)) * 4u;
-            for (int pad = 1; pad <= kPad; ++pad) {
-                std::memcpy(texture_atlas_pixels_.data() + (left_src - static_cast<size_t>(pad) * 4u),
-                            texture_atlas_pixels_.data() + left_src, 4u);
-                std::memcpy(texture_atlas_pixels_.data() + (right_src + static_cast<size_t>(pad) * 4u),
-                            texture_atlas_pixels_.data() + right_src, 4u);
+        for (int ti : selected_tiles) {
+            auto it = tile_texture_cache_.find(ti);
+            if (it == tile_texture_cache_.end()) continue;
+            const auto* layer = get_layer_for_role(it->second, role);
+            if (!layer || !layer->present || layer->rgba.empty()
+                || layer->width <= 0 || layer->height <= 0) {
+                continue;
             }
-        }
-        for (int col = -kPad; col < p.w + kPad; ++col) {
-            const int sx = p.x + col;
-            const size_t top_src = (static_cast<size_t>(p.y) * static_cast<size_t>(atlas_w)
-                                   + static_cast<size_t>(sx)) * 4u;
-            const size_t bot_src = (static_cast<size_t>(p.y + p.h - 1) * static_cast<size_t>(atlas_w)
-                                   + static_cast<size_t>(sx)) * 4u;
-            for (int pad = 1; pad <= kPad; ++pad) {
-                const size_t top_dst = (static_cast<size_t>(p.y - pad) * static_cast<size_t>(atlas_w)
-                                       + static_cast<size_t>(sx)) * 4u;
-                const size_t bot_dst = (static_cast<size_t>(p.y + p.h - 1 + pad) * static_cast<size_t>(atlas_w)
-                                       + static_cast<size_t>(sx)) * 4u;
-                std::memcpy(texture_atlas_pixels_.data() + top_dst,
-                            texture_atlas_pixels_.data() + top_src, 4u);
-                std::memcpy(texture_atlas_pixels_.data() + bot_dst,
-                            texture_atlas_pixels_.data() + bot_src, 4u);
+            const int w = std::max(1, layer->width);
+            const int h = std::max(1, layer->height);
+            const int pw = w + 2 * kPad;
+            const int ph = h + 2 * kPad;
+            if (x > 0 && (x + pw) > kRowMax) {
+                row_w_max = std::max(row_w_max, x);
+                x = 0;
+                y += row_h;
+                row_h = 0;
             }
+            packed.push_back(Packed{ti, x + kPad, y + kPad, w, h});
+            x += pw;
+            row_h = std::max(row_h, ph);
+            row_w_max = std::max(row_w_max, x);
         }
 
-        if (p.idx >= 0 && static_cast<size_t>(p.idx) < texture_lookup_uvs_.size()) {
-            texture_lookup_uvs_[static_cast<size_t>(p.idx)] = {
+        if (packed.empty()) {
+            layer_atlas_pixels_[static_cast<size_t>(role)].clear();
+            layer_atlas_w_[static_cast<size_t>(role)] = 0;
+            layer_atlas_h_[static_cast<size_t>(role)] = 0;
+            has_layer_atlas_[static_cast<size_t>(role)] = false;
+            continue;
+        }
+
+        row_w_max = std::max(row_w_max, x);
+        const int atlas_w = std::max(1, row_w_max);
+        const int atlas_h = std::max(1, y + row_h);
+        auto& atlas_pixels = layer_atlas_pixels_[static_cast<size_t>(role)];
+        atlas_pixels.assign(static_cast<size_t>(atlas_w) * static_cast<size_t>(atlas_h) * 4u, 0);
+
+        for (const auto& p : packed) {
+            auto it = tile_texture_cache_.find(p.tile_idx);
+            if (it == tile_texture_cache_.end()) continue;
+            const auto* layer = get_layer_for_role(it->second, role);
+            if (!layer || layer->rgba.empty()) continue;
+
+            for (int row = 0; row < p.h; ++row) {
+                const size_t src_off = static_cast<size_t>(row) * static_cast<size_t>(p.w) * 4u;
+                const size_t dst_off = (static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(p.x)) * 4u;
+                std::memcpy(atlas_pixels.data() + dst_off,
+                            layer->rgba.data() + src_off,
+                            static_cast<size_t>(p.w) * 4u);
+            }
+
+            for (int row = 0; row < p.h; ++row) {
+                const size_t row_off = static_cast<size_t>(p.y + row) * static_cast<size_t>(atlas_w);
+                const size_t left_src = (row_off + static_cast<size_t>(p.x)) * 4u;
+                const size_t right_src = (row_off + static_cast<size_t>(p.x + p.w - 1)) * 4u;
+                for (int pad = 1; pad <= kPad; ++pad) {
+                    std::memcpy(atlas_pixels.data() + (left_src - static_cast<size_t>(pad) * 4u),
+                                atlas_pixels.data() + left_src, 4u);
+                    std::memcpy(atlas_pixels.data() + (right_src + static_cast<size_t>(pad) * 4u),
+                                atlas_pixels.data() + right_src, 4u);
+                }
+            }
+            for (int col = -kPad; col < p.w + kPad; ++col) {
+                const int sx = p.x + col;
+                const size_t top_src = (static_cast<size_t>(p.y) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                const size_t bot_src = (static_cast<size_t>(p.y + p.h - 1) * static_cast<size_t>(atlas_w)
+                                       + static_cast<size_t>(sx)) * 4u;
+                for (int pad = 1; pad <= kPad; ++pad) {
+                    const size_t top_dst = (static_cast<size_t>(p.y - pad) * static_cast<size_t>(atlas_w)
+                                           + static_cast<size_t>(sx)) * 4u;
+                    const size_t bot_dst = (static_cast<size_t>(p.y + p.h - 1 + pad)
+                                           * static_cast<size_t>(atlas_w)
+                                           + static_cast<size_t>(sx)) * 4u;
+                    std::memcpy(atlas_pixels.data() + top_dst, atlas_pixels.data() + top_src, 4u);
+                    std::memcpy(atlas_pixels.data() + bot_dst, atlas_pixels.data() + bot_src, 4u);
+                }
+            }
+
+            int lookup_row = 1;
+            if (role == 1) lookup_row = 2;
+            else if (role >= 2) lookup_row = 3 + (role - 2);
+            write_slot(
+                p.tile_idx, lookup_row,
                 static_cast<float>(p.x) / static_cast<float>(atlas_w),
                 static_cast<float>(p.y) / static_cast<float>(atlas_h),
                 static_cast<float>(p.w) / static_cast<float>(atlas_w),
-                static_cast<float>(p.h) / static_cast<float>(atlas_h)
-            };
+                static_cast<float>(p.h) / static_cast<float>(atlas_h));
+            resolved_layers++;
         }
-        resolved++;
+
+        layer_atlas_w_[static_cast<size_t>(role)] = atlas_w;
+        layer_atlas_h_[static_cast<size_t>(role)] = atlas_h;
+        has_layer_atlas_[static_cast<size_t>(role)] = true;
     }
 
-    atlas_width_ = atlas_w;
-    atlas_height_ = atlas_h;
-    has_texture_atlas_ = resolved > 0 && !texture_atlas_pixels_.empty();
-    has_texture_lookup_ = !texture_lookup_uvs_.empty();
-    texture_world_scale_ = std::max(tile_cell_size_, cell_size_);
-    last_loaded_texture_count_ = resolved;
+    active_surface_cap_ = std::clamp(max_surface_count, 1, 4);
+    last_loaded_texture_count_ = resolved_layers;
+    has_material_lookup_ = !material_lookup_pixels_.empty() && material_lookup_w_ > 0;
+
+    bool any_atlas = false;
+    for (bool has : has_layer_atlas_) any_atlas = any_atlas || has;
+    if (!any_atlas) {
+        if (!atlas_empty_logged_) {
+            app_log(LogLevel::Debug,
+                    "GLWrpTerrainView: terrain layered atlases empty (waiting for tile loads)");
+            atlas_empty_logged_ = true;
+        }
+    } else {
+        atlas_empty_logged_ = false;
+    }
 
     if (get_realized()) {
         upload_texture_atlas();
