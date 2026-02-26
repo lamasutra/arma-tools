@@ -75,15 +75,29 @@ json rgba_to_json(const std::array<float, 4>& c) {
     return json::array({c[0], c[1], c[2], c[3]});
 }
 
+json vec3_to_json(const std::array<float, 3>& v) {
+    return json::array({v[0], v[1], v[2]});
+}
+
 json material_to_json(const armatools::rvmat::Material& m) {
     json stages = json::array();
     for (const auto& st : m.stages) {
-        stages.push_back({
+        json stage = {
             {"stageNumber", st.stage_number},
             {"className", st.class_name},
             {"texturePath", st.texture_path},
             {"uvSource", st.uv_source},
-        });
+            {"filter", st.filter},
+            {"texGen", st.tex_gen},
+        };
+        if (st.uv_transform.valid) {
+            stage["uvTransform"] = {
+                {"aside", vec3_to_json(st.uv_transform.aside)},
+                {"up", vec3_to_json(st.uv_transform.up)},
+                {"pos", vec3_to_json(st.uv_transform.pos)},
+            };
+        }
+        stages.push_back(std::move(stage));
     }
 
     return {

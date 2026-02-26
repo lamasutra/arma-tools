@@ -13,6 +13,7 @@
 #include <armatools/wss.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -138,6 +139,11 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         b.set_has_frame(false);
         b.set_tooltip_text(tip);
     };
+    auto make_text_toggle = [](Gtk::ToggleButton& b, const char* label, const char* tip) {
+        b.set_label(label);
+        b.set_has_frame(false);
+        b.set_tooltip_text(tip);
+    };
 
     make_icon_toggle(rvmat_shape_sphere_, "media-record-symbolic", "Sphere preview");
     make_icon_toggle(rvmat_shape_tile_, "view-grid-symbolic", "Tile preview");
@@ -174,6 +180,102 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     rvmat_preview_toolbar_.append(rvmat_shape_sphere_);
     rvmat_preview_toolbar_.append(rvmat_shape_tile_);
+    make_text_toggle(rvmat_view_final_, "Final", "Final shaded preview");
+    make_text_toggle(rvmat_view_albedo_, "Alb", "Albedo preview");
+    make_text_toggle(rvmat_view_normal_, "Nrm", "Normal preview");
+    make_text_toggle(rvmat_view_spec_, "SMDI", "Specular/SMDI preview");
+    make_text_toggle(rvmat_view_ao_, "AO", "AO/AS preview");
+
+    rvmat_view_final_.signal_toggled().connect([this]() {
+        if (rvmat_view_updating_) return;
+        rvmat_view_updating_ = true;
+        if (rvmat_view_final_.get_active()) {
+            rvmat_view_albedo_.set_active(false);
+            rvmat_view_normal_.set_active(false);
+            rvmat_view_spec_.set_active(false);
+            rvmat_view_ao_.set_active(false);
+            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Final);
+        } else if (!rvmat_view_albedo_.get_active() && !rvmat_view_normal_.get_active() &&
+                   !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
+            rvmat_view_final_.set_active(true);
+        }
+        rvmat_view_updating_ = false;
+    });
+    rvmat_view_albedo_.signal_toggled().connect([this]() {
+        if (rvmat_view_updating_) return;
+        rvmat_view_updating_ = true;
+        if (rvmat_view_albedo_.get_active()) {
+            rvmat_view_final_.set_active(false);
+            rvmat_view_normal_.set_active(false);
+            rvmat_view_spec_.set_active(false);
+            rvmat_view_ao_.set_active(false);
+            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Albedo);
+        } else if (!rvmat_view_final_.get_active() && !rvmat_view_normal_.get_active() &&
+                   !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
+            rvmat_view_final_.set_active(true);
+        }
+        rvmat_view_updating_ = false;
+    });
+    rvmat_view_normal_.signal_toggled().connect([this]() {
+        if (rvmat_view_updating_) return;
+        rvmat_view_updating_ = true;
+        if (rvmat_view_normal_.get_active()) {
+            rvmat_view_final_.set_active(false);
+            rvmat_view_albedo_.set_active(false);
+            rvmat_view_spec_.set_active(false);
+            rvmat_view_ao_.set_active(false);
+            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Normal);
+        } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
+                   !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
+            rvmat_view_final_.set_active(true);
+        }
+        rvmat_view_updating_ = false;
+    });
+    rvmat_view_spec_.signal_toggled().connect([this]() {
+        if (rvmat_view_updating_) return;
+        rvmat_view_updating_ = true;
+        if (rvmat_view_spec_.get_active()) {
+            rvmat_view_final_.set_active(false);
+            rvmat_view_albedo_.set_active(false);
+            rvmat_view_normal_.set_active(false);
+            rvmat_view_ao_.set_active(false);
+            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Specular);
+        } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
+                   !rvmat_view_normal_.get_active() && !rvmat_view_ao_.get_active()) {
+            rvmat_view_final_.set_active(true);
+        }
+        rvmat_view_updating_ = false;
+    });
+    rvmat_view_ao_.signal_toggled().connect([this]() {
+        if (rvmat_view_updating_) return;
+        rvmat_view_updating_ = true;
+        if (rvmat_view_ao_.get_active()) {
+            rvmat_view_final_.set_active(false);
+            rvmat_view_albedo_.set_active(false);
+            rvmat_view_normal_.set_active(false);
+            rvmat_view_spec_.set_active(false);
+            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::AO);
+        } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
+                   !rvmat_view_normal_.get_active() && !rvmat_view_spec_.get_active()) {
+            rvmat_view_final_.set_active(true);
+        }
+        rvmat_view_updating_ = false;
+    });
+
+    rvmat_view_updating_ = true;
+    rvmat_view_final_.set_active(true);
+    rvmat_view_albedo_.set_active(false);
+    rvmat_view_normal_.set_active(false);
+    rvmat_view_spec_.set_active(false);
+    rvmat_view_ao_.set_active(false);
+    rvmat_view_updating_ = false;
+    rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Final);
+
+    rvmat_preview_toolbar_.append(rvmat_view_final_);
+    rvmat_preview_toolbar_.append(rvmat_view_albedo_);
+    rvmat_preview_toolbar_.append(rvmat_view_normal_);
+    rvmat_preview_toolbar_.append(rvmat_view_spec_);
+    rvmat_preview_toolbar_.append(rvmat_view_ao_);
     rvmat_preview_box_.append(rvmat_preview_toolbar_);
     rvmat_preview_box_.append(rvmat_preview_);
     rvmat_preview_box_.set_vexpand(true);
@@ -1086,46 +1188,136 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return v;
         };
+        enum class ShaderProfile { NormalMap, Super, Multi, Unknown };
+        auto shader_profile = [&](const std::string& ps, const std::string& vs) {
+            auto p = lower(ps);
+            auto v = lower(vs);
+            if (p.find("super") != std::string::npos || v.find("super") != std::string::npos)
+                return ShaderProfile::Super;
+            if (p.find("normal") != std::string::npos || p.find("spec") != std::string::npos ||
+                v.find("normal") != std::string::npos)
+                return ShaderProfile::NormalMap;
+            if (p.find("multi") != std::string::npos || v.find("multi") != std::string::npos)
+                return ShaderProfile::Multi;
+            return ShaderProfile::Unknown;
+        };
+
+        auto stage_by_number = [&](int n) -> const armatools::rvmat::TextureStage* {
+            for (const auto& st : mat.stages) {
+                if (st.stage_number == n && !st.texture_path.empty()) return &st;
+            }
+            return nullptr;
+        };
         auto stage_rank = [&](const std::string& path, const std::string& kind) {
             auto p = lower(path);
             if (kind == "diff") {
                 if (p.find("_mco.") != std::string::npos) return 40;
                 if (p.find("_co.") != std::string::npos) return 30;
                 if (p.find("_ca.") != std::string::npos) return 20;
+                if (p.find("_as.") != std::string::npos || p.find("_ao.") != std::string::npos) return -10;
                 return 1;
             }
-            if (kind == "nrm") return p.find("_nohq.") != std::string::npos ? 100 : 0;
+            if (kind == "nrm") {
+                if (p.find("_nohq.") != std::string::npos) return 100;
+                if (p.find("_no.") != std::string::npos) return 60;
+                return 0;
+            }
             if (kind == "spec") return p.find("_smdi.") != std::string::npos ? 100 : 0;
+            if (kind == "ao")
+                return (p.find("_as.") != std::string::npos || p.find("_ao.") != std::string::npos) ? 100 : 0;
             return 0;
         };
+        auto stage_by_suffix = [&](const std::string& kind) -> const armatools::rvmat::TextureStage* {
+            const armatools::rvmat::TextureStage* best = nullptr;
+            int best_score = -1;
+            for (const auto& st : mat.stages) {
+                if (st.texture_path.empty()) continue;
+                int score = stage_rank(st.texture_path, kind);
+                if (score > best_score) {
+                    best_score = score;
+                    best = &st;
+                }
+            }
+            return best;
+        };
 
-        std::string best_diff;
-        std::string best_nrm;
-        std::string best_spec;
-        int rd = -1, rn = -1, rs = -1;
-        for (const auto& st : mat.stages) {
-            if (st.texture_path.empty()) continue;
-            int sd = stage_rank(st.texture_path, "diff");
-            int sn = stage_rank(st.texture_path, "nrm");
-            int ss = stage_rank(st.texture_path, "spec");
-            if (sd > rd) { rd = sd; best_diff = st.texture_path; }
-            if (sn > rn) { rn = sn; best_nrm = st.texture_path; }
-            if (ss > rs) { rs = ss; best_spec = st.texture_path; }
+        const auto profile = shader_profile(mat.pixel_shader, mat.vertex_shader);
+        const armatools::rvmat::TextureStage* stage_diff = nullptr;
+        const armatools::rvmat::TextureStage* stage_nrm = nullptr;
+        const armatools::rvmat::TextureStage* stage_spec = nullptr;
+        const armatools::rvmat::TextureStage* stage_ao = nullptr;
+        if (profile == ShaderProfile::NormalMap || profile == ShaderProfile::Super) {
+            stage_diff = stage_by_number(0);
+            if (!stage_diff) stage_diff = stage_by_number(1);
+            stage_nrm = stage_by_number(1);
+            if (!stage_nrm) stage_nrm = stage_by_number(2);
+            stage_spec = stage_by_number(2);
+            if (!stage_spec) stage_spec = stage_by_number(3);
+            stage_ao = stage_by_number(3);
+            if (!stage_ao) stage_ao = stage_by_number(4);
+        } else if (profile == ShaderProfile::Multi) {
+            stage_diff = stage_by_number(0);
+            if (!stage_diff) stage_diff = stage_by_number(1);
         }
+        if (!stage_diff) stage_diff = stage_by_suffix("diff");
+        if (!stage_nrm) stage_nrm = stage_by_suffix("nrm");
+        if (!stage_spec) stage_spec = stage_by_suffix("spec");
+        if (!stage_ao) stage_ao = stage_by_suffix("ao");
+        if (!stage_diff && !mat.stages.empty()) stage_diff = &mat.stages.front();
 
-        if (!best_diff.empty()) {
-            if (auto tex = load_preview_texture_asset(file, best_diff)) {
+        auto uv_matrix = [&](const armatools::rvmat::TextureStage* st) {
+            std::array<float, 9> m{1.0f, 0.0f, 0.0f,
+                                   0.0f, 1.0f, 0.0f,
+                                   0.0f, 0.0f, 1.0f};
+            if (!st || !st->uv_transform.valid) return m;
+            m = {
+                st->uv_transform.aside[0], st->uv_transform.aside[1], st->uv_transform.aside[2],
+                st->uv_transform.up[0], st->uv_transform.up[1], st->uv_transform.up[2],
+                st->uv_transform.pos[0], st->uv_transform.pos[1], st->uv_transform.pos[2],
+            };
+            return m;
+        };
+        auto uv_source = [&](const armatools::rvmat::TextureStage* st) {
+            if (!st) return GLRvmatPreview::UVSource::Tex0;
+            auto uvs = lower(st->uv_source);
+            if (uvs == "tex1") return GLRvmatPreview::UVSource::Tex1;
+            return GLRvmatPreview::UVSource::Tex0;
+        };
+        rvmat_preview_.set_diffuse_uv_matrix(uv_matrix(stage_diff));
+        rvmat_preview_.set_normal_uv_matrix(uv_matrix(stage_nrm));
+        rvmat_preview_.set_specular_uv_matrix(uv_matrix(stage_spec));
+        rvmat_preview_.set_ao_uv_matrix(uv_matrix(stage_ao));
+        rvmat_preview_.set_diffuse_uv_source(uv_source(stage_diff));
+        rvmat_preview_.set_normal_uv_source(uv_source(stage_nrm));
+        rvmat_preview_.set_specular_uv_source(uv_source(stage_spec));
+        rvmat_preview_.set_ao_uv_source(uv_source(stage_ao));
+
+        bool diff_loaded = false;
+        bool nrm_loaded = false;
+        bool spec_loaded = false;
+        bool ao_loaded = false;
+        if (stage_diff && !stage_diff->texture_path.empty()) {
+            if (auto tex = load_preview_texture_asset(file, stage_diff->texture_path)) {
                 rvmat_preview_.set_diffuse_texture(tex->width, tex->height, tex->pixels.data());
+                diff_loaded = true;
             }
         }
-        if (!best_nrm.empty()) {
-            if (auto tex = load_preview_texture_asset(file, best_nrm)) {
+        if (stage_nrm && !stage_nrm->texture_path.empty()) {
+            if (auto tex = load_preview_texture_asset(file, stage_nrm->texture_path)) {
                 rvmat_preview_.set_normal_texture(tex->width, tex->height, tex->pixels.data());
+                nrm_loaded = true;
             }
         }
-        if (!best_spec.empty()) {
-            if (auto tex = load_preview_texture_asset(file, best_spec)) {
+        if (stage_spec && !stage_spec->texture_path.empty()) {
+            if (auto tex = load_preview_texture_asset(file, stage_spec->texture_path)) {
                 rvmat_preview_.set_specular_texture(tex->width, tex->height, tex->pixels.data());
+                spec_loaded = true;
+            }
+        }
+        if (stage_ao && !stage_ao->texture_path.empty()) {
+            if (auto tex = load_preview_texture_asset(file, stage_ao->texture_path)) {
+                rvmat_preview_.set_ao_texture(tex->width, tex->height, tex->pixels.data());
+                ao_loaded = true;
             }
         }
 
@@ -1135,6 +1327,36 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
               << c[0] << ", " << c[1] << ", " << c[2] << ", " << c[3];
             return s.str();
         };
+        auto fmt_vec3 = [](const std::array<float, 3>& c) {
+            std::ostringstream s;
+            s << std::fixed << std::setprecision(3)
+              << c[0] << ", " << c[1] << ", " << c[2];
+            return s.str();
+        };
+        auto uv_source_supported = [](const std::string& uv) {
+            if (uv.empty()) return true;
+            auto l = uv;
+            std::transform(l.begin(), l.end(), l.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return l == "tex" || l == "tex1";
+        };
+
+        std::vector<std::string> warnings;
+        if (!stage_diff) warnings.emplace_back("Diffuse stage not resolved.");
+        if (stage_diff && !diff_loaded)
+            warnings.emplace_back("Diffuse missing: " + stage_diff->texture_path);
+        if (stage_nrm && !nrm_loaded)
+            warnings.emplace_back("Normal missing: " + stage_nrm->texture_path);
+        if (stage_spec && !spec_loaded)
+            warnings.emplace_back("SMDI missing: " + stage_spec->texture_path);
+        if (stage_ao && !ao_loaded)
+            warnings.emplace_back("AO/AS missing: " + stage_ao->texture_path);
+        for (const auto* st : {stage_diff, stage_nrm, stage_spec, stage_ao}) {
+            if (st && !uv_source_supported(st->uv_source)) {
+                warnings.emplace_back("uvSource unsupported: " + st->uv_source
+                                      + " (using tex)");
+            }
+        }
 
         std::ostringstream out;
         out << "Type: RVMAT\n"
@@ -1153,7 +1375,40 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
             out << "  Stage" << st.stage_number
                 << " texture: " << (st.texture_path.empty() ? "-" : st.texture_path) << "\n"
                 << "  Stage" << st.stage_number
-                << " uvSource: " << (st.uv_source.empty() ? "-" : st.uv_source) << "\n";
+                << " uvSource: " << (st.uv_source.empty() ? "-" : st.uv_source) << "\n"
+                << "  Stage" << st.stage_number
+                << " filter: " << (st.filter.empty() ? "-" : st.filter) << "\n"
+                << "  Stage" << st.stage_number
+                << " texGen: " << (st.tex_gen.empty() ? "-" : st.tex_gen) << "\n";
+            if (st.uv_transform.valid) {
+                out << "  Stage" << st.stage_number
+                    << " uvTransform: aside(" << fmt_vec3(st.uv_transform.aside)
+                    << ") up(" << fmt_vec3(st.uv_transform.up)
+                    << ") pos(" << fmt_vec3(st.uv_transform.pos) << ")\n";
+            }
+        }
+
+        out << "Resolved stages:\n";
+        auto print_stage = [&](const char* name, const armatools::rvmat::TextureStage* st,
+                               bool loaded) {
+            out << "  " << name << ": ";
+            if (!st) {
+                out << "-\n";
+                return;
+            }
+            out << "Stage" << st->stage_number << " "
+                << (st->texture_path.empty() ? "-" : st->texture_path);
+            if (!loaded && !st->texture_path.empty()) out << " (missing)";
+            out << "\n";
+        };
+        print_stage("Diffuse", stage_diff, diff_loaded);
+        print_stage("Normal", stage_nrm, nrm_loaded);
+        print_stage("SMDI", stage_spec, spec_loaded);
+        print_stage("AO/AS", stage_ao, ao_loaded);
+
+        if (!warnings.empty()) {
+            out << "Warnings:\n";
+            for (const auto& w : warnings) out << "  " << w << "\n";
         }
 
         rvmat_info_view_.get_buffer()->set_text(out.str());

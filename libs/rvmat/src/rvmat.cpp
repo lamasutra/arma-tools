@@ -69,6 +69,59 @@ static std::array<float, 4> get_rgba(const config::ConfigClass& cls,
     return out;
 }
 
+static std::array<float, 3> get_vec3(const config::ConfigClass& cls,
+                                     const std::string& name,
+                                     const std::array<float, 3>& fallback) {
+    auto* ne = find_entry_ci(cls, name);
+    if (!ne) return fallback;
+    auto* arr = std::get_if<config::ArrayEntry>(&ne->entry);
+    if (!arr) return fallback;
+    std::array<float, 3> out = fallback;
+    for (size_t i = 0; i < out.size() && i < arr->elements.size(); ++i) {
+        float v = 0.0f;
+        if (array_elem_to_float(arr->elements[i], v)) out[i] = v;
+    }
+    return out;
+}
+
+static bool parse_uv_transform_from_array(const config::ArrayEntry& arr, UVTransform& out) {
+    if (arr.elements.size() < 6) return false;
+    auto read = [&](size_t idx, float& v) -> bool {
+        if (idx >= arr.elements.size()) return false;
+        return array_elem_to_float(arr.elements[idx], v);
+    };
+    std::array<float, 3> aside{1.0f, 0.0f, 0.0f};
+    std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    std::array<float, 3> pos{0.0f, 0.0f, 0.0f};
+    for (size_t i = 0; i < 3; ++i) {
+        if (!read(i, aside[i])) return false;
+    }
+    for (size_t i = 0; i < 3; ++i) {
+        if (!read(3 + i, up[i])) return false;
+    }
+    if (arr.elements.size() >= 9) {
+        for (size_t i = 0; i < 3; ++i) {
+            if (!read(6 + i, pos[i])) return false;
+        }
+    }
+    out.aside = aside;
+    out.up = up;
+    out.pos = pos;
+    out.valid = true;
+    return true;
+}
+
+static bool parse_uv_transform_from_class(const config::ConfigClass& cls, UVTransform& out) {
+    auto aside = get_vec3(cls, "aside", out.aside);
+    auto up = get_vec3(cls, "up", out.up);
+    auto pos = get_vec3(cls, "pos", out.pos);
+    out.aside = aside;
+    out.up = up;
+    out.pos = pos;
+    out.valid = true;
+    return true;
+}
+
 static int parse_stage_number(const std::string& class_name) {
     auto lower = to_lower_ascii(class_name);
     if (!lower.starts_with("stage")) return -1;
@@ -107,6 +160,15 @@ Material parse(const config::Config& cfg) {
         st.class_name = ne.name;
         st.texture_path = get_string(*ce->cls, "texture");
         st.uv_source = get_string(*ce->cls, "uvSource");
+        st.filter = get_string(*ce->cls, "filter");
+        st.tex_gen = get_string(*ce->cls, "texGen");
+        if (auto* uv = find_entry_ci(*ce->cls, "uvTransform")) {
+            if (auto* arr = std::get_if<config::ArrayEntry>(&uv->entry)) {
+                parse_uv_transform_from_array(*arr, st.uv_transform);
+            } else if (auto* uv_cls = std::get_if<config::ClassEntryOwned>(&uv->entry)) {
+                if (uv_cls->cls) parse_uv_transform_from_class(*uv_cls->cls, st.uv_transform);
+            }
+        }
         mat.stages.push_back(std::move(st));
     }
 

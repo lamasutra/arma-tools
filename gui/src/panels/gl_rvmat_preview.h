@@ -2,6 +2,7 @@
 
 #include <gtkmm.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -23,14 +24,27 @@ public:
     void set_diffuse_texture(int width, int height, const uint8_t* rgba_data);
     void set_normal_texture(int width, int height, const uint8_t* rgba_data);
     void set_specular_texture(int width, int height, const uint8_t* rgba_data);
+    void set_ao_texture(int width, int height, const uint8_t* rgba_data);
+    void set_diffuse_uv_matrix(const std::array<float, 9>& m);
+    void set_normal_uv_matrix(const std::array<float, 9>& m);
+    void set_specular_uv_matrix(const std::array<float, 9>& m);
+    void set_ao_uv_matrix(const std::array<float, 9>& m);
+    enum class UVSource { Tex0 = 0, Tex1 = 1 };
+    void set_diffuse_uv_source(UVSource source);
+    void set_normal_uv_source(UVSource source);
+    void set_specular_uv_source(UVSource source);
+    void set_ao_uv_source(UVSource source);
     enum class Shape { Sphere, Tile };
     void set_shape(Shape shape);
+    enum class ViewMode { Final = 0, Albedo = 1, Normal = 2, Specular = 3, AO = 4 };
+    void set_view_mode(ViewMode mode);
 
 private:
     struct Vertex {
         float p[3];
         float n[3];
         float uv[2];
+        float uv1[2];
         float t[3];
     };
 
@@ -43,14 +57,26 @@ private:
     int loc_tex_diff_ = -1;
     int loc_tex_nrm_ = -1;
     int loc_tex_spec_ = -1;
+    int loc_tex_ao_ = -1;
     int loc_has_diff_ = -1;
     int loc_has_nrm_ = -1;
     int loc_has_spec_ = -1;
+    int loc_has_ao_ = -1;
     int loc_mat_ambient_ = -1;
     int loc_mat_diffuse_ = -1;
     int loc_mat_emissive_ = -1;
     int loc_mat_specular_ = -1;
     int loc_mat_spec_power_ = -1;
+    int loc_uv_diff_ = -1;
+    int loc_uv_nrm_ = -1;
+    int loc_uv_spec_ = -1;
+    int loc_uv_ao_ = -1;
+    int loc_uv_src_diff_ = -1;
+    int loc_uv_src_nrm_ = -1;
+    int loc_uv_src_spec_ = -1;
+    int loc_uv_src_ao_ = -1;
+    int loc_view_mode_ = -1;
+    int loc_diffuse_srgb_ = -1;
 
     uint32_t vao_sphere_ = 0;
     uint32_t vbo_sphere_ = 0;
@@ -64,11 +90,31 @@ private:
     uint32_t tex_diff_ = 0;
     uint32_t tex_nrm_ = 0;
     uint32_t tex_spec_ = 0;
+    uint32_t tex_ao_ = 0;
     bool has_diff_ = false;
     bool has_nrm_ = false;
     bool has_spec_ = false;
+    bool has_ao_ = false;
     Shape shape_ = Shape::Sphere;
     MaterialParams mat_;
+    ViewMode view_mode_ = ViewMode::Final;
+    bool diffuse_is_srgb_ = true;
+    std::array<float, 9> uv_diff_{1.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f};
+    std::array<float, 9> uv_nrm_{1.0f, 0.0f, 0.0f,
+                                0.0f, 1.0f, 0.0f,
+                                0.0f, 0.0f, 1.0f};
+    std::array<float, 9> uv_spec_{1.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f};
+    std::array<float, 9> uv_ao_{1.0f, 0.0f, 0.0f,
+                               0.0f, 1.0f, 0.0f,
+                               0.0f, 0.0f, 1.0f};
+    int uv_src_diff_ = static_cast<int>(UVSource::Tex0);
+    int uv_src_nrm_ = static_cast<int>(UVSource::Tex0);
+    int uv_src_spec_ = static_cast<int>(UVSource::Tex0);
+    int uv_src_ao_ = static_cast<int>(UVSource::Tex0);
 
     float azimuth_ = 0.3f;
     float elevation_ = 0.2f;

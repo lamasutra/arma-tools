@@ -17,6 +17,7 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
 layout(location=3) in vec3 aTangent;
+layout(location=4) in vec2 aUV1;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform mat3 uNormalMat;
@@ -24,12 +25,14 @@ out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vTangent;
+out vec2 vUV1;
 void main() {
     vec4 wp = uModel * vec4(aPos, 1.0);
     vWorldPos = wp.xyz;
     vNormal = normalize(uNormalMat * aNormal);
     vTangent = normalize(mat3(uModel) * aTangent);
     vUV = aUV;
+    vUV1 = aUV1;
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
@@ -40,12 +43,15 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
 in vec3 vTangent;
+in vec2 vUV1;
 uniform sampler2D uTexDiffuse;
 uniform sampler2D uTexNormal;
 uniform sampler2D uTexSpec;
+uniform sampler2D uTexAO;
 uniform bool uHasDiffuse;
 uniform bool uHasNormal;
 uniform bool uHasSpec;
+uniform bool uHasAO;
 uniform vec3 uLightDir;
 uniform vec3 uCamPos;
 uniform vec3 uMatAmbient;
@@ -53,9 +59,26 @@ uniform vec3 uMatDiffuse;
 uniform vec3 uMatEmissive;
 uniform vec3 uMatSpecular;
 uniform float uMatSpecPower;
+uniform mat3 uUvDiffuse;
+uniform mat3 uUvNormal;
+uniform mat3 uUvSpec;
+uniform mat3 uUvAO;
+uniform int uUvSourceDiffuse;
+uniform int uUvSourceNormal;
+uniform int uUvSourceSpec;
+uniform int uUvSourceAO;
+uniform int uViewMode;
+uniform bool uDiffuseIsSRGB;
 out vec4 FragColor;
 void main() {
-    vec2 uv = vUV;
+    vec2 uvBaseDiff = (uUvSourceDiffuse == 1) ? vUV1 : vUV;
+    vec2 uvBaseNrm = (uUvSourceNormal == 1) ? vUV1 : vUV;
+    vec2 uvBaseSpec = (uUvSourceSpec == 1) ? vUV1 : vUV;
+    vec2 uvBaseAO = (uUvSourceAO == 1) ? vUV1 : vUV;
+    vec2 uvD = (uUvDiffuse * vec3(uvBaseDiff, 1.0)).xy;
+    vec2 uvN = (uUvNormal * vec3(uvBaseNrm, 1.0)).xy;
+    vec2 uvS = (uUvSpec * vec3(uvBaseSpec, 1.0)).xy;
+    vec2 uvA = (uUvAO * vec3(uvBaseAO, 1.0)).xy;
     vec3 baseN = normalize(vNormal);
     vec3 t = normalize(vTangent - dot(vTangent, baseN) * baseN);
     vec3 b = normalize(cross(baseN, t));
@@ -66,11 +89,12 @@ void main() {
     }
     vec3 n = baseN;
     if (uHasNormal) {
-        vec3 nTex = texture(uTexNormal, uv).xyz * 2.0 - 1.0;
+        vec3 nTex = texture(uTexNormal, uvN).xyz * 2.0 - 1.0;
         n = normalize(mat3(t, b, baseN) * nTex);
     }
 
-    vec3 baseColor = uHasDiffuse ? texture(uTexDiffuse, uv).rgb : vec3(0.7);
+    vec3 baseColor = uHasDiffuse ? texture(uTexDiffuse, uvD).rgb : vec3(0.7);
+    if (uDiffuseIsSRGB) baseColor = pow(baseColor, vec3(2.2));
     vec3 ambient = clamp(uMatAmbient, 0.0, 1.0);
     vec3 diffuseC = clamp(uMatDiffuse, 0.0, 1.0);
     vec3 emissive = clamp(uMatEmissive, 0.0, 1.0);
@@ -83,12 +107,26 @@ void main() {
     vec3 h = normalize(uLightDir + v);
     float spec = pow(max(dot(n, h), 0.0), sp);
     float specMask = 1.0;
-    if (uHasSpec) specMask = dot(texture(uTexSpec, uv).rgb, vec3(0.3333));
+    if (uHasSpec) specMask = dot(texture(uTexSpec, uvS).rgb, vec3(0.3333));
+    vec3 aoColor = uHasAO ? texture(uTexAO, uvA).rgb : vec3(1.0);
 
     vec3 lit = baseColor * (ambient * 0.25 + diffuseC * min(1.0, diff + backFill))
              + specC * spec * specMask * 0.35
              + emissive;
-    FragColor = vec4(clamp(lit, 0.0, 1.0), 1.0);
+    vec3 outColor = lit;
+    if (uViewMode == 1) {
+        outColor = baseColor;
+        outColor = pow(clamp(outColor, 0.0, 1.0), vec3(1.0 / 2.2));
+    } else if (uViewMode == 2) {
+        outColor = n * 0.5 + 0.5;
+    } else if (uViewMode == 3) {
+        outColor = uHasSpec ? texture(uTexSpec, uvS).rgb : vec3(0.5);
+    } else if (uViewMode == 4) {
+        outColor = aoColor;
+    } else {
+        outColor = pow(clamp(outColor, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
+    FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 )";
 
@@ -217,8 +255,21 @@ void GLRvmatPreview::clear_material() {
     if (tex_diff_) glDeleteTextures(1, &tex_diff_);
     if (tex_nrm_) glDeleteTextures(1, &tex_nrm_);
     if (tex_spec_) glDeleteTextures(1, &tex_spec_);
+    if (tex_ao_) glDeleteTextures(1, &tex_ao_);
     tex_diff_ = tex_nrm_ = tex_spec_ = 0;
+    tex_ao_ = 0;
     has_diff_ = has_nrm_ = has_spec_ = false;
+    has_ao_ = false;
+    uv_diff_ = {1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 1.0f};
+    uv_nrm_ = uv_diff_;
+    uv_spec_ = uv_diff_;
+    uv_ao_ = uv_diff_;
+    uv_src_diff_ = static_cast<int>(UVSource::Tex0);
+    uv_src_nrm_ = static_cast<int>(UVSource::Tex0);
+    uv_src_spec_ = static_cast<int>(UVSource::Tex0);
+    uv_src_ao_ = static_cast<int>(UVSource::Tex0);
     queue_render();
 }
 
@@ -245,8 +296,59 @@ void GLRvmatPreview::set_specular_texture(int width, int height, const uint8_t* 
     queue_render();
 }
 
+void GLRvmatPreview::set_ao_texture(int width, int height, const uint8_t* rgba_data) {
+    upload_texture(tex_ao_, width, height, rgba_data);
+    has_ao_ = true;
+    queue_render();
+}
+
+void GLRvmatPreview::set_diffuse_uv_matrix(const std::array<float, 9>& m) {
+    uv_diff_ = m;
+    queue_render();
+}
+
+void GLRvmatPreview::set_normal_uv_matrix(const std::array<float, 9>& m) {
+    uv_nrm_ = m;
+    queue_render();
+}
+
+void GLRvmatPreview::set_specular_uv_matrix(const std::array<float, 9>& m) {
+    uv_spec_ = m;
+    queue_render();
+}
+
+void GLRvmatPreview::set_ao_uv_matrix(const std::array<float, 9>& m) {
+    uv_ao_ = m;
+    queue_render();
+}
+
+void GLRvmatPreview::set_diffuse_uv_source(UVSource source) {
+    uv_src_diff_ = static_cast<int>(source);
+    queue_render();
+}
+
+void GLRvmatPreview::set_normal_uv_source(UVSource source) {
+    uv_src_nrm_ = static_cast<int>(source);
+    queue_render();
+}
+
+void GLRvmatPreview::set_specular_uv_source(UVSource source) {
+    uv_src_spec_ = static_cast<int>(source);
+    queue_render();
+}
+
+void GLRvmatPreview::set_ao_uv_source(UVSource source) {
+    uv_src_ao_ = static_cast<int>(source);
+    queue_render();
+}
+
 void GLRvmatPreview::set_shape(Shape shape) {
     shape_ = shape;
+    queue_render();
+}
+
+void GLRvmatPreview::set_view_mode(ViewMode mode) {
+    view_mode_ = mode;
     queue_render();
 }
 
@@ -268,14 +370,26 @@ void GLRvmatPreview::on_realize_gl() {
     loc_tex_diff_ = glGetUniformLocation(prog_, "uTexDiffuse");
     loc_tex_nrm_ = glGetUniformLocation(prog_, "uTexNormal");
     loc_tex_spec_ = glGetUniformLocation(prog_, "uTexSpec");
+    loc_tex_ao_ = glGetUniformLocation(prog_, "uTexAO");
     loc_has_diff_ = glGetUniformLocation(prog_, "uHasDiffuse");
     loc_has_nrm_ = glGetUniformLocation(prog_, "uHasNormal");
     loc_has_spec_ = glGetUniformLocation(prog_, "uHasSpec");
+    loc_has_ao_ = glGetUniformLocation(prog_, "uHasAO");
     loc_mat_ambient_ = glGetUniformLocation(prog_, "uMatAmbient");
     loc_mat_diffuse_ = glGetUniformLocation(prog_, "uMatDiffuse");
     loc_mat_emissive_ = glGetUniformLocation(prog_, "uMatEmissive");
     loc_mat_specular_ = glGetUniformLocation(prog_, "uMatSpecular");
     loc_mat_spec_power_ = glGetUniformLocation(prog_, "uMatSpecPower");
+    loc_uv_diff_ = glGetUniformLocation(prog_, "uUvDiffuse");
+    loc_uv_nrm_ = glGetUniformLocation(prog_, "uUvNormal");
+    loc_uv_spec_ = glGetUniformLocation(prog_, "uUvSpec");
+    loc_uv_ao_ = glGetUniformLocation(prog_, "uUvAO");
+    loc_uv_src_diff_ = glGetUniformLocation(prog_, "uUvSourceDiffuse");
+    loc_uv_src_nrm_ = glGetUniformLocation(prog_, "uUvSourceNormal");
+    loc_uv_src_spec_ = glGetUniformLocation(prog_, "uUvSourceSpec");
+    loc_uv_src_ao_ = glGetUniformLocation(prog_, "uUvSourceAO");
+    loc_view_mode_ = glGetUniformLocation(prog_, "uViewMode");
+    loc_diffuse_srgb_ = glGetUniformLocation(prog_, "uDiffuseIsSRGB");
 
     build_sphere_mesh();
     build_tile_mesh();
@@ -342,9 +456,21 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glUniform1i(loc_tex_diff_, 0);
     glUniform1i(loc_tex_nrm_, 1);
     glUniform1i(loc_tex_spec_, 2);
+    glUniform1i(loc_tex_ao_, 3);
     glUniform1i(loc_has_diff_, has_diff_ ? 1 : 0);
     glUniform1i(loc_has_nrm_, has_nrm_ ? 1 : 0);
     glUniform1i(loc_has_spec_, has_spec_ ? 1 : 0);
+    glUniform1i(loc_has_ao_, has_ao_ ? 1 : 0);
+    glUniformMatrix3fv(loc_uv_diff_, 1, GL_FALSE, uv_diff_.data());
+    glUniformMatrix3fv(loc_uv_nrm_, 1, GL_FALSE, uv_nrm_.data());
+    glUniformMatrix3fv(loc_uv_spec_, 1, GL_FALSE, uv_spec_.data());
+    glUniformMatrix3fv(loc_uv_ao_, 1, GL_FALSE, uv_ao_.data());
+    glUniform1i(loc_uv_src_diff_, uv_src_diff_);
+    glUniform1i(loc_uv_src_nrm_, uv_src_nrm_);
+    glUniform1i(loc_uv_src_spec_, uv_src_spec_);
+    glUniform1i(loc_uv_src_ao_, uv_src_ao_);
+    glUniform1i(loc_view_mode_, static_cast<int>(view_mode_));
+    glUniform1i(loc_diffuse_srgb_, diffuse_is_srgb_ ? 1 : 0);
 
     if (has_diff_) {
         glActiveTexture(GL_TEXTURE0);
@@ -357,6 +483,10 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     if (has_spec_) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, tex_spec_);
+    }
+    if (has_ao_) {
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, tex_ao_);
     }
 
     if (draw_tile) {
@@ -382,14 +512,15 @@ void GLRvmatPreview::cleanup_gl() {
     if (tex_diff_) glDeleteTextures(1, &tex_diff_);
     if (tex_nrm_) glDeleteTextures(1, &tex_nrm_);
     if (tex_spec_) glDeleteTextures(1, &tex_spec_);
+    if (tex_ao_) glDeleteTextures(1, &tex_ao_);
     if (prog_) glDeleteProgram(prog_);
     vao_sphere_ = vbo_sphere_ = ebo_sphere_ = 0;
     vao_tile_ = vbo_tile_ = ebo_tile_ = 0;
-    tex_diff_ = tex_nrm_ = tex_spec_ = 0;
+    tex_diff_ = tex_nrm_ = tex_spec_ = tex_ao_ = 0;
     prog_ = 0;
     index_count_sphere_ = 0;
     index_count_tile_ = 0;
-    has_diff_ = has_nrm_ = has_spec_ = false;
+    has_diff_ = has_nrm_ = has_spec_ = has_ao_ = false;
 }
 
 uint32_t GLRvmatPreview::compile_shader(uint32_t type, const char* src) {
@@ -468,6 +599,8 @@ void GLRvmatPreview::build_sphere_mesh() {
             vt.n[2] = vt.p[2];
             vt.uv[0] = u;
             vt.uv[1] = v;
+            vt.uv1[0] = u;
+            vt.uv1[1] = v;
             vt.t[0] = -sp;
             vt.t[1] = 0.0f;
             vt.t[2] = cp;
@@ -509,6 +642,9 @@ void GLRvmatPreview::build_sphere_mesh() {
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<void*>(offsetof(Vertex, t)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, uv1)));
     glBindVertexArray(0);
 
     index_count_sphere_ = static_cast<int>(idx.size());
@@ -516,10 +652,14 @@ void GLRvmatPreview::build_sphere_mesh() {
 
 void GLRvmatPreview::build_tile_mesh() {
     std::array<Vertex, 4> verts{};
-    verts[0] = {{-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-    verts[1] = {{1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-    verts[2] = {{-1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
-    verts[3] = {{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[0] = {{-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f},
+                {0.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[1] = {{1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f},
+                {1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[2] = {{-1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f},
+                {0.0f, 1.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
+    verts[3] = {{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f},
+                {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f}};
     std::array<uint32_t, 6> idx = {0, 1, 2, 2, 1, 3};
 
     glGenVertexArrays(1, &vao_tile_);
@@ -545,6 +685,9 @@ void GLRvmatPreview::build_tile_mesh() {
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<void*>(offsetof(Vertex, t)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, uv1)));
     glBindVertexArray(0);
 
     index_count_tile_ = static_cast<int>(idx.size());

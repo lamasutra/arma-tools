@@ -93,6 +93,12 @@ private:
     Gtk::ToggleButton rvmat_shape_sphere_;
     Gtk::ToggleButton rvmat_shape_tile_;
     bool rvmat_shape_updating_ = false;
+    Gtk::ToggleButton rvmat_view_final_;
+    Gtk::ToggleButton rvmat_view_albedo_;
+    Gtk::ToggleButton rvmat_view_normal_;
+    Gtk::ToggleButton rvmat_view_spec_;
+    Gtk::ToggleButton rvmat_view_ao_;
+    bool rvmat_view_updating_ = false;
     GLRvmatPreview rvmat_preview_;
     ModelViewPanel model_panel_;
 

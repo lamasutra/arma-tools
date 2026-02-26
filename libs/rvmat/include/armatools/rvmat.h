@@ -10,11 +10,21 @@
 
 namespace armatools::rvmat {
 
+struct UVTransform {
+    std::array<float, 3> aside{1.0f, 0.0f, 0.0f};
+    std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    std::array<float, 3> pos{0.0f, 0.0f, 0.0f};
+    bool valid = false;
+};
+
 struct TextureStage {
     int stage_number = -1;
     std::string class_name;
     std::string texture_path;
     std::string uv_source;
+    std::string filter;
+    std::string tex_gen;
+    UVTransform uv_transform;
 };
 
 struct Material {

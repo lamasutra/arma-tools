@@ -29,6 +29,17 @@ TEST(RvmatTest, ParsesCorePropertiesAndStages) {
     auto stage1 = std::make_unique<ConfigClass>();
     stage1->entries.push_back({"texture", StringEntry{"a3/data/diffuse_co.paa"}});
     stage1->entries.push_back({"uvSource", StringEntry{"tex"}});
+    ArrayEntry uv;
+    uv.elements.push_back(FloatElement{2.0f});
+    uv.elements.push_back(FloatElement{0.0f});
+    uv.elements.push_back(FloatElement{0.0f});
+    uv.elements.push_back(FloatElement{0.0f});
+    uv.elements.push_back(FloatElement{2.0f});
+    uv.elements.push_back(FloatElement{0.0f});
+    uv.elements.push_back(FloatElement{0.1f});
+    uv.elements.push_back(FloatElement{0.2f});
+    uv.elements.push_back(FloatElement{0.0f});
+    stage1->entries.push_back({"uvTransform", uv});
     cfg.root.entries.push_back({"Stage1", ClassEntryOwned{std::move(stage1)}});
 
     auto stage2 = std::make_unique<ConfigClass>();
@@ -49,6 +60,11 @@ TEST(RvmatTest, ParsesCorePropertiesAndStages) {
     EXPECT_EQ(m.stages[0].stage_number, 1);
     EXPECT_EQ(m.stages[0].texture_path, "a3/data/diffuse_co.paa");
     EXPECT_EQ(m.stages[0].uv_source, "tex");
+    EXPECT_TRUE(m.stages[0].uv_transform.valid);
+    EXPECT_FLOAT_EQ(m.stages[0].uv_transform.aside[0], 2.0f);
+    EXPECT_FLOAT_EQ(m.stages[0].uv_transform.up[1], 2.0f);
+    EXPECT_FLOAT_EQ(m.stages[0].uv_transform.pos[0], 0.1f);
+    EXPECT_FLOAT_EQ(m.stages[0].uv_transform.pos[1], 0.2f);
     EXPECT_EQ(m.stages[1].stage_number, 2);
     EXPECT_EQ(m.stages[1].texture_path, "a3/data/normal_nohq.paa");
 }
