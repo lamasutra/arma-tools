@@ -205,7 +205,10 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_mid_scale_);
     terrain3d_toolbar_.append(terrain3d_far_mat_label_);
     terrain3d_toolbar_.append(terrain3d_far_mat_scale_);
-    terrain3d_box_.append(terrain3d_toolbar_);
+
+    terrain3d_toolbar_scroll_.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::NEVER);
+    terrain3d_toolbar_scroll_.set_child(terrain3d_toolbar_);
+    terrain3d_box_.append(terrain3d_toolbar_scroll_);
 
     update_terrain3d_mode_options(true, true);
     terrain3d_view_.set_hexpand(true);
@@ -232,6 +235,19 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_overlay_.add_overlay(terrain3d_compass_overlay_);
     terrain3d_box_.append(terrain3d_overlay_);
     right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
+    terrain3d_view_.set_on_texture_debug_info([this](const std::string& info) {
+        const bool texture_mode = std::string(terrain3d_mode_combo_.get_active_id()) == "texture";
+        if (texture_mode && !info.empty()) {
+            terrain3d_debug_overlay_.set_text(info);
+            terrain3d_debug_overlay_.set_visible(true);
+        } else {
+            terrain3d_debug_overlay_.set_text("");
+            terrain3d_debug_overlay_.set_visible(false);
+        }
+    });
+    terrain3d_view_.set_on_compass_info([this](const std::string& info) {
+        if (!info.empty()) terrain3d_compass_overlay_.set_text(info);
+    });
 
     set_end_child(right_notebook_);
 
@@ -327,50 +343,42 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     terrain3d_mode_combo_.signal_changed().connect([this]() {
         if (terrain3d_mode_combo_updating_) return;
-        auto id = std::string(terrain3d_mode_combo_.get_active_id());
-        if (id == "texture" && !allow_texture_mode_) {
-            terrain3d_mode_combo_.set_active_id("elevation");
-            return;
-        }
-        if (id == "satellite" && !allow_satellite_mode_) {
-            terrain3d_mode_combo_.set_active_id("elevation");
-            return;
-        }
-        if (id == "surface") terrain3d_view_.set_color_mode(1);
-        else if (id == "texture") terrain3d_view_.set_color_mode(2);
-        else if (id == "satellite") {
-            terrain3d_view_.set_color_mode(3);
-            ensure_satellite_palette_loaded();
-        }
-        else terrain3d_view_.set_color_mode(0);
-        if (id != "texture") {
-            terrain3d_debug_overlay_.set_text("");
-            terrain3d_debug_overlay_.set_visible(false);
-        }
+        apply_terrain3d_mode_from_combo();
     });
 }
 
 void TabWrpInfo::update_terrain3d_mode_options(bool allow_texture, bool allow_satellite) {
     allow_texture_mode_ = allow_texture;
     allow_satellite_mode_ = allow_satellite;
+    apply_terrain3d_mode_from_combo();
+}
 
+void TabWrpInfo::apply_terrain3d_mode_from_combo() {
     auto id = std::string(terrain3d_mode_combo_.get_active_id());
     if (id == "texture" && !allow_texture_mode_) {
+        terrain3d_mode_combo_updating_ = true;
         terrain3d_mode_combo_.set_active_id("elevation");
+        terrain3d_mode_combo_updating_ = false;
         id = "elevation";
     }
     if (id == "satellite" && !allow_satellite_mode_) {
+        terrain3d_mode_combo_updating_ = true;
         terrain3d_mode_combo_.set_active_id("elevation");
+        terrain3d_mode_combo_updating_ = false;
         id = "elevation";
     }
-
     if (id == "surface") terrain3d_view_.set_color_mode(1);
     else if (id == "texture") terrain3d_view_.set_color_mode(2);
     else if (id == "satellite") {
         terrain3d_view_.set_color_mode(3);
         ensure_satellite_palette_loaded();
+    } else {
+        terrain3d_view_.set_color_mode(0);
     }
-    else terrain3d_view_.set_color_mode(0);
+    if (id != "texture") {
+        terrain3d_debug_overlay_.set_text("");
+        terrain3d_debug_overlay_.set_visible(false);
+    }
 }
 
 TabWrpInfo::~TabWrpInfo() {

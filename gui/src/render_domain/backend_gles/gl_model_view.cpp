@@ -1051,6 +1051,9 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
 }
 
 bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
+    // Reset framebuffer state in case previous UI GL passes left scissor/viewport modified.
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, std::max(1, get_width()), std::max(1, get_height()));
     glClearColor(bg_color_[0], bg_color_[1], bg_color_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1234,10 +1237,6 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glBindVertexArray(0);
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
-
-    if (const auto& bridge = render_domain::runtime_state().ui_render_bridge) {
-        bridge->render_in_current_context(get_width(), get_height());
-    }
 
     log_gl_errors("GLModelView::on_render_gl");
     return true;

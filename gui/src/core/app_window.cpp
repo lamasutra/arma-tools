@@ -306,6 +306,9 @@ void AppWindow::toggle_ui_overlay() {
 
 bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
     const auto& state = ui_domain::runtime_state();
+    const bool primary_is_imgui = state.backend_instance &&
+        state.backend_instance->valid() &&
+        state.backend_instance->backend_id() == "imgui";
 
     auto dispatch = [&](const std::shared_ptr<ui_domain::BackendInstance>& instance) -> int {
         if (!instance || !instance->valid()) return UI_STATUS_OK;
@@ -321,7 +324,9 @@ bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
 
     // Overlay gets first chance to consume pointer/keyboard events.
     const int overlay_status = dispatch(state.overlay_backend_instance);
-    if (overlay_status == UI_STATUS_EVENT_CONSUMED) {
+    // Companion overlays (e.g. imgui on top of gtk) are informative and should
+    // never steal input from native GTK widgets.
+    if (overlay_status == UI_STATUS_EVENT_CONSUMED && primary_is_imgui) {
         return true;
     }
 

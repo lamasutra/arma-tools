@@ -91,6 +91,7 @@ private:
 
     // Page 4: Terrain 3D
     Gtk::Box terrain3d_box_{Gtk::Orientation::VERTICAL};
+    Gtk::ScrolledWindow terrain3d_toolbar_scroll_;
     Gtk::Box terrain3d_toolbar_{Gtk::Orientation::HORIZONTAL, 4};
     Gtk::Label terrain3d_mode_label_{"Mode:"};
     Gtk::ComboBoxText terrain3d_mode_combo_;
@@ -180,6 +181,7 @@ private:
     void ensure_objects_loaded();
     void ensure_satellite_palette_loaded();
     void update_terrain3d_mode_options(bool allow_texture, bool allow_satellite);
+    void apply_terrain3d_mode_from_combo();
     std::function<void(const std::string&)> on_open_p3d_info_;
 
     struct DisplayItem {
