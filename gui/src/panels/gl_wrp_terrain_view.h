@@ -35,6 +35,9 @@ public:
     void set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects);
     void set_wireframe(bool on);
     void set_show_objects(bool on);
+    void set_object_max_distance(float distance_m);
+    void set_object_category_filters(bool buildings, bool vegetation, bool rocks, bool props);
+    void set_show_object_bounds(bool on);
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
@@ -166,9 +169,18 @@ private:
     bool show_patch_boundaries_ = false;
     bool show_patch_lod_colors_ = false;
     bool show_tile_boundaries_ = false;
+    bool show_object_bounds_ = false;
+    bool object_filter_buildings_ = true;
+    bool object_filter_vegetation_ = true;
+    bool object_filter_rocks_ = true;
+    bool object_filter_props_ = true;
     float terrain_far_distance_ = 25000.0f;
+    float object_max_distance_ = 4500.0f;
     float material_mid_distance_ = 1800.0f;
     float material_far_distance_ = 5200.0f;
+    float object_spatial_cell_size_ = 160.0f;
+    uint64_t object_asset_stamp_ = 1;
+    size_t object_asset_budget_ = 160;
 
     // Terrain geometry.
     std::vector<TerrainPatch> terrain_patches_;
@@ -185,6 +197,13 @@ private:
     uint32_t points_vao_ = 0;
     uint32_t points_vbo_ = 0;
     int points_count_ = 0;
+    uint32_t prog_objects_ = 0;
+    int loc_mvp_objects_ = -1;
+    int loc_light_dir_objects_ = -1;
+    int loc_color_objects_ = -1;
+    int loc_texture_objects_ = -1;
+    int loc_has_texture_objects_ = -1;
+    uint32_t objects_instance_vbo_ = 0;
     uint32_t prog_selected_object_ = 0;
     int loc_mvp_selected_object_ = -1;
     int loc_offset_selected_object_ = -1;
@@ -208,6 +227,62 @@ private:
         std::vector<SelectedObjectLodMesh> lod_meshes;
         int current_lod = 0;
     };
+
+    enum class ObjectCategory : uint8_t {
+        Buildings = 0,
+        Vegetation = 1,
+        Rocks = 2,
+        Props = 3
+    };
+
+    struct ObjectMeshGroup {
+        uint32_t vao = 0;
+        uint32_t vbo = 0;
+        int vertex_count = 0;
+        uint32_t texture = 0;
+        bool has_alpha = false;
+    };
+
+    struct ObjectLodMesh {
+        std::vector<ObjectMeshGroup> groups;
+        float resolution = 0.0f;
+        float bounding_radius = 1.0f;
+    };
+
+    struct ObjectModelAsset {
+        enum class State : uint8_t {
+            Unloaded = 0,
+            Ready = 1,
+            Failed = 2
+        };
+        State state = State::Unloaded;
+        std::string model_name;
+        std::vector<ObjectLodMesh> lod_meshes;
+        GLuint fallback_texture = 0;
+        float bounding_radius = 1.0f;
+        uint64_t last_used_stamp = 0;
+        bool missing_logged = false;
+    };
+
+    struct ObjectInstance {
+        size_t object_index = static_cast<size_t>(-1);
+        uint32_t model_id = 0;
+        ObjectCategory category = ObjectCategory::Props;
+        float model[16] = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f};
+        float position[3] = {0.0f, 0.0f, 0.0f};
+        float max_scale = 1.0f;
+        float bound_radius = 1.0f;
+        int current_lod = 0;
+    };
+
+    std::unordered_map<std::string, uint32_t> object_model_lookup_;
+    std::vector<ObjectModelAsset> object_model_assets_;
+    std::vector<ObjectInstance> object_instances_;
+    std::unordered_map<int64_t, std::vector<uint32_t>> object_spatial_grid_;
 
     struct TerrainProgram {
         uint32_t program = 0;
@@ -281,6 +356,15 @@ private:
     int terrain_draw_calls_ = 0;
     int visible_patch_count_ = 0;
     int last_loaded_texture_count_ = 0;
+    int object_candidate_count_ = 0;
+    int object_visible_count_ = 0;
+    int object_rendered_instances_ = 0;
+    int object_distance_culled_count_ = 0;
+    int object_frustum_culled_count_ = 0;
+    int object_filtered_count_ = 0;
+    int object_placeholder_count_ = 0;
+    int object_draw_calls_ = 0;
+    int object_instanced_batches_ = 0;
     uint64_t tile_generation_ = 1;
     bool atlas_dirty_ = true;
     bool atlas_empty_logged_ = false;
@@ -338,6 +422,27 @@ private:
     void cleanup_patch_buffers();
     void cleanup_lod_buffers();
     void rebuild_object_buffers();
+    void clear_object_scene();
+    void cleanup_object_model_assets();
+    void build_object_instances();
+    void build_object_instance_matrix(const armatools::wrp::ObjectRecord& obj, float* out_model) const;
+    static int64_t spatial_cell_key(int cx, int cz);
+    static ObjectCategory classify_object_category(const std::string& model_name);
+    static std::array<float, 3> object_category_color(ObjectCategory category);
+    bool object_category_enabled(ObjectCategory category) const;
+    float object_category_max_distance(ObjectCategory category) const;
+    bool ensure_object_model_asset(uint32_t model_id);
+    bool build_object_model_asset(ObjectModelAsset& asset, const armatools::p3d::P3DFile& model);
+    void delete_object_model_asset_gl(ObjectModelAsset& asset);
+    void evict_object_model_assets();
+    int choose_object_lod(ObjectInstance& instance,
+                          const ObjectModelAsset& asset,
+                          float distance_m,
+                          float projected_radius_px) const;
+    void render_visible_object_meshes(const float* mvp, const float* eye);
+    void append_object_bounds_vertices(const ObjectInstance& instance,
+                                       const std::array<float, 3>& color,
+                                       std::vector<float>& out) const;
     bool build_selected_object_render(size_t object_index, const armatools::p3d::P3DFile& model);
     void clear_selected_object_render();
     int choose_selected_object_lod(const float* eye);

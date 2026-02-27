@@ -99,11 +99,18 @@ private:
     Gtk::ToggleButton terrain3d_camera_mode_btn_;
     Gtk::ToggleButton terrain3d_wireframe_btn_;
     Gtk::ToggleButton terrain3d_objects_btn_;
+    Gtk::ToggleButton terrain3d_obj_buildings_btn_;
+    Gtk::ToggleButton terrain3d_obj_vegetation_btn_;
+    Gtk::ToggleButton terrain3d_obj_rocks_btn_;
+    Gtk::ToggleButton terrain3d_obj_props_btn_;
+    Gtk::ToggleButton terrain3d_obj_bounds_btn_;
     Gtk::ToggleButton terrain3d_patch_bounds_btn_;
     Gtk::ToggleButton terrain3d_lod_tint_btn_;
     Gtk::ToggleButton terrain3d_tile_bounds_btn_;
     Gtk::Label terrain3d_far_label_{"Far:"};
     Gtk::Scale terrain3d_far_scale_{Gtk::Orientation::HORIZONTAL};
+    Gtk::Label terrain3d_obj_far_label_{"Obj Far:"};
+    Gtk::Scale terrain3d_obj_far_scale_{Gtk::Orientation::HORIZONTAL};
     Gtk::Label terrain3d_mid_label_{"Mat Mid:"};
     Gtk::Scale terrain3d_mid_scale_{Gtk::Orientation::HORIZONTAL};
     Gtk::Label terrain3d_far_mat_label_{"Mat Far:"};

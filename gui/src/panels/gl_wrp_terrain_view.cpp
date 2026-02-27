@@ -5,6 +5,7 @@
 #include "log_panel.h"
 #include "p3d_model_loader.h"
 #include "textures_loader.h"
+#include <armatools/armapath.h>
 #include <armatools/objcat.h>
 
 #include <epoxy/gl.h>
@@ -15,6 +16,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -32,6 +34,44 @@ static constexpr const char* kPointVertResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.vert";
 static constexpr const char* kPointFragResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.frag";
+static constexpr const char* kObjectsVertSrc = R"(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUV;
+layout(location=3) in vec4 iM0;
+layout(location=4) in vec4 iM1;
+layout(location=5) in vec4 iM2;
+layout(location=6) in vec4 iM3;
+uniform mat4 uMVP;
+out vec3 vNormal;
+out vec2 vUV;
+void main() {
+    mat4 model = mat4(iM0, iM1, iM2, iM3);
+    vec4 world = model * vec4(aPos, 1.0);
+    gl_Position = uMVP * world;
+    mat3 nmat = mat3(model);
+    vNormal = normalize(nmat * aNormal);
+    vUV = aUV;
+}
+)";
+static constexpr const char* kObjectsFragSrc = R"(
+#version 330 core
+in vec3 vNormal;
+in vec2 vUV;
+uniform vec3 uLightDir;
+uniform vec3 uColor;
+uniform sampler2D uTexture;
+uniform int uHasTexture;
+out vec4 FragColor;
+void main() {
+    vec4 base = (uHasTexture != 0) ? texture(uTexture, vUV) : vec4(uColor, 1.0);
+    if (base.a < 0.01) discard;
+    float ndotl = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    float lit = 0.30 + 0.70 * ndotl;
+    FragColor = vec4(base.rgb * lit, base.a);
+}
+)";
 static constexpr const char* kSelectedObjectVertSrc = R"(
 #version 330 core
 layout(location=0) in vec3 aPos;
@@ -158,6 +198,16 @@ static bool aabb_inside_frustum(const std::array<FrustumPlane, 6>& frustum,
     return true;
 }
 
+static bool sphere_inside_frustum(const std::array<FrustumPlane, 6>& frustum,
+                                  const float* center,
+                                  float radius) {
+    for (const auto& p : frustum) {
+        const float d = p.a * center[0] + p.b * center[1] + p.c * center[2] + p.d;
+        if (d < -radius) return false;
+    }
+    return true;
+}
+
 static std::array<float, 3> lod_tint_color(int lod) {
     switch (lod) {
     case 0: return {0.10f, 0.85f, 0.10f};
@@ -183,6 +233,31 @@ static std::vector<uint8_t> make_missing_checkerboard_rgba() {
         }
     }
     return out;
+}
+
+static bool image_has_alpha_channel(const armatools::paa::Image& img) {
+    if (img.width <= 0 || img.height <= 0 || img.pixels.empty()) return false;
+    const size_t count = static_cast<size_t>(img.width) * static_cast<size_t>(img.height);
+    if (img.pixels.size() < count * 4u) return false;
+    for (size_t i = 0; i < count; ++i) {
+        if (img.pixels[i * 4u + 3u] < 255u) return true;
+    }
+    return false;
+}
+
+static GLuint upload_rgba_texture_2d(const uint8_t* rgba, int width, int height) {
+    if (!rgba || width <= 0 || height <= 0) return 0;
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
 }
 
 static uint32_t make_shader_key(int surface_cap, int quality_tier, bool has_normals, bool has_macro) {
@@ -498,6 +573,15 @@ void GLWrpTerrainView::clear_world() {
     terrain_draw_calls_ = 0;
     visible_patch_count_ = 0;
     last_loaded_texture_count_ = 0;
+    object_candidate_count_ = 0;
+    object_visible_count_ = 0;
+    object_rendered_instances_ = 0;
+    object_distance_culled_count_ = 0;
+    object_frustum_culled_count_ = 0;
+    object_filtered_count_ = 0;
+    object_placeholder_count_ = 0;
+    object_draw_calls_ = 0;
+    object_instanced_batches_ = 0;
 
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
@@ -520,6 +604,7 @@ void GLWrpTerrainView::clear_world() {
     object_points_.clear();
     object_positions_.clear();
     objects_.clear();
+    clear_object_scene();
     clear_selected_object_render();
     min_elevation_ = 0.0f;
     max_elevation_ = 1.0f;
@@ -720,23 +805,21 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
 
 void GLWrpTerrainView::set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects) {
     objects_ = objects;
+    build_object_instances();
+
     object_points_.clear();
     object_positions_.clear();
     object_points_.reserve(objects.size() * 6);
     object_positions_.reserve(objects.size() * 3);
-    for (const auto& obj : objects) {
-        const auto cat = armatools::objcat::category(obj.model_name);
+    for (const auto& inst : object_instances_) {
+        const auto color = object_category_color(inst.category);
         float cr = 0.85f, cg = 0.85f, cb = 0.85f;
-        if (cat == "vegetation") { cr = 0.15f; cg = 0.75f; cb = 0.20f; }
-        else if (cat == "buildings") { cr = 0.90f; cg = 0.20f; cb = 0.20f; }
-        else if (cat == "rocks") { cr = 0.50f; cg = 0.50f; cb = 0.52f; }
-        else if (cat == "walls") { cr = 0.72f; cg = 0.64f; cb = 0.52f; }
-        else if (cat == "military") { cr = 0.62f; cg = 0.62f; cb = 0.25f; }
-        else if (cat == "infrastructure") { cr = 0.20f; cg = 0.20f; cb = 0.20f; }
-        const float px = static_cast<float>(obj.position[0]);
-        const float py = static_cast<float>(obj.position[1]) + 1.0f;
-        const float src_z = static_cast<float>(obj.position[2]);
-        const float pz = flip_terrain_z_ ? (terrain_max_z_ - src_z) : src_z;
+        cr = color[0];
+        cg = color[1];
+        cb = color[2];
+        const float px = inst.position[0];
+        const float py = inst.position[1] + 1.0f;
+        const float pz = inst.position[2];
         object_points_.push_back(px);
         object_points_.push_back(py);
         object_points_.push_back(pz);
@@ -759,6 +842,25 @@ void GLWrpTerrainView::set_wireframe(bool on) {
 
 void GLWrpTerrainView::set_show_objects(bool on) {
     show_objects_ = on;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_object_max_distance(float distance_m) {
+    object_max_distance_ = std::max(50.0f, distance_m);
+    queue_render();
+}
+
+void GLWrpTerrainView::set_object_category_filters(
+    bool buildings, bool vegetation, bool rocks, bool props) {
+    object_filter_buildings_ = buildings;
+    object_filter_vegetation_ = vegetation;
+    object_filter_rocks_ = rocks;
+    object_filter_props_ = props;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_show_object_bounds(bool on) {
+    show_object_bounds_ = on;
     queue_render();
 }
 
@@ -849,6 +951,13 @@ void GLWrpTerrainView::set_on_compass_info(std::function<void(const std::string&
 void GLWrpTerrainView::set_model_loader_service(
     const std::shared_ptr<P3dModelLoaderService>& service) {
     model_loader_ = service;
+    if (model_loader_) {
+        for (auto& asset : object_model_assets_) {
+            if (asset.state == ObjectModelAsset::State::Failed) {
+                asset.state = ObjectModelAsset::State::Unloaded;
+            }
+        }
+    }
 }
 
 void GLWrpTerrainView::schedule_texture_rebuild() {
@@ -1055,6 +1164,13 @@ void GLWrpTerrainView::on_realize_gl() {
     glDeleteShader(pvs);
     glDeleteShader(pfs);
 
+    auto ovs_main = compile_shader(GL_VERTEX_SHADER, kObjectsVertSrc);
+    auto ofs_main = compile_shader(GL_FRAGMENT_SHADER, kObjectsFragSrc);
+    prog_objects_ = link_program(ovs_main, ofs_main);
+    glDeleteShader(ovs_main);
+    glDeleteShader(ofs_main);
+    glGenBuffers(1, &objects_instance_vbo_);
+
     auto ovs = compile_shader(GL_VERTEX_SHADER, kSelectedObjectVertSrc);
     auto ofs = compile_shader(GL_FRAGMENT_SHADER, kSelectedObjectFragSrc);
     prog_selected_object_ = link_program(ovs, ofs);
@@ -1062,6 +1178,11 @@ void GLWrpTerrainView::on_realize_gl() {
     glDeleteShader(ofs);
 
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
+    loc_mvp_objects_ = glGetUniformLocation(prog_objects_, "uMVP");
+    loc_light_dir_objects_ = glGetUniformLocation(prog_objects_, "uLightDir");
+    loc_color_objects_ = glGetUniformLocation(prog_objects_, "uColor");
+    loc_texture_objects_ = glGetUniformLocation(prog_objects_, "uTexture");
+    loc_has_texture_objects_ = glGetUniformLocation(prog_objects_, "uHasTexture");
     loc_mvp_selected_object_ = glGetUniformLocation(prog_selected_object_, "uMVP");
     loc_offset_selected_object_ = glGetUniformLocation(prog_selected_object_, "uOffset");
     loc_light_dir_selected_object_ = glGetUniformLocation(prog_selected_object_, "uLightDir");
@@ -1235,6 +1356,8 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
+    render_visible_object_meshes(mvp, eye);
+
     if (show_objects_ && selected_object_.valid && prog_selected_object_
         && !selected_object_.lod_meshes.empty()) {
         const int lod = choose_selected_object_lod(eye);
@@ -1267,7 +1390,8 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         }
     }
 
-    if (show_objects_ && points_vao_ && points_count_ > 0 && prog_points_) {
+    if (show_objects_ && points_vao_ && points_count_ > 0 && prog_points_
+        && object_placeholder_count_ > 0) {
         glUseProgram(prog_points_);
         glUniformMatrix4fv(loc_mvp_points_, 1, GL_FALSE, mvp);
         glBindVertexArray(points_vao_);
@@ -1370,11 +1494,13 @@ void GLWrpTerrainView::cleanup_lod_buffers() {
 void GLWrpTerrainView::cleanup_gl() {
     cleanup_patch_buffers();
     cleanup_lod_buffers();
+    cleanup_object_model_assets();
     clear_selected_object_render();
 
     if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
     if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
     points_count_ = 0;
+    if (objects_instance_vbo_) { glDeleteBuffers(1, &objects_instance_vbo_); objects_instance_vbo_ = 0; }
 
     for (auto& [_, program] : terrain_program_cache_) {
         if (program.program) glDeleteProgram(program.program);
@@ -1383,6 +1509,7 @@ void GLWrpTerrainView::cleanup_gl() {
     terrain_program_cache_.clear();
     active_terrain_program_key_ = 0;
     if (prog_points_) { glDeleteProgram(prog_points_); prog_points_ = 0; }
+    if (prog_objects_) { glDeleteProgram(prog_objects_); prog_objects_ = 0; }
     if (prog_selected_object_) {
         glDeleteProgram(prog_selected_object_);
         prog_selected_object_ = 0;
@@ -2320,6 +2447,796 @@ void GLWrpTerrainView::stream_visible_tile_textures() {
     if (pending) queue_render();
 }
 
+void GLWrpTerrainView::clear_object_scene() {
+    cleanup_object_model_assets();
+    object_model_lookup_.clear();
+    object_model_assets_.clear();
+    object_instances_.clear();
+    object_spatial_grid_.clear();
+}
+
+void GLWrpTerrainView::cleanup_object_model_assets() {
+    if (!get_realized()) {
+        for (auto& asset : object_model_assets_) {
+            for (auto& lod : asset.lod_meshes) {
+                lod.groups.clear();
+                lod.resolution = 0.0f;
+                lod.bounding_radius = 1.0f;
+            }
+            asset.lod_meshes.clear();
+            asset.fallback_texture = 0;
+            asset.state = ObjectModelAsset::State::Unloaded;
+            asset.bounding_radius = 1.0f;
+        }
+        return;
+    }
+    make_current();
+    if (has_error()) return;
+    for (auto& asset : object_model_assets_) {
+        delete_object_model_asset_gl(asset);
+        asset.lod_meshes.clear();
+        asset.state = ObjectModelAsset::State::Unloaded;
+        asset.bounding_radius = 1.0f;
+    }
+}
+
+int64_t GLWrpTerrainView::spatial_cell_key(int cx, int cz) {
+    const uint64_t ux = static_cast<uint64_t>(static_cast<uint32_t>(cx));
+    const uint64_t uz = static_cast<uint64_t>(static_cast<uint32_t>(cz));
+    return static_cast<int64_t>((ux << 32) | uz);
+}
+
+GLWrpTerrainView::ObjectCategory GLWrpTerrainView::classify_object_category(
+    const std::string& model_name) {
+    const auto cat = armatools::objcat::category(model_name);
+    if (cat == "buildings") return ObjectCategory::Buildings;
+    if (cat == "vegetation") return ObjectCategory::Vegetation;
+    if (cat == "rocks") return ObjectCategory::Rocks;
+    return ObjectCategory::Props;
+}
+
+std::array<float, 3> GLWrpTerrainView::object_category_color(ObjectCategory category) {
+    switch (category) {
+    case ObjectCategory::Buildings: return {0.90f, 0.30f, 0.24f};
+    case ObjectCategory::Vegetation: return {0.20f, 0.74f, 0.26f};
+    case ObjectCategory::Rocks: return {0.66f, 0.66f, 0.69f};
+    default: return {0.84f, 0.79f, 0.63f};
+    }
+}
+
+bool GLWrpTerrainView::object_category_enabled(ObjectCategory category) const {
+    switch (category) {
+    case ObjectCategory::Buildings: return object_filter_buildings_;
+    case ObjectCategory::Vegetation: return object_filter_vegetation_;
+    case ObjectCategory::Rocks: return object_filter_rocks_;
+    default: return object_filter_props_;
+    }
+}
+
+float GLWrpTerrainView::object_category_max_distance(ObjectCategory category) const {
+    switch (category) {
+    case ObjectCategory::Buildings: return object_max_distance_;
+    case ObjectCategory::Vegetation: return object_max_distance_ * 0.72f;
+    case ObjectCategory::Rocks: return object_max_distance_ * 0.86f;
+    default: return object_max_distance_ * 0.58f;
+    }
+}
+
+void GLWrpTerrainView::build_object_instance_matrix(
+    const armatools::wrp::ObjectRecord& obj, float* out_model) const {
+    static const float kIdentity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
+    std::memcpy(out_model, kIdentity, sizeof(kIdentity));
+
+    const auto& t = obj.transform;
+    bool has_basis = false;
+    for (int i = 0; i < 9; ++i) {
+        if (std::isfinite(t[static_cast<size_t>(i)]) && std::abs(t[static_cast<size_t>(i)]) > 1e-6f) {
+            has_basis = true;
+            break;
+        }
+    }
+
+    if (has_basis) {
+        out_model[0] = std::isfinite(t[0]) ? t[0] : 1.0f;
+        out_model[1] = std::isfinite(t[1]) ? t[1] : 0.0f;
+        out_model[2] = std::isfinite(t[2]) ? t[2] : 0.0f;
+        out_model[4] = std::isfinite(t[3]) ? t[3] : 0.0f;
+        out_model[5] = std::isfinite(t[4]) ? t[4] : 1.0f;
+        out_model[6] = std::isfinite(t[5]) ? t[5] : 0.0f;
+        out_model[8] = std::isfinite(t[6]) ? t[6] : 0.0f;
+        out_model[9] = std::isfinite(t[7]) ? t[7] : 0.0f;
+        out_model[10] = std::isfinite(t[8]) ? t[8] : 1.0f;
+        out_model[12] = std::isfinite(t[9]) ? t[9] : static_cast<float>(obj.position[0]);
+        out_model[13] = std::isfinite(t[10]) ? t[10] : static_cast<float>(obj.position[1]);
+        out_model[14] = std::isfinite(t[11]) ? t[11] : static_cast<float>(obj.position[2]);
+    } else {
+        const float s = (std::isfinite(obj.scale) && obj.scale > 0.0)
+            ? static_cast<float>(obj.scale) : 1.0f;
+        out_model[0] = s;
+        out_model[5] = s;
+        out_model[10] = s;
+        out_model[12] = static_cast<float>(obj.position[0]);
+        out_model[13] = static_cast<float>(obj.position[1]);
+        out_model[14] = static_cast<float>(obj.position[2]);
+    }
+
+    // P3D local X is opposite to world/object transform X.
+    out_model[0] = -out_model[0];
+    out_model[1] = -out_model[1];
+    out_model[2] = -out_model[2];
+
+    if (flip_terrain_z_) {
+        const float src_tz = out_model[14];
+        out_model[2] = -out_model[2];
+        out_model[6] = -out_model[6];
+        out_model[10] = -out_model[10];
+        out_model[14] = terrain_max_z_ - src_tz;
+    }
+}
+
+void GLWrpTerrainView::build_object_instances() {
+    clear_object_scene();
+    if (objects_.empty()) return;
+
+    if (world_size_x_ > 0.0f) {
+        object_spatial_cell_size_ = std::clamp(world_size_x_ / 96.0f, 60.0f, 260.0f);
+    }
+
+    object_instances_.reserve(objects_.size());
+    object_model_lookup_.reserve(objects_.size());
+
+    const float cell = std::max(10.0f, object_spatial_cell_size_);
+    for (size_t i = 0; i < objects_.size(); ++i) {
+        const auto& obj = objects_[i];
+        const std::string model_key = armatools::armapath::to_slash_lower(obj.model_name);
+        if (model_key.empty()) continue;
+
+        uint32_t model_id = 0;
+        auto model_it = object_model_lookup_.find(model_key);
+        if (model_it == object_model_lookup_.end()) {
+            model_id = static_cast<uint32_t>(object_model_assets_.size());
+            object_model_lookup_.emplace(model_key, model_id);
+            ObjectModelAsset asset;
+            asset.model_name = model_key;
+            object_model_assets_.push_back(std::move(asset));
+        } else {
+            model_id = model_it->second;
+        }
+
+        ObjectInstance inst;
+        inst.object_index = i;
+        inst.model_id = model_id;
+        inst.category = classify_object_category(model_key);
+        build_object_instance_matrix(obj, inst.model);
+        inst.position[0] = inst.model[12];
+        inst.position[1] = inst.model[13];
+        inst.position[2] = inst.model[14];
+
+        const float sx = std::sqrt(inst.model[0] * inst.model[0]
+                                 + inst.model[1] * inst.model[1]
+                                 + inst.model[2] * inst.model[2]);
+        const float sy = std::sqrt(inst.model[4] * inst.model[4]
+                                 + inst.model[5] * inst.model[5]
+                                 + inst.model[6] * inst.model[6]);
+        const float sz = std::sqrt(inst.model[8] * inst.model[8]
+                                 + inst.model[9] * inst.model[9]
+                                 + inst.model[10] * inst.model[10]);
+        inst.max_scale = std::max(0.1f, std::max(sx, std::max(sy, sz)));
+        inst.bound_radius = std::max(1.0f, inst.max_scale * 2.0f);
+
+        const uint32_t inst_idx = static_cast<uint32_t>(object_instances_.size());
+        object_instances_.push_back(inst);
+
+        const int cx = static_cast<int>(std::floor(inst.position[0] / cell));
+        const int cz = static_cast<int>(std::floor(inst.position[2] / cell));
+        object_spatial_grid_[spatial_cell_key(cx, cz)].push_back(inst_idx);
+    }
+}
+
+void GLWrpTerrainView::delete_object_model_asset_gl(ObjectModelAsset& asset) {
+    std::unordered_set<GLuint> textures_to_delete;
+    for (auto& lod : asset.lod_meshes) {
+        for (auto& group : lod.groups) {
+            if (group.vao) glDeleteVertexArrays(1, &group.vao);
+            if (group.vbo) glDeleteBuffers(1, &group.vbo);
+            if (group.texture && group.texture != asset.fallback_texture)
+                textures_to_delete.insert(group.texture);
+            group.vao = 0;
+            group.vbo = 0;
+            group.vertex_count = 0;
+            group.texture = 0;
+            group.has_alpha = false;
+        }
+        lod.groups.clear();
+        lod.resolution = 0.0f;
+        lod.bounding_radius = 1.0f;
+    }
+    for (GLuint tex : textures_to_delete) {
+        glDeleteTextures(1, &tex);
+    }
+    if (asset.fallback_texture) {
+        glDeleteTextures(1, &asset.fallback_texture);
+        asset.fallback_texture = 0;
+    }
+}
+
+bool GLWrpTerrainView::build_object_model_asset(
+    ObjectModelAsset& asset, const armatools::p3d::P3DFile& model) {
+    delete_object_model_asset_gl(asset);
+    asset.lod_meshes.clear();
+    asset.bounding_radius = 1.0f;
+
+    std::vector<const armatools::p3d::LOD*> render_lods;
+    render_lods.reserve(model.lods.size());
+    for (const auto& lod : model.lods) {
+        if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
+    }
+    if (render_lods.empty()) return false;
+
+    std::sort(render_lods.begin(), render_lods.end(),
+              [](const armatools::p3d::LOD* a, const armatools::p3d::LOD* b) {
+                  return a->resolution < b->resolution;
+              });
+    if (render_lods.size() > 8) render_lods.resize(8);
+
+    std::unordered_map<std::string, std::pair<GLuint, bool>> texture_cache;
+    auto ensure_checkerboard_fallback = [&]() -> GLuint {
+        if (asset.fallback_texture != 0) return asset.fallback_texture;
+        const auto checker = make_missing_checkerboard_rgba();
+        asset.fallback_texture = upload_rgba_texture_2d(checker.data(), 4, 4);
+        return asset.fallback_texture;
+    };
+    auto load_texture_key = [&](const std::string& key)
+        -> std::optional<std::pair<GLuint, bool>> {
+        if (key.empty() || !texture_loader_) return std::nullopt;
+        const auto norm = armatools::armapath::to_slash_lower(key);
+        auto it = texture_cache.find(norm);
+        if (it != texture_cache.end()) return it->second;
+
+        std::optional<TexturesLoaderService::TextureData> td = texture_loader_->load_texture(norm);
+        if (!td && std::filesystem::path(norm).extension().empty()) {
+            td = texture_loader_->load_texture(norm + ".paa");
+            if (!td) td = texture_loader_->load_texture(norm + ".pac");
+        }
+        if (!td || td->image.width <= 0 || td->image.height <= 0 || td->image.pixels.empty())
+            return std::nullopt;
+
+        const GLuint gl_tex = upload_rgba_texture_2d(
+            td->image.pixels.data(), td->image.width, td->image.height);
+        if (gl_tex == 0) return std::nullopt;
+        const bool alpha = image_has_alpha_channel(td->image);
+        texture_cache[norm] = {gl_tex, alpha};
+        return texture_cache[norm];
+    };
+
+    for (const auto* lod : render_lods) {
+        std::unordered_map<std::string, std::vector<float>> grouped_verts;
+        grouped_verts.reserve(lod->face_data.size());
+
+        for (const auto& face : lod->face_data) {
+            if (face.vertices.size() < 3) continue;
+            std::string tex_key = armatools::armapath::to_slash_lower(face.texture);
+            if (tex_key.empty())
+                tex_key = armatools::armapath::to_slash_lower(face.material);
+            auto& verts = grouped_verts[tex_key];
+            verts.reserve(verts.size() + (face.vertices.size() - 2) * 24u);
+
+            for (size_t i = 1; i + 1 < face.vertices.size(); ++i) {
+                const size_t tri[3] = {0, i, i + 1};
+                float tri_pos[3][3] = {};
+                float tri_nrm[3][3] = {};
+                float tri_uv[3][2] = {};
+                bool has_vertex_normals = true;
+                for (int t = 0; t < 3; ++t) {
+                    const auto& fv = face.vertices[tri[t]];
+                    if (fv.point_index < lod->vertices.size()) {
+                        const auto& p = lod->vertices[fv.point_index];
+                        tri_pos[t][0] = p[0];
+                        tri_pos[t][1] = p[1];
+                        tri_pos[t][2] = p[2];
+                    }
+                    if (fv.normal_index >= 0
+                        && static_cast<size_t>(fv.normal_index) < lod->normals.size()) {
+                        const auto& n = lod->normals[static_cast<size_t>(fv.normal_index)];
+                        tri_nrm[t][0] = n[0];
+                        tri_nrm[t][1] = n[1];
+                        tri_nrm[t][2] = n[2];
+                        vec3_normalize(tri_nrm[t]);
+                    } else {
+                        has_vertex_normals = false;
+                    }
+                    tri_uv[t][0] = std::isfinite(fv.uv[0]) ? fv.uv[0] : 0.0f;
+                    tri_uv[t][1] = std::isfinite(fv.uv[1]) ? fv.uv[1] : 0.0f;
+                }
+                if (!has_vertex_normals) {
+                    float e1[3] = {
+                        tri_pos[1][0] - tri_pos[0][0],
+                        tri_pos[1][1] - tri_pos[0][1],
+                        tri_pos[1][2] - tri_pos[0][2]};
+                    float e2[3] = {
+                        tri_pos[2][0] - tri_pos[0][0],
+                        tri_pos[2][1] - tri_pos[0][1],
+                        tri_pos[2][2] - tri_pos[0][2]};
+                    float fn[3];
+                    vec3_cross(fn, e1, e2);
+                    vec3_normalize(fn);
+                    if (!std::isfinite(fn[0]) || !std::isfinite(fn[1]) || !std::isfinite(fn[2])) {
+                        fn[0] = 0.0f; fn[1] = 1.0f; fn[2] = 0.0f;
+                    }
+                    for (int t = 0; t < 3; ++t) {
+                        tri_nrm[t][0] = fn[0];
+                        tri_nrm[t][1] = fn[1];
+                        tri_nrm[t][2] = fn[2];
+                    }
+                }
+                for (int t = 0; t < 3; ++t) {
+                    verts.push_back(tri_pos[t][0]);
+                    verts.push_back(tri_pos[t][1]);
+                    verts.push_back(tri_pos[t][2]);
+                    verts.push_back(tri_nrm[t][0]);
+                    verts.push_back(tri_nrm[t][1]);
+                    verts.push_back(tri_nrm[t][2]);
+                    verts.push_back(tri_uv[t][0]);
+                    verts.push_back(tri_uv[t][1]);
+                }
+            }
+        }
+
+        ObjectLodMesh lod_out;
+        lod_out.resolution = lod->resolution;
+        lod_out.bounding_radius = lod->bounding_radius;
+        if (lod_out.bounding_radius <= 0.001f) {
+            const float dx = lod->bounding_box_max[0] - lod->bounding_box_min[0];
+            const float dy = lod->bounding_box_max[1] - lod->bounding_box_min[1];
+            const float dz = lod->bounding_box_max[2] - lod->bounding_box_min[2];
+            lod_out.bounding_radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        lod_out.bounding_radius = std::max(lod_out.bounding_radius, 0.1f);
+
+        std::unordered_map<std::string, std::pair<GLuint, bool>> lod_loaded_textures;
+        if (texture_loader_) {
+            auto lod_copy = *lod;
+            auto resolved = texture_loader_->load_textures(lod_copy, asset.model_name);
+            for (const auto& tex : resolved) {
+                std::string key = armatools::armapath::to_slash_lower(tex.path);
+                if (key.empty()) continue;
+                auto cached = texture_cache.find(key);
+                if (cached != texture_cache.end()) {
+                    lod_loaded_textures.emplace(key, cached->second);
+                    continue;
+                }
+                if (tex.image.width <= 0 || tex.image.height <= 0 || tex.image.pixels.empty()) continue;
+                const GLuint gl_tex = upload_rgba_texture_2d(
+                    tex.image.pixels.data(), tex.image.width, tex.image.height);
+                if (gl_tex == 0) continue;
+                const bool alpha = image_has_alpha_channel(tex.image);
+                texture_cache.emplace(key, std::make_pair(gl_tex, alpha));
+                lod_loaded_textures.emplace(key, std::make_pair(gl_tex, alpha));
+            }
+        }
+
+        for (auto& [tex_key, verts] : grouped_verts) {
+            if (verts.empty()) continue;
+            ObjectMeshGroup group;
+            group.vertex_count = static_cast<int>(verts.size() / 8u);
+            glGenVertexArrays(1, &group.vao);
+            glGenBuffers(1, &group.vbo);
+            glBindVertexArray(group.vao);
+            glBindBuffer(GL_ARRAY_BUFFER, group.vbo);
+            glBufferData(GL_ARRAY_BUFFER,
+                         static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                         verts.data(), GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                  reinterpret_cast<void*>(0));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                  reinterpret_cast<void*>(3 * sizeof(float)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                  reinterpret_cast<void*>(6 * sizeof(float)));
+            glBindVertexArray(0);
+
+            const auto norm_key = armatools::armapath::to_slash_lower(tex_key);
+            if (!norm_key.empty()) {
+                auto it_lod = lod_loaded_textures.find(norm_key);
+                if (it_lod != lod_loaded_textures.end()) {
+                    group.texture = it_lod->second.first;
+                    group.has_alpha = it_lod->second.second;
+                } else if (auto loaded = load_texture_key(norm_key)) {
+                    group.texture = loaded->first;
+                    group.has_alpha = loaded->second;
+                } else {
+                    group.texture = ensure_checkerboard_fallback();
+                    group.has_alpha = false;
+                }
+            }
+            lod_out.groups.push_back(group);
+        }
+
+        if (!lod_out.groups.empty()) {
+            asset.bounding_radius = std::max(asset.bounding_radius, lod_out.bounding_radius);
+            asset.lod_meshes.push_back(std::move(lod_out));
+        }
+    }
+
+    return !asset.lod_meshes.empty();
+}
+
+bool GLWrpTerrainView::ensure_object_model_asset(uint32_t model_id) {
+    if (model_id >= object_model_assets_.size()) return false;
+    auto& asset = object_model_assets_[model_id];
+    if (asset.state == ObjectModelAsset::State::Ready) {
+        asset.last_used_stamp = object_asset_stamp_++;
+        return true;
+    }
+    if (asset.state == ObjectModelAsset::State::Failed) return false;
+    if (!model_loader_) return false;
+
+    try {
+        auto model = model_loader_->load_p3d(asset.model_name);
+        if (build_object_model_asset(asset, model)) {
+            asset.state = ObjectModelAsset::State::Ready;
+            asset.last_used_stamp = object_asset_stamp_++;
+            return true;
+        }
+    } catch (const std::exception& e) {
+        if (!asset.missing_logged) {
+            asset.missing_logged = true;
+            app_log(LogLevel::Warning,
+                    "GLWrpTerrainView: object model load failed: " + asset.model_name + " | " + e.what());
+        }
+    } catch (...) {
+        if (!asset.missing_logged) {
+            asset.missing_logged = true;
+            app_log(LogLevel::Warning,
+                    "GLWrpTerrainView: object model load failed: " + asset.model_name);
+        }
+    }
+    asset.state = ObjectModelAsset::State::Failed;
+    return false;
+}
+
+void GLWrpTerrainView::evict_object_model_assets() {
+    if (object_asset_budget_ == 0) return;
+    size_t loaded_count = 0;
+    for (const auto& asset : object_model_assets_) {
+        if (asset.state == ObjectModelAsset::State::Ready && !asset.lod_meshes.empty()) {
+            ++loaded_count;
+        }
+    }
+    while (loaded_count > object_asset_budget_) {
+        size_t victim = object_model_assets_.size();
+        uint64_t oldest = std::numeric_limits<uint64_t>::max();
+        for (size_t i = 0; i < object_model_assets_.size(); ++i) {
+            const auto& asset = object_model_assets_[i];
+            if (asset.state != ObjectModelAsset::State::Ready || asset.lod_meshes.empty()) continue;
+            if (asset.last_used_stamp < oldest) {
+                oldest = asset.last_used_stamp;
+                victim = i;
+            }
+        }
+        if (victim >= object_model_assets_.size()) break;
+        auto& asset = object_model_assets_[victim];
+        delete_object_model_asset_gl(asset);
+        asset.lod_meshes.clear();
+        asset.state = ObjectModelAsset::State::Unloaded;
+        asset.bounding_radius = 1.0f;
+        asset.last_used_stamp = 0;
+        if (loaded_count > 0) --loaded_count;
+    }
+}
+
+int GLWrpTerrainView::choose_object_lod(ObjectInstance& instance,
+                                        const ObjectModelAsset& asset,
+                                        float distance_m,
+                                        float projected_radius_px) const {
+    if (asset.lod_meshes.empty()) return -1;
+    const int max_lod = static_cast<int>(asset.lod_meshes.size()) - 1;
+    int lod = std::clamp(instance.current_lod, 0, max_lod);
+
+    auto threshold_px = [&](int li) -> float {
+        if (li < 0 || li >= static_cast<int>(asset.lod_meshes.size())) return 6.0f;
+        const float r = std::max(0.125f, asset.lod_meshes[static_cast<size_t>(li)].resolution);
+        return std::clamp(170.0f / std::sqrt(r), 6.0f, 240.0f);
+    };
+
+    if (!std::isfinite(projected_radius_px) || projected_radius_px <= 0.0f) {
+        const float base = std::max(35.0f, instance.bound_radius * 24.0f);
+        while (lod < max_lod) {
+            const float bound = base * std::pow(1.9f, static_cast<float>(lod));
+            if (distance_m <= bound * 1.16f) break;
+            ++lod;
+        }
+        while (lod > 0) {
+            const float bound = base * std::pow(1.9f, static_cast<float>(lod - 1));
+            if (distance_m >= bound * 0.84f) break;
+            --lod;
+        }
+        instance.current_lod = lod;
+        return lod;
+    }
+
+    while (lod < max_lod && projected_radius_px < (threshold_px(lod + 1) * 0.88f)) ++lod;
+    while (lod > 0 && projected_radius_px > (threshold_px(lod) * 1.12f)) --lod;
+    instance.current_lod = lod;
+    return lod;
+}
+
+void GLWrpTerrainView::append_object_bounds_vertices(const ObjectInstance& instance,
+                                                     const std::array<float, 3>& color,
+                                                     std::vector<float>& out) const {
+    const float r = std::max(0.5f, instance.bound_radius);
+    const float x0 = instance.position[0] - r;
+    const float y0 = instance.position[1] - r;
+    const float z0 = instance.position[2] - r;
+    const float x1 = instance.position[0] + r;
+    const float y1 = instance.position[1] + r;
+    const float z1 = instance.position[2] + r;
+
+    auto push = [&](float x, float y, float z) {
+        out.push_back(x);
+        out.push_back(y);
+        out.push_back(z);
+        out.push_back(color[0]);
+        out.push_back(color[1]);
+        out.push_back(color[2]);
+    };
+
+    const std::array<std::array<float, 3>, 8> v = {{
+        {{x0, y0, z0}}, {{x1, y0, z0}}, {{x1, y1, z0}}, {{x0, y1, z0}},
+        {{x0, y0, z1}}, {{x1, y0, z1}}, {{x1, y1, z1}}, {{x0, y1, z1}}
+    }};
+    const int e[12][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+    for (const auto& edge : e) {
+        const auto& a = v[static_cast<size_t>(edge[0])];
+        const auto& b = v[static_cast<size_t>(edge[1])];
+        push(a[0], a[1], a[2]);
+        push(b[0], b[1], b[2]);
+    }
+}
+
+void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const float* eye) {
+    object_candidate_count_ = 0;
+    object_visible_count_ = 0;
+    object_rendered_instances_ = 0;
+    object_distance_culled_count_ = 0;
+    object_frustum_culled_count_ = 0;
+    object_filtered_count_ = 0;
+    object_placeholder_count_ = 0;
+    object_draw_calls_ = 0;
+    object_instanced_batches_ = 0;
+
+    if (!show_objects_ || object_instances_.empty() || object_spatial_grid_.empty()
+        || prog_objects_ == 0 || objects_instance_vbo_ == 0) {
+        return;
+    }
+
+    struct DrawBatch {
+        const ObjectMeshGroup* mesh = nullptr;
+        std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+        std::vector<float> matrices;
+        bool has_alpha = false;
+        uint32_t texture = 0;
+    };
+
+    const auto frustum = extract_frustum_planes(mvp);
+    const float object_far = std::max(50.0f, object_max_distance_);
+    const float cell = std::max(10.0f, object_spatial_cell_size_);
+    const int cam_cx = static_cast<int>(std::floor(eye[0] / cell));
+    const int cam_cz = static_cast<int>(std::floor(eye[2] / cell));
+    const int cell_r = static_cast<int>(std::ceil(object_far / cell)) + 1;
+    const float fov_rad = 45.0f * 3.14159265f / 180.0f;
+    const float focal_px =
+        (0.5f * static_cast<float>(std::max(get_height(), 1))) / std::tan(fov_rad * 0.5f);
+    int load_budget = 2;
+
+    std::vector<DrawBatch> batches;
+    std::unordered_map<uint64_t, size_t> batch_lookup;
+    std::vector<float> bounds_lines;
+    bounds_lines.reserve(4096);
+    static constexpr int kMaxBoundsInstances = 600;
+    int bounds_instances = 0;
+    bool has_visible_unloaded_assets = false;
+
+    for (int z = cam_cz - cell_r; z <= cam_cz + cell_r; ++z) {
+        for (int x = cam_cx - cell_r; x <= cam_cx + cell_r; ++x) {
+            auto cell_it = object_spatial_grid_.find(spatial_cell_key(x, z));
+            if (cell_it == object_spatial_grid_.end()) continue;
+            for (uint32_t idx : cell_it->second) {
+                object_candidate_count_++;
+                if (idx >= object_instances_.size()) continue;
+                auto& inst = object_instances_[idx];
+                if (inst.model_id >= object_model_assets_.size()) continue;
+                if (!object_category_enabled(inst.category)) {
+                    object_filtered_count_++;
+                    continue;
+                }
+
+                auto& asset = object_model_assets_[inst.model_id];
+                if (asset.state == ObjectModelAsset::State::Unloaded && load_budget > 0) {
+                    if (ensure_object_model_asset(inst.model_id)) {
+                        --load_budget;
+                    } else if (asset.state == ObjectModelAsset::State::Failed) {
+                        --load_budget;
+                    }
+                }
+
+                const float dx = inst.position[0] - eye[0];
+                const float dy = inst.position[1] - eye[1];
+                const float dz = inst.position[2] - eye[2];
+                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const float dist_limit = std::max(30.0f, object_category_max_distance(inst.category));
+                const float radius = (asset.state == ObjectModelAsset::State::Ready)
+                    ? std::max(0.5f, asset.bounding_radius * inst.max_scale)
+                    : std::max(0.5f, inst.bound_radius);
+                inst.bound_radius = radius;
+                if (dist - radius > dist_limit) {
+                    object_distance_culled_count_++;
+                    continue;
+                }
+                if (!sphere_inside_frustum(frustum, inst.position, radius)) {
+                    object_frustum_culled_count_++;
+                    continue;
+                }
+
+                object_visible_count_++;
+
+                if (asset.state != ObjectModelAsset::State::Ready || asset.lod_meshes.empty()) {
+                    if (asset.state == ObjectModelAsset::State::Unloaded)
+                        has_visible_unloaded_assets = true;
+                    object_placeholder_count_++;
+                    continue;
+                }
+
+                asset.last_used_stamp = object_asset_stamp_++;
+                const float projected_radius_px = (dist > 0.001f)
+                    ? ((radius / dist) * focal_px)
+                    : (radius * focal_px);
+                const int lod = choose_object_lod(inst, asset, dist, projected_radius_px);
+                if (lod < 0 || lod >= static_cast<int>(asset.lod_meshes.size())) continue;
+                const auto& lod_mesh = asset.lod_meshes[static_cast<size_t>(lod)];
+                if (lod_mesh.groups.empty()) {
+                    object_placeholder_count_++;
+                    continue;
+                }
+
+                const auto batch_color = object_category_color(inst.category);
+                bool added_to_batch = false;
+                for (size_t group_idx = 0; group_idx < lod_mesh.groups.size(); ++group_idx) {
+                    const auto& group = lod_mesh.groups[group_idx];
+                    if (group.vao == 0 || group.vertex_count <= 0) continue;
+
+                    const uint64_t key =
+                        (static_cast<uint64_t>(inst.model_id) << 24)
+                        | (static_cast<uint64_t>(lod & 0x3F) << 16)
+                        | (static_cast<uint64_t>(group_idx & 0xFF) << 8)
+                        | static_cast<uint64_t>(static_cast<uint8_t>(inst.category));
+                    auto b_it = batch_lookup.find(key);
+                    if (b_it == batch_lookup.end()) {
+                        DrawBatch batch;
+                        batch.mesh = &group;
+                        batch.color = batch_color;
+                        batch.has_alpha = group.has_alpha;
+                        batch.texture = group.texture;
+                        const size_t bi = batches.size();
+                        batches.push_back(std::move(batch));
+                        batch_lookup.emplace(key, bi);
+                        b_it = batch_lookup.find(key);
+                    }
+                    auto& batch = batches[b_it->second];
+                    batch.matrices.insert(batch.matrices.end(), inst.model, inst.model + 16);
+                    added_to_batch = true;
+                }
+                if (added_to_batch) {
+                    object_rendered_instances_++;
+                } else {
+                    object_placeholder_count_++;
+                }
+
+                if (show_object_bounds_ && bounds_instances < kMaxBoundsInstances) {
+                    append_object_bounds_vertices(inst, batch_color, bounds_lines);
+                    bounds_instances++;
+                }
+            }
+        }
+    }
+
+    if (!batches.empty()) {
+        glUseProgram(prog_objects_);
+        if (loc_mvp_objects_ >= 0)
+            glUniformMatrix4fv(loc_mvp_objects_, 1, GL_FALSE, mvp);
+        if (loc_light_dir_objects_ >= 0)
+            glUniform3f(loc_light_dir_objects_, 0.26f, 0.93f, 0.19f);
+        if (loc_texture_objects_ >= 0) glUniform1i(loc_texture_objects_, 0);
+        glBindBuffer(GL_ARRAY_BUFFER, objects_instance_vbo_);
+        if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+        auto draw_batch = [&](const DrawBatch& batch) {
+            if (!batch.mesh || batch.mesh->vao == 0 || batch.mesh->vertex_count <= 0) return;
+            const int inst_count = static_cast<int>(batch.matrices.size() / 16u);
+            if (inst_count <= 0) return;
+
+            glBindVertexArray(batch.mesh->vao);
+            glBufferData(GL_ARRAY_BUFFER,
+                         static_cast<GLsizeiptr>(batch.matrices.size() * sizeof(float)),
+                         batch.matrices.data(),
+                         GL_STREAM_DRAW);
+            for (int c = 0; c < 4; ++c) {
+                const GLuint loc = static_cast<GLuint>(3 + c);
+                glEnableVertexAttribArray(loc);
+                glVertexAttribPointer(
+                    loc, 4, GL_FLOAT, GL_FALSE, 16 * sizeof(float),
+                    reinterpret_cast<void*>(
+                        static_cast<uintptr_t>(static_cast<size_t>(c) * 4u * sizeof(float))));
+                glVertexAttribDivisor(loc, 1);
+            }
+            if (loc_color_objects_ >= 0)
+                glUniform3f(loc_color_objects_, batch.color[0], batch.color[1], batch.color[2]);
+            if (loc_has_texture_objects_ >= 0)
+                glUniform1i(loc_has_texture_objects_, batch.texture ? 1 : 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, batch.texture);
+            glDrawArraysInstanced(GL_TRIANGLES, 0, batch.mesh->vertex_count, inst_count);
+            object_draw_calls_++;
+            object_instanced_batches_++;
+            terrain_draw_calls_++;
+        };
+
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        for (const auto& batch : batches) {
+            if (batch.has_alpha) continue;
+            draw_batch(batch);
+        }
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        for (const auto& batch : batches) {
+            if (!batch.has_alpha) continue;
+            draw_batch(batch);
+        }
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+        if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+
+    if (has_visible_unloaded_assets) queue_render();
+
+    if (show_object_bounds_ && !bounds_lines.empty() && prog_points_) {
+        uint32_t bounds_vao = 0;
+        uint32_t bounds_vbo = 0;
+        glGenVertexArrays(1, &bounds_vao);
+        glGenBuffers(1, &bounds_vbo);
+        glBindVertexArray(bounds_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, bounds_vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(bounds_lines.size() * sizeof(float)),
+                     bounds_lines.data(), GL_STREAM_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glUseProgram(prog_points_);
+        if (loc_mvp_points_ >= 0) glUniformMatrix4fv(loc_mvp_points_, 1, GL_FALSE, mvp);
+        glDrawArrays(GL_LINES, 0, static_cast<int>(bounds_lines.size() / 6u));
+        glDeleteBuffers(1, &bounds_vbo);
+        glDeleteVertexArrays(1, &bounds_vao);
+    }
+
+    evict_object_model_assets();
+}
+
 void GLWrpTerrainView::rebuild_object_buffers() {
     make_current();
     if (has_error()) return;
@@ -2578,7 +3495,14 @@ void GLWrpTerrainView::emit_terrain_stats() {
        << " | Tiles " << visible_tile_count_
        << " | Jobs " << pending_jobs << "/" << ready_jobs
        << " | Cache H/M " << texture_cache_hits_ << "/" << texture_cache_misses_
-       << " | Atlas textures " << last_loaded_texture_count_;
+       << " | Atlas textures " << last_loaded_texture_count_
+       << " | Obj vis " << object_visible_count_
+       << " draw " << object_rendered_instances_
+       << " cull[d/f] " << object_distance_culled_count_ << "/" << object_frustum_culled_count_
+       << " filt " << object_filtered_count_
+       << " ph " << object_placeholder_count_
+       << " dc " << object_draw_calls_
+       << " ib " << object_instanced_batches_;
     if (selected_object_.valid) {
         ss << " | SelLOD " << (selected_object_.current_lod + 1)
            << "/" << selected_object_.lod_meshes.size();
