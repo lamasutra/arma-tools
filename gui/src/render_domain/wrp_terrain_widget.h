@@ -23,7 +23,7 @@ public:
 
     void clear_world();
     void set_world_data(const armatools::wrp::WorldData& world);
-    void set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects);
+    void set_objects(std::vector<armatools::wrp::ObjectRecord> objects);
     void set_wireframe(bool on);
     void set_show_objects(bool on);
     void set_object_max_distance(float distance_m);

@@ -49,6 +49,7 @@ add_executable(arma-tools
 )
 
 set(RENDERER_PLUGIN_OUTPUT_DIR ${CMAKE_BINARY_DIR}/plugins/renderers)
+set(UI_PLUGIN_OUTPUT_DIR ${CMAKE_BINARY_DIR}/plugins/ui)
 
 add_library(renderer_null MODULE
     ${CMAKE_CURRENT_SOURCE_DIR}/render_domain_plugins/renderer_null.cpp
@@ -81,6 +82,7 @@ if(WIN32)
     target_include_directories(renderer_dx9 PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
+    target_link_libraries(renderer_dx9 PRIVATE d3d9)
     set_target_properties(renderer_dx9 PROPERTIES
         PREFIX ""
         LIBRARY_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
@@ -88,10 +90,47 @@ if(WIN32)
     )
 endif()
 
+add_library(ui_null MODULE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui_domain_plugins/ui_null.cpp
+)
+target_include_directories(ui_null PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(ui_null PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+)
+
+add_library(ui_gtk MODULE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui_domain_plugins/ui_gtk.cpp
+)
+target_include_directories(ui_gtk PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(ui_gtk PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+)
+
+add_library(ui_imgui MODULE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui_domain_plugins/ui_imgui.cpp
+)
+target_include_directories(ui_imgui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(ui_imgui PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${UI_PLUGIN_OUTPUT_DIR}
+)
+
 add_dependencies(arma-tools renderer_null renderer_gles)
 if(WIN32)
     add_dependencies(arma-tools renderer_dx9)
 endif()
+add_dependencies(arma-tools ui_null ui_gtk ui_imgui)
 
 target_include_directories(arma-tools PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -155,3 +194,7 @@ if(WIN32)
         RUNTIME DESTINATION bin/plugins/renderers
     )
 endif()
+install(TARGETS ui_null ui_gtk ui_imgui
+    LIBRARY DESTINATION bin/plugins/ui
+    RUNTIME DESTINATION bin/plugins/ui
+)

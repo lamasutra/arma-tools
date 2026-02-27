@@ -1,4 +1,6 @@
 include(GoogleTest)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
 function(armatools_add_test name)
     add_executable(${name} ${ARGN})
@@ -70,6 +72,42 @@ armatools_add_test(render_domain_selection_tests
 target_include_directories(render_domain_selection_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/gui/src)
 
+armatools_add_test(ui_domain_selection_tests
+    ui_domain_selection_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_backend_registry.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_backend_instance.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_backend_selection.cpp)
+target_include_directories(ui_domain_selection_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(ui_domain_registry_tests
+    ui_domain_registry_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_backend_registry.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_backend_instance.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_builtin_backends.cpp)
+target_include_directories(ui_domain_registry_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(ui_domain_cli_override_tests
+    ui_domain_cli_override_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_cli_override.cpp)
+target_include_directories(ui_domain_cli_override_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(ui_runtime_config_tests
+    ui_runtime_config_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_runtime_config.cpp)
+target_include_directories(ui_runtime_config_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+target_link_libraries(ui_runtime_config_tests PRIVATE
+    nlohmann_json::nlohmann_json)
+
+armatools_add_test(ui_event_adapter_tests
+    ui_event_adapter_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/ui_domain/ui_event_adapter.cpp)
+target_include_directories(ui_event_adapter_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
 armatools_add_test(render_domain_scene_blob_builder_tests
     render_domain_scene_blob_builder_tests.cpp
     ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_scene_blob.cpp
@@ -84,3 +122,11 @@ armatools_add_test(render_domain_camera_blob_tests
     ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_scene_blob.cpp)
 target_include_directories(render_domain_camera_blob_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(render_domain_ui_bridge_tests
+    render_domain_ui_bridge_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_ui_render_bridge.cpp)
+target_include_directories(render_domain_ui_bridge_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+target_link_libraries(render_domain_ui_bridge_tests PRIVATE
+    PkgConfig::EPOXY)

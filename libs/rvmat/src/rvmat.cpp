@@ -35,6 +35,15 @@ static std::string get_string(const config::ConfigClass& cls, const std::string&
     return "";
 }
 
+static std::string get_value_as_string(const config::ConfigClass& cls, const std::string& name) {
+    auto* ne = find_entry_ci(cls, name);
+    if (!ne) return "";
+    if (auto* s = std::get_if<config::StringEntry>(&ne->entry)) return s->value;
+    if (auto* i = std::get_if<config::IntEntry>(&ne->entry)) return std::to_string(i->value);
+    if (auto* f = std::get_if<config::FloatEntry>(&ne->entry)) return std::to_string(f->value);
+    return "";
+}
+
 static float get_number(const config::ConfigClass& cls, const std::string& name) {
     auto* ne = find_entry_ci(cls, name);
     if (!ne) return 0.0f;
@@ -69,6 +78,19 @@ static std::array<float, 4> get_rgba(const config::ConfigClass& cls,
     return out;
 }
 
+static std::vector<std::string> get_string_list(const config::ConfigClass& cls,
+                                                const std::string& name) {
+    std::vector<std::string> out;
+    auto* ne = find_entry_ci(cls, name);
+    if (!ne) return out;
+    auto* arr = std::get_if<config::ArrayEntry>(&ne->entry);
+    if (!arr) return out;
+    for (const auto& e : arr->elements) {
+        if (auto* s = std::get_if<config::StringElement>(&e)) out.push_back(s->value);
+    }
+    return out;
+}
+
 static std::array<float, 3> get_vec3(const config::ConfigClass& cls,
                                      const std::string& name,
                                      const std::array<float, 3>& fallback) {
@@ -92,20 +114,25 @@ static bool parse_uv_transform_from_array(const config::ArrayEntry& arr, UVTrans
     };
     std::array<float, 3> aside{1.0f, 0.0f, 0.0f};
     std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    std::array<float, 3> dir{0.0f, 0.0f, 0.0f};
     std::array<float, 3> pos{0.0f, 0.0f, 0.0f};
-    for (size_t i = 0; i < 3; ++i) {
-        if (!read(i, aside[i])) return false;
-    }
-    for (size_t i = 0; i < 3; ++i) {
-        if (!read(3 + i, up[i])) return false;
-    }
-    if (arr.elements.size() >= 9) {
-        for (size_t i = 0; i < 3; ++i) {
-            if (!read(6 + i, pos[i])) return false;
-        }
+
+    if (arr.elements.size() >= 12) {
+        for (size_t i = 0; i < 3; ++i) read(i, aside[i]);
+        for (size_t i = 0; i < 3; ++i) read(3 + i, up[i]);
+        for (size_t i = 0; i < 3; ++i) read(6 + i, dir[i]);
+        for (size_t i = 0; i < 3; ++i) read(9 + i, pos[i]);
+    } else if (arr.elements.size() >= 9) {
+        for (size_t i = 0; i < 3; ++i) read(i, aside[i]);
+        for (size_t i = 0; i < 3; ++i) read(3 + i, up[i]);
+        for (size_t i = 0; i < 3; ++i) read(6 + i, pos[i]);
+    } else {
+        for (size_t i = 0; i < 3; ++i) read(i, aside[i]);
+        for (size_t i = 0; i < 3; ++i) read(3 + i, up[i]);
     }
     out.aside = aside;
     out.up = up;
+    out.dir = dir;
     out.pos = pos;
     out.valid = true;
     return true;
@@ -114,18 +141,21 @@ static bool parse_uv_transform_from_array(const config::ArrayEntry& arr, UVTrans
 static bool parse_uv_transform_from_class(const config::ConfigClass& cls, UVTransform& out) {
     auto aside = get_vec3(cls, "aside", out.aside);
     auto up = get_vec3(cls, "up", out.up);
+    auto dir = get_vec3(cls, "dir", out.dir);
     auto pos = get_vec3(cls, "pos", out.pos);
     out.aside = aside;
     out.up = up;
+    out.dir = dir;
     out.pos = pos;
     out.valid = true;
     return true;
 }
 
-static int parse_stage_number(const std::string& class_name) {
+static int parse_class_number(const std::string& class_name, const std::string& prefix) {
     auto lower = to_lower_ascii(class_name);
-    if (!lower.starts_with("stage")) return -1;
-    auto tail = lower.substr(5);
+    auto lp = to_lower_ascii(prefix);
+    if (!lower.starts_with(lp)) return -1;
+    auto tail = lower.substr(lp.size());
     if (tail.empty()) return -1;
     for (char c : tail) {
         if (!std::isdigit(static_cast<unsigned char>(c))) return -1;
@@ -147,35 +177,61 @@ Material parse(const config::Config& cfg) {
     mat.emissive = get_rgba(root, "emmisive"); // BI typo in original format
     mat.specular = get_rgba(root, "specular");
     mat.specular_power = get_number(root, "specularPower");
+    mat.render_flags = get_string_list(root, "renderFlags");
+    mat.main_light = get_string(root, "mainLight");
+    mat.fog_mode = get_string(root, "fogMode");
     mat.surface = get_string(root, "surfaceInfo");
 
     for (const auto& ne : root.entries) {
         auto* ce = std::get_if<config::ClassEntryOwned>(&ne.entry);
         if (!ce || !ce->cls || ce->cls->external || ce->cls->deletion) continue;
-        int stage_number = parse_stage_number(ne.name);
-        if (stage_number < 0) continue;
 
-        TextureStage st;
-        st.stage_number = stage_number;
-        st.class_name = ne.name;
-        st.texture_path = get_string(*ce->cls, "texture");
-        st.uv_source = get_string(*ce->cls, "uvSource");
-        st.filter = get_string(*ce->cls, "filter");
-        st.tex_gen = get_string(*ce->cls, "texGen");
-        if (auto* uv = find_entry_ci(*ce->cls, "uvTransform")) {
-            if (auto* arr = std::get_if<config::ArrayEntry>(&uv->entry)) {
-                parse_uv_transform_from_array(*arr, st.uv_transform);
-            } else if (auto* uv_cls = std::get_if<config::ClassEntryOwned>(&uv->entry)) {
-                if (uv_cls->cls) parse_uv_transform_from_class(*uv_cls->cls, st.uv_transform);
+        int stage_number = parse_class_number(ne.name, "stage");
+        int texgen_number = parse_class_number(ne.name, "texgen");
+
+        if (stage_number >= 0) {
+            TextureStage st;
+            st.stage_number = stage_number;
+            st.class_name = ne.name;
+            st.texture_path = get_string(*ce->cls, "texture");
+            st.uv_source = get_string(*ce->cls, "uvSource");
+            st.filter = get_string(*ce->cls, "filter");
+            st.tex_gen = get_value_as_string(*ce->cls, "texGen");
+            if (auto* uv = find_entry_ci(*ce->cls, "uvTransform")) {
+                if (auto* arr = std::get_if<config::ArrayEntry>(&uv->entry)) {
+                    parse_uv_transform_from_array(*arr, st.uv_transform);
+                } else if (auto* uv_cls = std::get_if<config::ClassEntryOwned>(&uv->entry)) {
+                    if (uv_cls->cls) parse_uv_transform_from_class(*uv_cls->cls, st.uv_transform);
+                }
             }
+            mat.stages.push_back(std::move(st));
+        } else if (texgen_number >= 0) {
+            TexGen tg;
+            tg.index = texgen_number;
+            tg.class_name = ne.name;
+            tg.uv_source = get_string(*ce->cls, "uvSource");
+            if (auto* uv = find_entry_ci(*ce->cls, "uvTransform")) {
+                if (auto* arr = std::get_if<config::ArrayEntry>(&uv->entry)) {
+                    parse_uv_transform_from_array(*arr, tg.uv_transform);
+                } else if (auto* uv_cls = std::get_if<config::ClassEntryOwned>(&uv->entry)) {
+                    if (uv_cls->cls) parse_uv_transform_from_class(*uv_cls->cls, tg.uv_transform);
+                }
+            }
+            mat.tex_gens.push_back(std::move(tg));
         }
-        mat.stages.push_back(std::move(st));
     }
 
     std::sort(mat.stages.begin(), mat.stages.end(),
               [](const TextureStage& a, const TextureStage& b) {
                   if (a.stage_number != b.stage_number)
                       return a.stage_number < b.stage_number;
+                  return a.class_name < b.class_name;
+              });
+
+    std::sort(mat.tex_gens.begin(), mat.tex_gens.end(),
+              [](const TexGen& a, const TexGen& b) {
+                  if (a.index != b.index)
+                      return a.index < b.index;
                   return a.class_name < b.class_name;
               });
 

@@ -4,6 +4,7 @@
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
 #include "p3d_model_loader.h"
+#include "render_domain/rd_runtime_state.h"
 #include "textures_loader.h"
 #include <armatools/armapath.h>
 #include <armatools/objcat.h>
@@ -803,29 +804,26 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
     queue_render();
 }
 
-void GLWrpTerrainView::set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects) {
-    objects_ = objects;
+void GLWrpTerrainView::set_objects(std::vector<armatools::wrp::ObjectRecord> objects) {
+    objects_ = std::move(objects);
     build_object_instances();
 
     object_points_.clear();
     object_positions_.clear();
-    object_points_.reserve(objects.size() * 6);
-    object_positions_.reserve(objects.size() * 3);
+    const size_t count = object_instances_.size();
+    object_points_.reserve(count * 6);
+    object_positions_.reserve(count * 3);
     for (const auto& inst : object_instances_) {
         const auto color = object_category_color(inst.category);
-        float cr = 0.85f, cg = 0.85f, cb = 0.85f;
-        cr = color[0];
-        cg = color[1];
-        cb = color[2];
         const float px = inst.position[0];
         const float py = inst.position[1] + 1.0f;
         const float pz = inst.position[2];
         object_points_.push_back(px);
         object_points_.push_back(py);
         object_points_.push_back(pz);
-        object_points_.push_back(cr);
-        object_points_.push_back(cg);
-        object_points_.push_back(cb);
+        object_points_.push_back(color[0]);
+        object_points_.push_back(color[1]);
+        object_points_.push_back(color[2]);
         object_positions_.push_back(px);
         object_positions_.push_back(py);
         object_positions_.push_back(pz);
@@ -1452,6 +1450,9 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             on_compass_info_(compass);
         }
     }
+    if (const auto& bridge = render_domain::runtime_state().ui_render_bridge) {
+        bridge->render_in_current_context(get_width(), get_height());
+    }
     log_gl_errors("GLWrpTerrainView::on_render_gl");
     return true;
 }
@@ -1662,36 +1663,36 @@ void GLWrpTerrainView::rebuild_shared_lod_buffers() {
             }
         }
 
-        // Skirts: always full-resolution edges.
-        for (int x = 0; x < patch_quads_; ++x) {
+        // Skirts: match core resolution to avoid gaps between core and skirt.
+        for (int x = 0; x < patch_quads_; x += step) {
             const uint32_t c0 = core_index(x, 0);
-            const uint32_t c1 = core_index(x + 1, 0);
+            const uint32_t c1 = core_index(x + step, 0);
             const uint32_t s0 = static_cast<uint32_t>(top_off + x);
-            const uint32_t s1 = static_cast<uint32_t>(top_off + x + 1);
+            const uint32_t s1 = static_cast<uint32_t>(top_off + x + step);
             indices.push_back(c0); indices.push_back(s0); indices.push_back(c1);
             indices.push_back(c1); indices.push_back(s0); indices.push_back(s1);
         }
-        for (int x = 0; x < patch_quads_; ++x) {
+        for (int x = 0; x < patch_quads_; x += step) {
             const uint32_t c0 = core_index(x, patch_quads_);
-            const uint32_t c1 = core_index(x + 1, patch_quads_);
+            const uint32_t c1 = core_index(x + step, patch_quads_);
             const uint32_t s0 = static_cast<uint32_t>(bottom_off + x);
-            const uint32_t s1 = static_cast<uint32_t>(bottom_off + x + 1);
+            const uint32_t s1 = static_cast<uint32_t>(bottom_off + x + step);
             indices.push_back(c1); indices.push_back(s0); indices.push_back(c0);
             indices.push_back(c1); indices.push_back(s1); indices.push_back(s0);
         }
-        for (int z = 0; z < patch_quads_; ++z) {
+        for (int z = 0; z < patch_quads_; z += step) {
             const uint32_t c0 = core_index(0, z);
-            const uint32_t c1 = core_index(0, z + 1);
+            const uint32_t c1 = core_index(0, z + step);
             const uint32_t s0 = static_cast<uint32_t>(left_off + z);
-            const uint32_t s1 = static_cast<uint32_t>(left_off + z + 1);
+            const uint32_t s1 = static_cast<uint32_t>(left_off + z + step);
             indices.push_back(c1); indices.push_back(s0); indices.push_back(c0);
             indices.push_back(c1); indices.push_back(s1); indices.push_back(s0);
         }
-        for (int z = 0; z < patch_quads_; ++z) {
+        for (int z = 0; z < patch_quads_; z += step) {
             const uint32_t c0 = core_index(patch_quads_, z);
-            const uint32_t c1 = core_index(patch_quads_, z + 1);
+            const uint32_t c1 = core_index(patch_quads_, z + step);
             const uint32_t s0 = static_cast<uint32_t>(right_off + z);
-            const uint32_t s1 = static_cast<uint32_t>(right_off + z + 1);
+            const uint32_t s1 = static_cast<uint32_t>(right_off + z + step);
             indices.push_back(c0); indices.push_back(s0); indices.push_back(c1);
             indices.push_back(c1); indices.push_back(s0); indices.push_back(s1);
         }
@@ -2586,31 +2587,36 @@ void GLWrpTerrainView::build_object_instances() {
         object_spatial_cell_size_ = std::clamp(world_size_x_ / 96.0f, 60.0f, 260.0f);
     }
 
-    object_instances_.reserve(objects_.size());
-    object_model_lookup_.reserve(objects_.size());
+    const size_t count = objects_.size();
+    object_instances_.reserve(count);
+    object_model_lookup_.reserve(std::min(count, 16384lu));
 
     const float cell = std::max(10.0f, object_spatial_cell_size_);
-    for (size_t i = 0; i < objects_.size(); ++i) {
+    for (size_t i = 0; i < count; ++i) {
         const auto& obj = objects_[i];
         const std::string model_key = armatools::armapath::to_slash_lower(obj.model_name);
         if (model_key.empty()) continue;
 
         uint32_t model_id = 0;
+        ObjectCategory category = ObjectCategory::Props;
         auto model_it = object_model_lookup_.find(model_key);
         if (model_it == object_model_lookup_.end()) {
             model_id = static_cast<uint32_t>(object_model_assets_.size());
             object_model_lookup_.emplace(model_key, model_id);
             ObjectModelAsset asset;
             asset.model_name = model_key;
+            asset.category = classify_object_category(model_key);
+            category = asset.category;
             object_model_assets_.push_back(std::move(asset));
         } else {
             model_id = model_it->second;
+            category = object_model_assets_[model_id].category;
         }
 
         ObjectInstance inst;
         inst.object_index = i;
         inst.model_id = model_id;
-        inst.category = classify_object_category(model_key);
+        inst.category = category;
         build_object_instance_matrix(obj, inst.model);
         inst.position[0] = inst.model[12];
         inst.position[1] = inst.model[13];

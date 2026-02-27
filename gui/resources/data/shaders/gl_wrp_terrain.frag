@@ -116,20 +116,17 @@ void main() {
         float camera_dist = distance(vWorldXZ, uCameraXZ);
         float lookup_z = uFlipTerrainZ ? (uTerrainMaxZ - vWorldXZ.y) : vWorldXZ.y;
         vec2 lookup_xz = vec2(vWorldXZ.x, lookup_z);
+        vec2 world_uv = lookup_xz / max(uTextureCellSize, 0.0001);
         if (uHasTextureIndex && uTextureGridW > 0 && uTextureGridH > 0) {
             float cell = max(uTextureCellSize, 0.0001);
-            int gx = int(floor(lookup_xz.x / cell));
-            int gz = int(floor(lookup_xz.y / cell));
-            gx = clamp(gx, 0, uTextureGridW - 1);
-            gz = clamp(gz, 0, uTextureGridH - 1);
-            desired = int(floor(texelFetch(uTextureIndex, ivec2(gx, gz), 0).r + 0.5));
-        }
+            vec2 tile_coord = lookup_xz / cell;
+            ivec2 gi = ivec2(floor(tile_coord));
+            gi = clamp(gi, ivec2(0), ivec2(uTextureGridW - 1, uTextureGridH - 1));
+            desired = int(floor(texelFetch(uTextureIndex, gi, 0).r + 0.5));
 
-        int lookup_w = textureSize(uMaterialLookup, 0).x;
-        if (uHasMaterialLookup && desired >= 0 && desired < lookup_w) {
-            vec2 world_uv = lookup_xz / max(uTextureCellSize, 0.0001);
-            vec2 uv_sat = world_uv;
-            vec2 uv_mask = world_uv;
+            vec2 local_uv = tile_coord - vec2(gi);
+            vec2 uv_sat = local_uv;
+            vec2 uv_mask = local_uv;
             vec2 uv_tex0 = world_uv * 0.35;
             vec2 uv_tex1 = world_uv * 0.55;
             vec2 uv_tex2 = world_uv * 1.25;

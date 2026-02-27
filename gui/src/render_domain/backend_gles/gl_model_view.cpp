@@ -4,6 +4,7 @@
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
 #include "render_domain/rd_scene_blob.h"
+#include "render_domain/rd_runtime_state.h"
 
 #include <armatools/armapath.h>
 
@@ -1233,6 +1234,10 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glBindVertexArray(0);
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (const auto& bridge = render_domain::runtime_state().ui_render_bridge) {
+        bridge->render_in_current_context(get_width(), get_height());
+    }
 
     log_gl_errors("GLModelView::on_render_gl");
     return true;

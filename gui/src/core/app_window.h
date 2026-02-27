@@ -20,6 +20,7 @@
 #include "pbo_index_service.h"
 #include "p3d_model_loader.h"
 #include "textures_loader.h"
+#include "ui_domain/ui_backend_abi.h"
 
 #include <libpanel.h>
 #include <gtkmm.h>
@@ -71,6 +72,9 @@ private:
 
     // Status label (added to PanelStatusbar)
     Gtk::Label status_label_{"Ready"};
+    sigc::connection ui_tick_connection_;
+    float ui_user_scale_ = 1.0f;
+    float last_effective_ui_scale_ = 0.0f;
 
     // Log panel
     LogPanel log_panel_;
@@ -119,6 +123,10 @@ private:
 
     // Pin a panel so it cannot be moved, reordered, or closed
     void pin_panel(const char* id);
+    bool ensure_imgui_overlay_instance();
+    void toggle_ui_overlay();
+    bool on_ui_tick();
+    bool dispatch_ui_event(const ui_event_v1& event);
 
     // Unparent gtkmm widgets from PanelWidgets so they survive GTK teardown
     void detach_all_panels();

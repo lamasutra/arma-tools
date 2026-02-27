@@ -6,15 +6,272 @@
 
 #include <cstdint>
 #include <iomanip>
+#include <new>
 #include <sstream>
 #include <string>
 #endif
 
 namespace {
 
-int create_backend(const rd_backend_create_desc_v1*,
-                   rd_backend_instance_v1*) {
+#ifdef _WIN32
+
+struct Dx9BackendState {
+    IDirect3D9* d3d9 = nullptr;
+    IDirect3D9Ex* d3d9ex = nullptr;
+    IDirect3DDevice9* device = nullptr;
+    IDirect3DDevice9Ex* device_ex = nullptr;
+    D3DPRESENT_PARAMETERS present_params{};
+    HWND window = nullptr;
+    rd_frame_stats_v1 frame_stats{};
+};
+
+template <typename T>
+void release_com(T*& ptr) {
+    if (ptr) {
+        ptr->Release();
+        ptr = nullptr;
+    }
+}
+
+IDirect3DDevice9* base_device(Dx9BackendState* state) {
+    if (!state) return nullptr;
+    if (state->device_ex) return static_cast<IDirect3DDevice9*>(state->device_ex);
+    return state->device;
+}
+
+void fill_present_parameters(D3DPRESENT_PARAMETERS* pp,
+                             HWND window,
+                             uint32_t width,
+                             uint32_t height) {
+    if (!pp) return;
+    *pp = {};
+    pp->Windowed = TRUE;
+    pp->hDeviceWindow = window;
+    pp->SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp->BackBufferFormat = D3DFMT_UNKNOWN;
+    pp->BackBufferWidth = (width == 0u) ? 1u : width;
+    pp->BackBufferHeight = (height == 0u) ? 1u : height;
+    pp->BackBufferCount = 1;
+    pp->EnableAutoDepthStencil = TRUE;
+    pp->AutoDepthStencilFormat = D3DFMT_D24S8;
+    pp->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+}
+
+HRESULT create_device_with_d3d9ex(Dx9BackendState* state) {
+    if (!state) return E_POINTER;
+
+    const auto create9ex = reinterpret_cast<HRESULT(WINAPI*)(UINT, IDirect3D9Ex**)>(
+        GetProcAddress(GetModuleHandleA("d3d9.dll"), "Direct3DCreate9Ex"));
+    if (!create9ex) return E_NOTIMPL;
+
+    IDirect3D9Ex* d3d9ex = nullptr;
+    HRESULT hr = create9ex(D3D_SDK_VERSION, &d3d9ex);
+    if (FAILED(hr) || !d3d9ex) return FAILED(hr) ? hr : E_FAIL;
+
+    state->d3d9ex = d3d9ex;
+
+    DWORD behavior = D3DCREATE_FPU_PRESERVE | D3DCREATE_HARDWARE_VERTEXPROCESSING;
+    IDirect3DDevice9Ex* device_ex = nullptr;
+    hr = d3d9ex->CreateDeviceEx(D3DADAPTER_DEFAULT,
+                                D3DDEVTYPE_HAL,
+                                state->window,
+                                behavior,
+                                &state->present_params,
+                                nullptr,
+                                &device_ex);
+    if (FAILED(hr)) {
+        behavior = D3DCREATE_FPU_PRESERVE | D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+        hr = d3d9ex->CreateDeviceEx(D3DADAPTER_DEFAULT,
+                                    D3DDEVTYPE_HAL,
+                                    state->window,
+                                    behavior,
+                                    &state->present_params,
+                                    nullptr,
+                                    &device_ex);
+    }
+
+    if (FAILED(hr) || !device_ex) {
+        release_com(state->d3d9ex);
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    state->device_ex = device_ex;
+    return S_OK;
+}
+
+HRESULT create_device_with_d3d9(Dx9BackendState* state) {
+    if (!state) return E_POINTER;
+
+    const auto create9 = reinterpret_cast<IDirect3D9*(WINAPI*)(UINT)>(
+        GetProcAddress(GetModuleHandleA("d3d9.dll"), "Direct3DCreate9"));
+    if (!create9) return E_NOTIMPL;
+
+    IDirect3D9* d3d9 = create9(D3D_SDK_VERSION);
+    if (!d3d9) return E_FAIL;
+
+    state->d3d9 = d3d9;
+
+    DWORD behavior = D3DCREATE_FPU_PRESERVE | D3DCREATE_HARDWARE_VERTEXPROCESSING;
+    IDirect3DDevice9* device = nullptr;
+    HRESULT hr = d3d9->CreateDevice(D3DADAPTER_DEFAULT,
+                                    D3DDEVTYPE_HAL,
+                                    state->window,
+                                    behavior,
+                                    &state->present_params,
+                                    &device);
+    if (FAILED(hr)) {
+        behavior = D3DCREATE_FPU_PRESERVE | D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+        hr = d3d9->CreateDevice(D3DADAPTER_DEFAULT,
+                                D3DDEVTYPE_HAL,
+                                state->window,
+                                behavior,
+                                &state->present_params,
+                                &device);
+    }
+
+    if (FAILED(hr) || !device) {
+        release_com(state->d3d9);
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    state->device = device;
+    return S_OK;
+}
+
+HRESULT reset_device(Dx9BackendState* state) {
+    if (!state) return E_POINTER;
+    if (state->device_ex) {
+        return state->device_ex->ResetEx(&state->present_params, nullptr);
+    }
+    if (state->device) {
+        return state->device->Reset(&state->present_params);
+    }
+    return E_POINTER;
+}
+
+void destroy_backend(void* userdata) {
+    auto* state = static_cast<Dx9BackendState*>(userdata);
+    if (!state) return;
+    release_com(state->device_ex);
+    release_com(state->device);
+    release_com(state->d3d9ex);
+    release_com(state->d3d9);
+    delete state;
+}
+
+int resize_backend(void* userdata, uint32_t width, uint32_t height) {
+    auto* state = static_cast<Dx9BackendState*>(userdata);
+    if (!state) return RD_STATUS_INVALID_ARGUMENT;
+
+    fill_present_parameters(&state->present_params, state->window, width, height);
+    const HRESULT hr = reset_device(state);
+    return SUCCEEDED(hr) ? RD_STATUS_OK : RD_STATUS_RUNTIME_ERROR;
+}
+
+int scene_create_or_update(void*, const rd_scene_blob_v1*) {
+    // Pipeline upload is implemented in RD-12. RD-10 initializes and manages device lifecycle.
+    return RD_STATUS_OK;
+}
+
+int render_frame(void* userdata, const rd_camera_blob_v1*) {
+    auto* state = static_cast<Dx9BackendState*>(userdata);
+    if (!state) return RD_STATUS_INVALID_ARGUMENT;
+
+    IDirect3DDevice9* device = base_device(state);
+    if (!device) return RD_STATUS_RUNTIME_ERROR;
+
+    if (!state->device_ex) {
+        const HRESULT cooperative = device->TestCooperativeLevel();
+        if (cooperative == D3DERR_DEVICELOST) {
+            return RD_STATUS_OK;
+        }
+        if (cooperative == D3DERR_DEVICENOTRESET) {
+            if (FAILED(reset_device(state))) {
+                return RD_STATUS_RUNTIME_ERROR;
+            }
+        } else if (FAILED(cooperative)) {
+            return RD_STATUS_RUNTIME_ERROR;
+        }
+    }
+
+    HRESULT hr = device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
+                               D3DCOLOR_XRGB(28, 28, 30), 1.0f, 0);
+    if (FAILED(hr)) return RD_STATUS_RUNTIME_ERROR;
+
+    hr = device->BeginScene();
+    if (SUCCEEDED(hr)) {
+        device->EndScene();
+    } else if (hr != D3DERR_INVALIDCALL) {
+        return RD_STATUS_RUNTIME_ERROR;
+    }
+
+    hr = device->Present(nullptr, nullptr, nullptr, nullptr);
+    if (hr == D3DERR_DEVICELOST || hr == D3DERR_DEVICENOTRESET) {
+        return RD_STATUS_OK;
+    }
+    if (FAILED(hr)) return RD_STATUS_RUNTIME_ERROR;
+
+    state->frame_stats.draw_calls = 0;
+    state->frame_stats.triangles = 0;
+    state->frame_stats.cpu_frame_ms = 0.0f;
+    state->frame_stats.gpu_frame_ms = -1.0f;
+    return RD_STATUS_OK;
+}
+
+int get_frame_stats(void* userdata, rd_frame_stats_v1* stats) {
+    auto* state = static_cast<Dx9BackendState*>(userdata);
+    if (!state || !stats) return RD_STATUS_INVALID_ARGUMENT;
+    *stats = state->frame_stats;
+    return RD_STATUS_OK;
+}
+
+#endif  // _WIN32
+
+int create_backend(const rd_backend_create_desc_v1* desc,
+                   rd_backend_instance_v1* out_instance) {
+    if (!desc || !out_instance) return RD_STATUS_INVALID_ARGUMENT;
+    if (desc->struct_size < sizeof(rd_backend_create_desc_v1)) return RD_STATUS_INVALID_ARGUMENT;
+#ifdef _WIN32
+    HWND window = reinterpret_cast<HWND>(desc->native_window);
+    if (!window || !IsWindow(window)) {
+        return RD_STATUS_INVALID_ARGUMENT;
+    }
+
+    auto* state = new (std::nothrow) Dx9BackendState();
+    if (!state) return RD_STATUS_RUNTIME_ERROR;
+    state->window = window;
+    fill_present_parameters(&state->present_params, window, desc->width, desc->height);
+
+    HMODULE d3d9_module = LoadLibraryA("d3d9.dll");
+    if (!d3d9_module) {
+        delete state;
+        return RD_STATUS_RUNTIME_ERROR;
+    }
+
+    HRESULT hr = create_device_with_d3d9ex(state);
+    if (FAILED(hr)) {
+        hr = create_device_with_d3d9(state);
+    }
+
+    FreeLibrary(d3d9_module);
+
+    if (FAILED(hr) || !base_device(state)) {
+        destroy_backend(state);
+        return RD_STATUS_RUNTIME_ERROR;
+    }
+
+    out_instance->userdata = state;
+    out_instance->destroy = destroy_backend;
+    out_instance->resize = resize_backend;
+    out_instance->scene_create_or_update = scene_create_or_update;
+    out_instance->render_frame = render_frame;
+    out_instance->get_frame_stats = get_frame_stats;
+    return RD_STATUS_OK;
+#else
+    (void)desc;
+    (void)out_instance;
     return RD_STATUS_NOT_IMPLEMENTED;
+#endif
 }
 
 rd_backend_probe_result_v1 probe_backend() {

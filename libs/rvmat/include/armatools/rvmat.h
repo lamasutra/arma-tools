@@ -13,8 +13,16 @@ namespace armatools::rvmat {
 struct UVTransform {
     std::array<float, 3> aside{1.0f, 0.0f, 0.0f};
     std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    std::array<float, 3> dir{0.0f, 0.0f, 0.0f};
     std::array<float, 3> pos{0.0f, 0.0f, 0.0f};
     bool valid = false;
+};
+
+struct TexGen {
+    int index = -1;
+    std::string class_name;
+    std::string uv_source;
+    UVTransform uv_transform;
 };
 
 struct TextureStage {
@@ -36,7 +44,11 @@ struct Material {
     std::array<float, 4> emissive{0.0f, 0.0f, 0.0f, 0.0f};
     std::array<float, 4> specular{0.0f, 0.0f, 0.0f, 0.0f};
     float specular_power = 0.0f;
+    std::vector<std::string> render_flags;
+    std::string main_light;
+    std::string fog_mode;
     std::vector<TextureStage> stages;
+    std::vector<TexGen> tex_gens;
     std::string surface;
 };
 

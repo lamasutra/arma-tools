@@ -84,6 +84,10 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     class_scroll_.set_vexpand(true);
     class_list_.set_activate_on_single_click(false);
     class_scroll_.set_child(class_list_);
+    if (auto adj = class_scroll_.get_vadjustment()) {
+        class_scroll_conn_ = adj->signal_value_changed().connect(
+            sigc::mem_fun(*this, &TabWrpInfo::try_load_next_class_page));
+    }
     class_top_box_.append(class_scroll_);
 
     objects_paned_.set_start_child(class_top_box_);
@@ -121,7 +125,12 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
 
     // Page 4: Terrain 3D
     terrain3d_toolbar_.set_margin(4);
-    update_terrain3d_mode_options(true, true);
+    terrain3d_mode_combo_.append("elevation", "Elevation");
+    terrain3d_mode_combo_.append("surface", "Surface Mask");
+    terrain3d_mode_combo_.append("texture", "Texture Index");
+    terrain3d_mode_combo_.append("satellite", "Satellite");
+    terrain3d_mode_combo_.set_active_id("elevation");
+
     terrain3d_seam_debug_combo_.append("final", "Final");
     terrain3d_seam_debug_combo_.append("depth", "Depth");
     terrain3d_seam_debug_combo_.append("normals", "Normals");
@@ -197,6 +206,8 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_far_mat_label_);
     terrain3d_toolbar_.append(terrain3d_far_mat_scale_);
     terrain3d_box_.append(terrain3d_toolbar_);
+
+    update_terrain3d_mode_options(true, true);
     terrain3d_view_.set_hexpand(true);
     terrain3d_view_.set_vexpand(true);
     terrain3d_overlay_.set_child(terrain3d_view_);
@@ -310,7 +321,12 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         else if (id == "normals") terrain3d_view_.set_seam_debug_mode(2);
         else terrain3d_view_.set_seam_debug_mode(0);
     });
+    right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
+        if (page_num == 1) ensure_objects_loaded();
+    });
+
     terrain3d_mode_combo_.signal_changed().connect([this]() {
+        if (terrain3d_mode_combo_updating_) return;
         auto id = std::string(terrain3d_mode_combo_.get_active_id());
         if (id == "texture" && !allow_texture_mode_) {
             terrain3d_mode_combo_.set_active_id("elevation");
@@ -332,62 +348,29 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             terrain3d_debug_overlay_.set_visible(false);
         }
     });
-    terrain3d_view_.set_on_object_picked([this](size_t idx) {
-        if (!world_data_ || idx >= world_data_->objects.size()) return;
-        const auto& obj = world_data_->objects[idx];
-        std::ostringstream ss;
-        ss << "Object #" << idx << ": " << obj.model_name
-           << " @ [" << obj.position[0] << ", " << obj.position[1] << ", " << obj.position[2] << "]";
-        terrain3d_base_status_ = ss.str();
-        terrain3d_status_label_.set_text(terrain3d_base_status_);
-    });
-    terrain3d_view_.set_on_terrain_stats([this](const std::string& text) {
-        if (terrain3d_base_status_.empty()) {
-            terrain3d_status_label_.set_text(text);
-        } else if (text.empty()) {
-            terrain3d_status_label_.set_text(terrain3d_base_status_);
-        } else {
-            terrain3d_status_label_.set_text(terrain3d_base_status_ + " | " + text);
-        }
-    });
-    terrain3d_view_.set_on_texture_debug_info([this](const std::string& text) {
-        if (text.empty() || terrain3d_mode_combo_.get_active_id() != "texture") {
-            terrain3d_debug_overlay_.set_text("");
-            terrain3d_debug_overlay_.set_visible(false);
-            return;
-        }
-        terrain3d_debug_overlay_.set_text(text);
-        terrain3d_debug_overlay_.set_visible(true);
-    });
-    terrain3d_view_.set_on_compass_info([this](const std::string& text) {
-        terrain3d_compass_overlay_.set_text(text.empty() ? "N: --" : text);
-    });
-    terrain3d_view_.set_object_max_distance(static_cast<float>(terrain3d_obj_far_scale_.get_value()));
-    apply_object_filters();
-    terrain3d_view_.set_show_object_bounds(terrain3d_obj_bounds_btn_.get_active());
-    right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
-        if (page_num == 1) ensure_objects_loaded();
-    });
 }
 
 void TabWrpInfo::update_terrain3d_mode_options(bool allow_texture, bool allow_satellite) {
     allow_texture_mode_ = allow_texture;
     allow_satellite_mode_ = allow_satellite;
-    const auto prev = std::string(terrain3d_mode_combo_.get_active_id());
 
-    terrain3d_mode_combo_.remove_all();
-    terrain3d_mode_combo_.append("elevation", "Elevation");
-    terrain3d_mode_combo_.append("surface", "Surface Mask");
-    if (allow_texture_mode_) terrain3d_mode_combo_.append("texture", "Texture Index");
-    if (allow_satellite_mode_) terrain3d_mode_combo_.append("satellite", "Satellite");
-
-    std::string next = "elevation";
-    if (!prev.empty()) {
-        if (prev == "surface" || prev == "elevation") next = prev;
-        else if (prev == "texture" && allow_texture_mode_) next = prev;
-        else if (prev == "satellite" && allow_satellite_mode_) next = prev;
+    auto id = std::string(terrain3d_mode_combo_.get_active_id());
+    if (id == "texture" && !allow_texture_mode_) {
+        terrain3d_mode_combo_.set_active_id("elevation");
+        id = "elevation";
     }
-    terrain3d_mode_combo_.set_active_id(next);
+    if (id == "satellite" && !allow_satellite_mode_) {
+        terrain3d_mode_combo_.set_active_id("elevation");
+        id = "elevation";
+    }
+
+    if (id == "surface") terrain3d_view_.set_color_mode(1);
+    else if (id == "texture") terrain3d_view_.set_color_mode(2);
+    else if (id == "satellite") {
+        terrain3d_view_.set_color_mode(3);
+        ensure_satellite_palette_loaded();
+    }
+    else terrain3d_view_.set_color_mode(0);
 }
 
 TabWrpInfo::~TabWrpInfo() {
@@ -835,6 +818,9 @@ void TabWrpInfo::populate_class_list(const ClassListSnapshot& snapshot) {
         class_list_.remove(*row);
     }
     class_entries_.clear();
+    display_items_.clear();
+    display_offset_ = 0;
+    has_more_classes_ = false;
     model_panel_.clear();
 
     if (!world_data_ || snapshot.total_objects == 0) {
@@ -842,34 +828,74 @@ void TabWrpInfo::populate_class_list(const ClassListSnapshot& snapshot) {
         return;
     }
 
+    // Flatten snapshot into display_items_
     for (const auto& group : snapshot.groups) {
-        auto* header_label = Gtk::make_managed<Gtk::Label>();
-        header_label->set_markup("<b>" + Glib::Markup::escape_text(group.name) + "</b>");
-        header_label->set_halign(Gtk::Align::START);
-        header_label->set_margin(4);
-        header_label->set_margin_top(8);
-        auto* header_row = Gtk::make_managed<Gtk::ListBoxRow>();
-        header_row->set_child(*header_label);
-        header_row->set_activatable(false);
-        header_row->set_selectable(false);
-        class_list_.append(*header_row);
+        DisplayItem header;
+        header.is_header = true;
+        header.text = group.name;
+        display_items_.push_back(std::move(header));
 
         for (const auto& entry : group.entries) {
+            DisplayItem item;
+            item.is_header = false;
             auto basename = fs::path(entry.model_name).filename().string();
-            auto row_text = "  " + basename + "  (" + std::to_string(entry.count) + ")";
-
-            auto* label = Gtk::make_managed<Gtk::Label>(row_text);
-            label->set_halign(Gtk::Align::START);
-            label->set_tooltip_text(entry.model_name);
-            class_list_.append(*label);
+            item.text = "  " + basename + "  (" + std::to_string(entry.count) + ")";
+            item.entry = entry;
+            display_items_.push_back(std::move(item));
             class_entries_.push_back(entry);
         }
     }
+
+    has_more_classes_ = true;
+    append_class_page();
 
     class_status_label_.set_text(
         std::to_string(class_entries_.size()) + " unique models, "
         + std::to_string(snapshot.total_objects) + " objects, "
         + std::to_string(static_cast<int>(snapshot.groups.size())) + " categories");
+}
+
+void TabWrpInfo::try_load_next_class_page() {
+    if (!has_more_classes_) return;
+    auto adj = class_scroll_.get_vadjustment();
+    if (!adj) return;
+    double bottom = adj->get_value() + adj->get_page_size();
+    if ((adj->get_upper() - bottom) > 120.0) return;
+
+    append_class_page();
+}
+
+void TabWrpInfo::append_class_page() {
+    if (!has_more_classes_) return;
+
+    static constexpr size_t kClassPageSize = 200;
+    size_t count = 0;
+    while (count < kClassPageSize && display_offset_ < display_items_.size()) {
+        const auto& item = display_items_[display_offset_];
+        if (item.is_header) {
+            auto* header_label = Gtk::make_managed<Gtk::Label>();
+            header_label->set_markup("<b>" + Glib::Markup::escape_text(item.text) + "</b>");
+            header_label->set_halign(Gtk::Align::START);
+            header_label->set_margin(4);
+            header_label->set_margin_top(8);
+            auto* header_row = Gtk::make_managed<Gtk::ListBoxRow>();
+            header_row->set_child(*header_label);
+            header_row->set_activatable(false);
+            header_row->set_selectable(false);
+            class_list_.append(*header_row);
+        } else {
+            auto* label = Gtk::make_managed<Gtk::Label>(item.text);
+            label->set_halign(Gtk::Align::START);
+            label->set_tooltip_text(item.entry.model_name);
+            class_list_.append(*label);
+            count++;
+        }
+        display_offset_++;
+    }
+
+    if (display_offset_ >= display_items_.size()) {
+        has_more_classes_ = false;
+    }
 }
 
 void TabWrpInfo::ensure_objects_loaded() {
@@ -1204,43 +1230,31 @@ void TabWrpInfo::ensure_satellite_palette_loaded() {
 
 void TabWrpInfo::on_class_selected(Gtk::ListBoxRow* row) {
     if (!row) return;
-    if (class_entries_.empty()) {
+    if (display_items_.empty()) {
         ensure_objects_loaded();
         return;
     }
 
-    // Walk through rows to find which class_entry this corresponds to.
-    // We need to skip header rows (non-selectable).
-    // Count selectable rows up to this one.
-    int selectable_idx = -1;
-    for (int i = 0; ; ++i) {
-        auto* r = class_list_.get_row_at_index(i);
-        if (!r) break;
-        if (r->get_selectable()) selectable_idx++;
-        if (r == row) break;
-    }
+    int idx = row->get_index();
+    if (idx < 0 || idx >= static_cast<int>(display_items_.size())) return;
 
-    if (selectable_idx < 0 || selectable_idx >= static_cast<int>(class_entries_.size())) return;
+    const auto& item = display_items_[static_cast<size_t>(idx)];
+    if (item.is_header) return;
 
-    const auto& entry = class_entries_[static_cast<size_t>(selectable_idx)];
-    load_p3d_preview(entry.model_name);
+    load_p3d_preview(item.entry.model_name);
 }
 
 void TabWrpInfo::on_class_activated(Gtk::ListBoxRow* row) {
     if (!row) return;
-    if (class_entries_.empty()) return;
+    if (display_items_.empty()) return;
 
-    int selectable_idx = -1;
-    for (int i = 0; ; ++i) {
-        auto* r = class_list_.get_row_at_index(i);
-        if (!r) break;
-        if (r->get_selectable()) selectable_idx++;
-        if (r == row) break;
-    }
-    if (selectable_idx < 0 || selectable_idx >= static_cast<int>(class_entries_.size())) return;
+    int idx = row->get_index();
+    if (idx < 0 || idx >= static_cast<int>(display_items_.size())) return;
 
-    const auto& entry = class_entries_[static_cast<size_t>(selectable_idx)];
-    if (on_open_p3d_info_) on_open_p3d_info_(entry.model_name);
+    const auto& item = display_items_[static_cast<size_t>(idx)];
+    if (item.is_header) return;
+
+    if (on_open_p3d_info_) on_open_p3d_info_(item.entry.model_name);
 }
 
 void TabWrpInfo::load_p3d_preview(const std::string& model_path) {

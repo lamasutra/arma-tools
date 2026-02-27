@@ -1,8 +1,8 @@
-#include "render_domain/rd_cli_override.h"
+#include "ui_domain/ui_cli_override.h"
 
 #include <cctype>
 
-namespace render_domain {
+namespace ui_domain {
 
 namespace {
 
@@ -15,7 +15,7 @@ std::string normalize_backend_name(std::string backend) {
 
 }  // namespace
 
-CliOverrideParseResult parse_renderer_override_and_strip_args(int* argc, char** argv) {
+CliOverrideParseResult parse_ui_override_and_strip_args(int* argc, char** argv) {
     CliOverrideParseResult result;
     if (!argc || !argv || *argc <= 0) {
         return result;
@@ -29,29 +29,29 @@ CliOverrideParseResult parse_renderer_override_and_strip_args(int* argc, char** 
             continue;
         }
 
-        if (arg.rfind("--renderer=", 0) == 0) {
-            const std::string value = normalize_backend_name(arg.substr(11));
+        if (arg.rfind("--ui=", 0) == 0) {
+            const std::string value = normalize_backend_name(arg.substr(5));
             if (value.empty()) {
-                result.warnings.emplace_back("Ignoring empty --renderer override");
+                result.warnings.emplace_back("Ignoring empty --ui override");
             } else {
-                result.has_renderer_override = true;
-                result.renderer_backend = value;
+                result.has_ui_override = true;
+                result.ui_backend = value;
             }
             continue;
         }
 
-        if (arg == "--renderer") {
+        if (arg == "--ui") {
             if (read_index + 1 >= *argc) {
-                result.warnings.emplace_back("Missing value for --renderer option");
+                result.warnings.emplace_back("Missing value for --ui option");
                 continue;
             }
             const std::string value = normalize_backend_name(
                 argv[read_index + 1] ? argv[read_index + 1] : "");
             if (value.empty()) {
-                result.warnings.emplace_back("Ignoring empty --renderer override");
+                result.warnings.emplace_back("Ignoring empty --ui override");
             } else {
-                result.has_renderer_override = true;
-                result.renderer_backend = value;
+                result.has_ui_override = true;
+                result.ui_backend = value;
             }
             ++read_index;
             continue;
@@ -65,4 +65,4 @@ CliOverrideParseResult parse_renderer_override_and_strip_args(int* argc, char** 
     return result;
 }
 
-}  // namespace render_domain
+}  // namespace ui_domain

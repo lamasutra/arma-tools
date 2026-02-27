@@ -5,10 +5,17 @@
 #include "panel_wrapper.h"
 #include "pbo_index_service.h"
 #include "render_domain/rd_runtime_state.h"
+#include "ui_domain/ui_runtime_config.h"
+#include "ui_domain/ui_backend_registry.h"
+#include "ui_domain/ui_runtime_state.h"
+#include "ui_domain/ui_event_adapter.h"
 
 #include <adwaita.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <set>
 #include <vector>
@@ -20,6 +27,12 @@
 
 // Forward declarations
 static void hook_tab_views_for_tearoff(GtkWidget* dock_or_grid, AppWindow* self);
+
+static std::uint64_t now_ns() {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+}
 
 // Recursively find all AdwTabView widgets under `widget`.
 static void find_tab_views(GtkWidget* widget, std::vector<AdwTabView*>& out) {
@@ -209,6 +222,150 @@ void AppWindow::pin_panel(const char* id) {
 // ---------------------------------------------------------------------------
 void AppWindow::update_status(const std::string& text) {
     status_label_.set_text(text);
+}
+
+bool AppWindow::ensure_imgui_overlay_instance() {
+    auto& ui_state = ui_domain::runtime_state_mut();
+    if (ui_state.overlay_backend_instance && ui_state.overlay_backend_instance->valid()) {
+        return true;
+    }
+    if (!ui_state.backend_instance || !ui_state.backend_instance->valid()) {
+        return false;
+    }
+    if (ui_state.backend_instance->backend_id() != "gtk") {
+        return false;
+    }
+    if (!ui_state.registry_owner) {
+        app_log(LogLevel::Warning, "Cannot create imgui overlay instance: UI registry unavailable");
+        return false;
+    }
+
+    const auto& renderer_state = render_domain::runtime_state();
+    if (!renderer_state.ui_render_bridge ||
+        !renderer_state.ui_render_bridge->info().available ||
+        !renderer_state.ui_render_bridge->bridge_abi()) {
+        app_log(LogLevel::Warning,
+                "Cannot create imgui overlay instance: renderer UI bridge unavailable");
+        return false;
+    }
+
+    ui_backend_create_desc_v1 create_desc{};
+    create_desc.struct_size = sizeof(ui_backend_create_desc_v1);
+    create_desc.overlay_enabled = 1;
+    create_desc.render_bridge =
+        const_cast<ui_render_bridge_v1*>(renderer_state.ui_render_bridge->bridge_abi());
+
+    auto overlay_instance = std::make_shared<ui_domain::BackendInstance>();
+    std::string create_error;
+    if (!ui_state.registry_owner->create_instance("imgui", create_desc,
+                                                  *overlay_instance, create_error)) {
+        app_log(LogLevel::Warning,
+                "Cannot create imgui overlay instance: " + create_error);
+        return false;
+    }
+
+    ui_state.overlay_backend_instance = std::move(overlay_instance);
+    ui_state.overlay_backend_id = "imgui";
+    app_log(LogLevel::Info, "Created imgui overlay instance at runtime");
+    return true;
+}
+
+void AppWindow::toggle_ui_overlay() {
+    auto& state = ui_domain::runtime_state_mut();
+    std::shared_ptr<ui_domain::BackendInstance> overlay_target;
+    if (state.overlay_backend_instance && state.overlay_backend_instance->valid()) {
+        overlay_target = state.overlay_backend_instance;
+    } else if (state.backend_instance && state.backend_instance->valid() &&
+               state.backend_instance->backend_id() == "imgui") {
+        overlay_target = state.backend_instance;
+    } else if (ensure_imgui_overlay_instance()) {
+        overlay_target = state.overlay_backend_instance;
+    }
+
+    if (!overlay_target) {
+        app_log(LogLevel::Warning, "UI overlay toggle ignored: no active UI backend instance");
+        return;
+    }
+
+    const bool enabled = overlay_target->overlay_enabled();
+    const int status = overlay_target->set_overlay_enabled(!enabled);
+    if (status < 0) {
+        app_log(LogLevel::Warning,
+                "UI overlay toggle failed for backend '" +
+                    overlay_target->backend_id() + "' (status " +
+                    std::to_string(status) + ")");
+        return;
+    }
+
+    const bool now_enabled = overlay_target->overlay_enabled();
+    update_status(std::string("UI overlay ") + (now_enabled ? "enabled" : "disabled"));
+    app_log(LogLevel::Info,
+            "UI overlay " + std::string(now_enabled ? "enabled" : "disabled") +
+                " for backend '" + overlay_target->backend_id() + "'");
+}
+
+bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
+    const auto& state = ui_domain::runtime_state();
+
+    auto dispatch = [&](const std::shared_ptr<ui_domain::BackendInstance>& instance) -> int {
+        if (!instance || !instance->valid()) return UI_STATUS_OK;
+        const int status = instance->handle_event(&event);
+        if (status < 0) {
+            app_log(LogLevel::Warning,
+                    "UI event dispatch failed for backend '" +
+                        instance->backend_id() +
+                        "' (status " + std::to_string(status) + ")");
+        }
+        return status;
+    };
+
+    // Overlay gets first chance to consume pointer/keyboard events.
+    const int overlay_status = dispatch(state.overlay_backend_instance);
+    if (overlay_status == UI_STATUS_EVENT_CONSUMED) {
+        return true;
+    }
+
+    const int primary_status = dispatch(state.backend_instance);
+    return primary_status == UI_STATUS_EVENT_CONSUMED;
+}
+
+bool AppWindow::on_ui_tick() {
+    const auto& state = ui_domain::runtime_state();
+    const bool has_primary = state.backend_instance && state.backend_instance->valid();
+    const bool has_overlay = state.overlay_backend_instance && state.overlay_backend_instance->valid();
+    if (!has_primary && !has_overlay) {
+        return true;
+    }
+
+    float gtk_scale = static_cast<float>(gtk_widget_get_scale_factor(GTK_WIDGET(workspace_)));
+    if (!std::isfinite(gtk_scale) || gtk_scale <= 0.0f) {
+        gtk_scale = 1.0f;
+    }
+    const float effective_scale = gtk_scale * ui_user_scale_;
+    if (std::fabs(effective_scale - last_effective_ui_scale_) > 0.001f) {
+        ui_event_v1 scale_event =
+            ui_domain::event_adapter::make_dpi_scale_event(now_ns(), effective_scale);
+        dispatch_ui_event(scale_event);
+        last_effective_ui_scale_ = effective_scale;
+    }
+
+    auto run_frame = [&](const std::shared_ptr<ui_domain::BackendInstance>& instance) {
+        if (!instance || !instance->valid()) return;
+        const int begin_status = instance->begin_frame(1.0 / 60.0);
+        const int draw_status = instance->draw();
+        const int end_status = instance->end_frame();
+        if (begin_status < 0 || draw_status < 0 || end_status < 0) {
+            app_log(LogLevel::Warning,
+                    "UI backend frame error (" + instance->backend_id() +
+                        "): begin=" + std::to_string(begin_status) +
+                        " draw=" + std::to_string(draw_status) +
+                        " end=" + std::to_string(end_status));
+        }
+    };
+
+    run_frame(state.backend_instance);
+    run_frame(state.overlay_backend_instance);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +672,145 @@ AppWindow::AppWindow(GtkApplication* app) {
     auto* header = adw_header_bar_new();
     panel_document_workspace_set_titlebar(workspace_, GTK_WIDGET(header));
 
+    auto* motion_controller = gtk_event_controller_motion_new();
+    g_signal_connect(
+        motion_controller, "motion",
+        G_CALLBACK(+[](GtkEventControllerMotion* controller, double x, double y, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            const uint32_t modifiers = static_cast<uint32_t>(
+                gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller)));
+            ui_event_v1 event = ui_domain::event_adapter::make_mouse_move_event(
+                now_ns(), modifiers, static_cast<float>(x), static_cast<float>(y));
+            self->dispatch_ui_event(event);
+        }),
+        this);
+    gtk_widget_add_controller(GTK_WIDGET(workspace_), GTK_EVENT_CONTROLLER(motion_controller));
+
+    auto* click_gesture = gtk_gesture_click_new();
+    g_signal_connect(
+        click_gesture, "pressed",
+        G_CALLBACK(+[](GtkGestureClick* gesture, int, double x, double y, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            const uint32_t modifiers = static_cast<uint32_t>(
+                gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+            const int32_t button = static_cast<int32_t>(
+                gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)));
+            ui_event_v1 event = ui_domain::event_adapter::make_mouse_button_event(
+                now_ns(),
+                modifiers,
+                button,
+                true,
+                static_cast<float>(x),
+                static_cast<float>(y));
+            if (self->dispatch_ui_event(event)) {
+                gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+            }
+        }),
+        this);
+    g_signal_connect(
+        click_gesture, "released",
+        G_CALLBACK(+[](GtkGestureClick* gesture, int, double x, double y, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            const uint32_t modifiers = static_cast<uint32_t>(
+                gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+            const int32_t button = static_cast<int32_t>(
+                gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)));
+            ui_event_v1 event = ui_domain::event_adapter::make_mouse_button_event(
+                now_ns(),
+                modifiers,
+                button,
+                false,
+                static_cast<float>(x),
+                static_cast<float>(y));
+            if (self->dispatch_ui_event(event)) {
+                gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+            }
+        }),
+        this);
+    gtk_widget_add_controller(GTK_WIDGET(workspace_), GTK_EVENT_CONTROLLER(click_gesture));
+
+    auto* scroll_controller = gtk_event_controller_scroll_new(
+        GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+    g_signal_connect(
+        scroll_controller, "scroll",
+        G_CALLBACK(+[](GtkEventControllerScroll* controller, double dx, double dy, gpointer ud) -> gboolean {
+            auto* self = static_cast<AppWindow*>(ud);
+            const uint32_t modifiers = static_cast<uint32_t>(
+                gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller)));
+            ui_event_v1 event = ui_domain::event_adapter::make_mouse_wheel_event(
+                now_ns(), modifiers, static_cast<float>(dx), static_cast<float>(dy));
+            const bool consumed = self->dispatch_ui_event(event);
+            return static_cast<gboolean>(consumed ? GDK_EVENT_STOP : GDK_EVENT_PROPAGATE);
+        }),
+        this);
+    gtk_widget_add_controller(GTK_WIDGET(workspace_), GTK_EVENT_CONTROLLER(scroll_controller));
+
+    auto* key_controller = gtk_event_controller_key_new();
+    g_signal_connect(
+        key_controller, "key-pressed",
+        G_CALLBACK(+[](GtkEventControllerKey*, guint keyval, guint, GdkModifierType state, gpointer ud) -> gboolean {
+            auto* self = static_cast<AppWindow*>(ud);
+            ui_event_v1 key_event = ui_domain::event_adapter::make_key_event(
+                now_ns(),
+                static_cast<uint32_t>(state),
+                static_cast<int32_t>(keyval),
+                true);
+            const bool key_consumed = self->dispatch_ui_event(key_event);
+
+            if (keyval == GDK_KEY_F1) {
+                self->toggle_ui_overlay();
+                return static_cast<gboolean>(GDK_EVENT_STOP);
+            }
+            if (key_consumed) {
+                return static_cast<gboolean>(GDK_EVENT_STOP);
+            }
+
+            const bool has_text_modifiers =
+                (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK)) != 0;
+            if (!has_text_modifiers) {
+                const gunichar unicode = gdk_keyval_to_unicode(keyval);
+                if (unicode != 0 && !g_unichar_iscntrl(unicode)) {
+                    char text_utf8[8] = {};
+                    const int written = g_unichar_to_utf8(unicode, text_utf8);
+                    if (written > 0) {
+                        ui_event_v1 text_event =
+                            ui_domain::event_adapter::make_text_input_event(
+                                now_ns(),
+                                static_cast<uint32_t>(state),
+                                text_utf8);
+                        if (self->dispatch_ui_event(text_event)) {
+                            return static_cast<gboolean>(GDK_EVENT_STOP);
+                        }
+                    }
+                }
+            }
+            return static_cast<gboolean>(GDK_EVENT_PROPAGATE);
+        }),
+        this);
+    g_signal_connect(
+        key_controller, "key-released",
+        G_CALLBACK(+[](GtkEventControllerKey*, guint keyval, guint, GdkModifierType state, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            ui_event_v1 event = ui_domain::event_adapter::make_key_event(
+                now_ns(),
+                static_cast<uint32_t>(state),
+                static_cast<int32_t>(keyval),
+                false);
+            self->dispatch_ui_event(event);
+        }),
+        this);
+    gtk_widget_add_controller(GTK_WIDGET(workspace_), GTK_EVENT_CONTROLLER(key_controller));
+    const auto& ui_state = ui_domain::runtime_state();
+    auto ui_cfg = ui_domain::load_runtime_config();
+    ui_user_scale_ = (std::isfinite(ui_cfg.scale) && ui_cfg.scale > 0.0f) ? ui_cfg.scale : 1.0f;
+    std::string ui_preferred = ui_cfg.preferred.empty() ? "auto" : ui_cfg.preferred;
+    const bool known_preferred = ui_preferred == "auto" ||
+        std::any_of(ui_state.backends.begin(), ui_state.backends.end(),
+                    [&ui_preferred](const ui_domain::BackendRecord& backend) {
+                        return backend.id == ui_preferred;
+                    });
+    if (!known_preferred) ui_preferred = "auto";
+
     // Add a View menu button to the header bar
     auto* menu = g_menu_new();
     // disabled areas
@@ -524,6 +820,51 @@ AppWindow::AppWindow(GtkApplication* app) {
     // g_menu_append(dock_section, "Toggle Top Panel", "win.reveal-top");
     // g_menu_append(dock_section, "Toggle Bottom Panel", "win.reveal-bottom");
     // g_menu_append_section(menu, "Dock Areas", G_MENU_MODEL(dock_section));
+
+    auto* ui_section = g_menu_new();
+    auto append_ui_menu_item = [&](const std::string& id, const std::string& label) {
+        auto* item = g_menu_item_new(label.c_str(), nullptr);
+        g_menu_item_set_action_and_target_value(
+            item, "win.set-ui-backend", g_variant_new_string(id.c_str()));
+        g_menu_append_item(ui_section, item);
+        g_object_unref(item);
+    };
+
+    std::string auto_label = "auto | select highest score available";
+    if (ui_state.selection.success) {
+        auto_label += " | selected=" + ui_state.selection.selected_backend;
+        if (!ui_state.selection.message.empty()) {
+            auto_label += " | " + ui_state.selection.message;
+        }
+    }
+    append_ui_menu_item("auto", auto_label);
+    for (const auto& backend : ui_state.backends) {
+        const std::string label = backend.id +
+            " | " + (backend.probe.available ? "available" : "unavailable") +
+            " | score=" + std::to_string(backend.probe.score) +
+            " | reason=" + (backend.probe.reason.empty() ? std::string("-") : backend.probe.reason);
+        append_ui_menu_item(backend.id, label);
+    }
+    g_menu_append_section(menu, "UI Backend", G_MENU_MODEL(ui_section));
+
+    auto* overlay_section = g_menu_new();
+    g_menu_append(overlay_section, "Toggle Overlay (F1)", "win.toggle-ui-overlay");
+    g_menu_append(overlay_section, "Persist ImGui Overlay", "win.toggle-imgui-overlay-persist");
+    g_menu_append_section(menu, "UI Overlay", G_MENU_MODEL(overlay_section));
+
+    auto* ui_scale_section = g_menu_new();
+    auto append_ui_scale_item = [&](double scale, const char* label) {
+        auto* item = g_menu_item_new(label, nullptr);
+        g_menu_item_set_action_and_target_value(
+            item, "win.set-ui-scale", g_variant_new_double(scale));
+        g_menu_append_item(ui_scale_section, item);
+        g_object_unref(item);
+    };
+    append_ui_scale_item(0.75, "75%");
+    append_ui_scale_item(1.0, "100%");
+    append_ui_scale_item(1.25, "125%");
+    append_ui_scale_item(1.5, "150%");
+    g_menu_append_section(menu, "UI Scale", G_MENU_MODEL(ui_scale_section));
 
     auto* layout_section = g_menu_new();
     g_menu_append(layout_section, "Reset Layout", "win.reset-layout");
@@ -535,6 +876,9 @@ AppWindow::AppWindow(GtkApplication* app) {
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_button);
     g_object_unref(menu);
     // g_object_unref(dock_section);
+    g_object_unref(ui_section);
+    g_object_unref(overlay_section);
+    g_object_unref(ui_scale_section);
     g_object_unref(layout_section);
 
     // Set up GActions on the window
@@ -546,6 +890,178 @@ AppWindow::AppWindow(GtkApplication* app) {
         G_CALLBACK(+[](AppWindow* self, GVariant*) { self->on_reset_layout(); }), this);
     g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(reset_action));
     g_object_unref(reset_action);
+
+    // UI backend preference action (persisted to ui.json; takes effect next launch).
+    auto* ui_backend_action = g_simple_action_new_stateful(
+        "set-ui-backend",
+        G_VARIANT_TYPE_STRING,
+        g_variant_new_string(ui_preferred.c_str()));
+    g_signal_connect_data(
+        ui_backend_action, "activate",
+        G_CALLBACK(+[](GSimpleAction* action, GVariant* parameter, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            if (!parameter || !g_variant_is_of_type(parameter, G_VARIANT_TYPE_STRING)) {
+                return;
+            }
+
+            std::string requested = g_variant_get_string(parameter, nullptr);
+            if (requested.empty()) requested = "auto";
+
+            if (requested != "auto") {
+                const auto& state = ui_domain::runtime_state();
+                auto it = std::find_if(state.backends.begin(), state.backends.end(),
+                                       [&requested](const ui_domain::BackendRecord& backend) {
+                                           return backend.id == requested;
+                                       });
+                if (it == state.backends.end()) {
+                    self->update_status("Cannot select UI backend '" + requested + "': unknown id");
+                    app_log(LogLevel::Warning,
+                            "Cannot select UI backend '" + requested + "': unknown id");
+                    return;
+                }
+                if (!it->probe.available) {
+                    self->update_status(
+                        "Cannot select UI backend '" + requested + "': unavailable");
+                    app_log(LogLevel::Warning,
+                            "Cannot select UI backend '" + requested + "': unavailable (" +
+                                (it->probe.reason.empty() ? std::string("-") : it->probe.reason) + ")");
+                    return;
+                }
+            }
+
+            auto cfg = ui_domain::load_runtime_config();
+            cfg.preferred = requested;
+            if (!ui_domain::save_runtime_config(cfg)) {
+                app_log(LogLevel::Warning,
+                        "Failed to persist UI backend preference to " +
+                            ui_domain::runtime_config_path().string());
+                return;
+            }
+
+            g_simple_action_set_state(action, g_variant_new_string(requested.c_str()));
+            self->update_status("UI backend preference saved: " + requested);
+            app_log(LogLevel::Info,
+                    "UI backend preference set to '" + requested +
+                        "' (restart required)");
+        }),
+        this, nullptr, GConnectFlags(0));
+    g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(ui_backend_action));
+    g_object_unref(ui_backend_action);
+
+    // Runtime overlay toggle action (non-persistent, equivalent to F1).
+    auto* toggle_overlay_action = g_simple_action_new("toggle-ui-overlay", nullptr);
+    g_signal_connect_data(
+        toggle_overlay_action, "activate",
+        G_CALLBACK(+[](GSimpleAction*, GVariant*, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            self->toggle_ui_overlay();
+        }),
+        this, nullptr, GConnectFlags(0));
+    g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(toggle_overlay_action));
+    g_object_unref(toggle_overlay_action);
+
+    // Persistent overlay preference.
+    auto* persist_overlay_action = g_simple_action_new_stateful(
+        "toggle-imgui-overlay-persist",
+        nullptr,
+        g_variant_new_boolean(ui_cfg.imgui_overlay_enabled));
+    g_signal_connect_data(
+        persist_overlay_action, "activate",
+        G_CALLBACK(+[](GSimpleAction* action, GVariant*, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+
+            GVariant* state_value = g_action_get_state(G_ACTION(action));
+            const bool current = state_value && g_variant_get_boolean(state_value) != 0;
+            if (state_value) g_variant_unref(state_value);
+            const bool enabled = !current;
+
+            auto cfg = ui_domain::load_runtime_config();
+            cfg.imgui_overlay_enabled = enabled;
+            if (!ui_domain::save_runtime_config(cfg)) {
+                app_log(LogLevel::Warning,
+                        "Failed to persist ImGui overlay preference to " +
+                            ui_domain::runtime_config_path().string());
+                return;
+            }
+
+            g_simple_action_set_state(action, g_variant_new_boolean(enabled));
+
+            auto& state = ui_domain::runtime_state_mut();
+            std::shared_ptr<ui_domain::BackendInstance> target;
+            if (state.overlay_backend_instance && state.overlay_backend_instance->valid()) {
+                target = state.overlay_backend_instance;
+            } else if (state.backend_instance && state.backend_instance->valid() &&
+                       state.backend_instance->backend_id() == "imgui") {
+                target = state.backend_instance;
+            } else if (enabled && self->ensure_imgui_overlay_instance()) {
+                target = state.overlay_backend_instance;
+            }
+
+            if (target) {
+                const int status = target->set_overlay_enabled(enabled);
+                if (status < 0) {
+                    app_log(LogLevel::Warning,
+                            "Failed to apply runtime ImGui overlay state for backend '" +
+                                target->backend_id() + "' (status " + std::to_string(status) + ")");
+                }
+            } else if (enabled) {
+                app_log(LogLevel::Info,
+                        "ImGui overlay preference enabled, but no active imgui overlay instance");
+            }
+
+            self->update_status(
+                std::string("ImGui overlay default ") + (enabled ? "enabled" : "disabled"));
+            app_log(LogLevel::Info,
+                    "ImGui overlay preference set to " +
+                        std::string(enabled ? "enabled" : "disabled"));
+        }),
+        this, nullptr, GConnectFlags(0));
+    g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(persist_overlay_action));
+    g_object_unref(persist_overlay_action);
+
+    // Persistent UI scale preference (applied live through the existing DPI event tick path).
+    auto* ui_scale_action = g_simple_action_new_stateful(
+        "set-ui-scale",
+        G_VARIANT_TYPE_DOUBLE,
+        g_variant_new_double(static_cast<double>(ui_user_scale_)));
+    g_signal_connect_data(
+        ui_scale_action, "activate",
+        G_CALLBACK(+[](GSimpleAction* action, GVariant* parameter, gpointer ud) {
+            auto* self = static_cast<AppWindow*>(ud);
+            if (!parameter || !g_variant_is_of_type(parameter, G_VARIANT_TYPE_DOUBLE)) {
+                return;
+            }
+
+            const double requested_raw = g_variant_get_double(parameter);
+            if (!std::isfinite(requested_raw) || requested_raw <= 0.0) {
+                self->update_status("UI scale change ignored: invalid value");
+                app_log(LogLevel::Warning, "Ignoring invalid UI scale request");
+                return;
+            }
+            const float requested = static_cast<float>(requested_raw);
+
+            auto cfg = ui_domain::load_runtime_config();
+            cfg.scale = requested;
+            if (!ui_domain::save_runtime_config(cfg)) {
+                self->update_status("Failed to persist UI scale preference");
+                app_log(LogLevel::Warning,
+                        "Failed to persist UI scale preference to " +
+                            ui_domain::runtime_config_path().string());
+                return;
+            }
+
+            self->ui_user_scale_ = requested;
+            self->last_effective_ui_scale_ = 0.0f;
+            g_simple_action_set_state(action, g_variant_new_double(requested_raw));
+
+            const int pct = static_cast<int>(std::lround(requested_raw * 100.0));
+            self->update_status("UI scale set to " + std::to_string(pct) + "%");
+            app_log(LogLevel::Info,
+                    "UI scale preference set to " + std::to_string(pct) + "%");
+        }),
+        this, nullptr, GConnectFlags(0));
+    g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(ui_scale_action));
+    g_object_unref(ui_scale_action);
 
     // Dock area toggle actions
     auto add_toggle_action = [&](const char* name, PanelArea area) {
@@ -616,6 +1132,32 @@ AppWindow::AppWindow(GtkApplication* app) {
                 " | reason=" + (backend.probe.reason.empty()
                                     ? std::string("-")
                                     : backend.probe.reason));
+    }
+    if (ui_state.selection.success) {
+        app_log(LogLevel::Info,
+                "UI backend selected: " + ui_state.selection.selected_backend +
+                " (" + ui_state.selection.message + ")");
+    } else if (!ui_state.selection.message.empty()) {
+        app_log(LogLevel::Warning,
+                "UI backend selection failed: " + ui_state.selection.message);
+    }
+    for (const auto& backend : ui_state.backends) {
+        app_log(LogLevel::Info,
+                "UI backend " + backend.id +
+                " | available=" + (backend.probe.available ? "yes" : "no") +
+                " | score=" + std::to_string(backend.probe.score) +
+                " | source=" + backend.source +
+                " | reason=" + (backend.probe.reason.empty()
+                                    ? std::string("-")
+                                    : backend.probe.reason));
+    }
+    if (ui_state.selection.success) {
+        update_status(
+            "UI backend: " + ui_state.selection.selected_backend + " | " +
+            (ui_state.selection.message.empty() ? std::string("selected")
+                                                : ui_state.selection.message));
+    } else if (!ui_state.selection.message.empty()) {
+        update_status("UI backend selection failed: " + ui_state.selection.message);
     }
     register_tab_config_presenter();
 
@@ -707,9 +1249,16 @@ AppWindow::AppWindow(GtkApplication* app) {
             self->detach_all_panels();
             return FALSE;  // Allow close to proceed
         }), this);
+
+    ui_tick_connection_ = Glib::signal_timeout().connect(
+        sigc::mem_fun(*this, &AppWindow::on_ui_tick),
+        16);
 }
 
 AppWindow::~AppWindow() {
+    if (ui_tick_connection_.connected()) {
+        ui_tick_connection_.disconnect();
+    }
     set_global_log({});
     if (services_.pbo_index_service)
         services_.pbo_index_service->unsubscribe(this);

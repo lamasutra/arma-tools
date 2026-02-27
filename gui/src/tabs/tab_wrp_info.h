@@ -144,6 +144,7 @@ private:
     std::vector<WrpFileEntry> filtered_files_;
     std::string current_source_;
     bool source_combo_updating_ = false;
+    bool terrain3d_mode_combo_updating_ = false;
     WrpFileEntry loaded_wrp_entry_;
     bool loaded_wrp_entry_valid_ = false;
     std::jthread worker_;
@@ -180,4 +181,16 @@ private:
     void ensure_satellite_palette_loaded();
     void update_terrain3d_mode_options(bool allow_texture, bool allow_satellite);
     std::function<void(const std::string&)> on_open_p3d_info_;
+
+    struct DisplayItem {
+        bool is_header = false;
+        std::string text;
+        ClassEntry entry;
+    };
+    std::vector<DisplayItem> display_items_;
+    size_t display_offset_ = 0;
+    bool has_more_classes_ = false;
+    sigc::connection class_scroll_conn_;
+    void try_load_next_class_page();
+    void append_class_page();
 };

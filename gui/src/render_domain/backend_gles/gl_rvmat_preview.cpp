@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "render_domain/rd_runtime_state.h"
 
 #include <epoxy/gl.h>
 
@@ -387,6 +388,10 @@ bool GLRvmatPreview::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glBindVertexArray(vao);
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
+
+    if (const auto& bridge = render_domain::runtime_state().ui_render_bridge) {
+        bridge->render_in_current_context(get_width(), get_height());
+    }
 
     log_gl_errors("GLRvmatPreview::on_render_gl");
     return true;

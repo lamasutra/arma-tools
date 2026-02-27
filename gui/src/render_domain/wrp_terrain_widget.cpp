@@ -66,8 +66,8 @@ void WrpTerrainWidget::set_world_data(const armatools::wrp::WorldData& world) {
     if (has_gles()) impl_->gles.set_world_data(world);
 }
 
-void WrpTerrainWidget::set_objects(const std::vector<armatools::wrp::ObjectRecord>& objects) {
-    if (has_gles()) impl_->gles.set_objects(objects);
+void WrpTerrainWidget::set_objects(std::vector<armatools::wrp::ObjectRecord> objects) {
+    if (has_gles()) impl_->gles.set_objects(std::move(objects));
 }
 
 void WrpTerrainWidget::set_wireframe(bool on) {
