@@ -24,14 +24,15 @@ armatools::p3d::P3DFile P3dModelLoaderService::load_p3d(const std::string& model
         throw std::runtime_error("P3D model path is empty");
     };
 
-    // Try pboindex resolve first
+    // Try pboindex resolve first, but fall back if extraction yields no data.
     if (index) {
         armatools::pboindex::ResolveResult rr;
         if (index->resolve(model_path, rr)) {
             armatools::cli::log_debug("P3dModelLoaderService: resolved from index" + model_path
                     + " -> " + rr.pbo_path + " : " + rr.entry_name);
             auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
-            return try_load_p3d_from_data(data);
+            if (!data.empty())
+                return try_load_p3d_from_data(data);
         }
     }
 
