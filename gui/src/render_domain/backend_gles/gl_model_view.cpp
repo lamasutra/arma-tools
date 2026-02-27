@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "render_domain/rd_scene_blob.h"
 
 #include <armatools/armapath.h>
 
@@ -335,12 +336,21 @@ void GLModelView::on_unrealize_gl() {
     log_gl_errors("GLModelView::on_unrealize_gl");
 }
 
-void GLModelView::cleanup_gl() {
+void GLModelView::clear_mesh_groups() {
     for (auto& g : groups_) {
         if (g.vao) glDeleteVertexArrays(1, &g.vao);
         if (g.vbo) glDeleteBuffers(1, &g.vbo);
     }
     groups_.clear();
+
+    if (wire_vao_) { glDeleteVertexArrays(1, &wire_vao_); wire_vao_ = 0; }
+    if (wire_vbo_) { glDeleteBuffers(1, &wire_vbo_); wire_vbo_ = 0; }
+    if (wire_ebo_) { glDeleteBuffers(1, &wire_ebo_); wire_ebo_ = 0; }
+    wire_index_count_ = 0;
+}
+
+void GLModelView::cleanup_gl() {
+    clear_mesh_groups();
 
     for (auto& [key, tex] : textures_)
         glDeleteTextures(1, &tex);
@@ -353,11 +363,6 @@ void GLModelView::cleanup_gl() {
     specular_maps_.clear();
     texture_has_alpha_.clear();
     material_params_.clear();
-
-    if (wire_vao_) { glDeleteVertexArrays(1, &wire_vao_); wire_vao_ = 0; }
-    if (wire_vbo_) { glDeleteBuffers(1, &wire_vbo_); wire_vbo_ = 0; }
-    if (wire_ebo_) { glDeleteBuffers(1, &wire_ebo_); wire_ebo_ = 0; }
-    wire_index_count_ = 0;
 
     if (grid_vao_) { glDeleteVertexArrays(1, &grid_vao_); grid_vao_ = 0; }
     if (grid_vbo_) { glDeleteBuffers(1, &grid_vbo_); grid_vbo_ = 0; }
@@ -496,196 +501,201 @@ void GLModelView::draw_grid_and_axis(const float* mvp) {
     glBindVertexArray(0);
 }
 
-void GLModelView::set_lod(const armatools::p3d::LOD& lod) {
-    set_lods(std::vector<armatools::p3d::LOD>{lod});
-}
-
-void GLModelView::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
+void GLModelView::set_scene_blob(const rd_scene_blob_v1& blob,
+                                 const std::vector<std::string>& material_texture_keys) {
     make_current();
     if (has_error()) return;
 
-    // Clear old mesh data
-    for (auto& g : groups_) {
-        if (g.vao) glDeleteVertexArrays(1, &g.vao);
-        if (g.vbo) glDeleteBuffers(1, &g.vbo);
+    std::string validation_error;
+    if (!render_domain::validate_scene_blob_v1(blob, &validation_error)) {
+        app_log(LogLevel::Error, "GLModelView: scene blob validation failed: " + validation_error);
+        clear_mesh_groups();
+        has_geometry_ = false;
+        queue_render();
+        return;
     }
-    groups_.clear();
 
-    // Group faces by texture (normalized key for case-insensitive matching)
-    std::unordered_map<std::string, std::vector<float>> grouped_verts;
+    clear_mesh_groups();
 
-    for (const auto& lod : lods) {
-        for (const auto& face : lod.face_data) {
-            const auto& fvs = face.vertices;
-            if (fvs.size() < 3) continue;
+    const bool has_normals = (blob.flags & RD_SCENE_BLOB_FLAG_HAS_NORMALS) != 0;
+    const bool has_uv0 = (blob.flags & RD_SCENE_BLOB_FLAG_HAS_UV0) != 0;
+    const bool index32 = (blob.flags & RD_SCENE_BLOB_FLAG_INDEX32) != 0;
+    static const uint8_t kEmptyData = 0;
+    const auto* blob_data = blob.data ? blob.data : &kEmptyData;
 
-            auto tex_key = armatools::armapath::to_slash_lower(face.texture);
-            if (tex_key.empty())
-                tex_key = armatools::armapath::to_slash_lower(face.material);
-            auto& buf = grouped_verts[tex_key];
+    const auto* positions = reinterpret_cast<const float*>(blob_data + blob.positions_offset);
+    const auto* normals = has_normals
+        ? reinterpret_cast<const float*>(blob_data + blob.normals_offset)
+        : nullptr;
+    const auto* uv0 = has_uv0
+        ? reinterpret_cast<const float*>(blob_data + blob.uv0_offset)
+        : nullptr;
+    const auto* indices_u32 = index32
+        ? reinterpret_cast<const uint32_t*>(blob_data + blob.indices_offset)
+        : nullptr;
+    const auto* indices_u16 = index32
+        ? nullptr
+        : reinterpret_cast<const uint16_t*>(blob_data + blob.indices_offset);
+    const auto* meshes = blob.mesh_count > 0
+        ? reinterpret_cast<const rd_scene_mesh_v1*>(blob_data + blob.meshes_offset)
+        : nullptr;
 
-            // Triangulate: fan from vertex 0
-            for (size_t i = 1; i + 1 < fvs.size(); i++) {
-                const size_t tri[3] = {0, i, i + 1};
-                float pos[3][3] = {};
-                float uv[3][2] = {};
-                for (int ti = 0; ti < 3; ++ti) {
-                    const auto& fv = fvs[tri[ti]];
-                    if (fv.point_index < lod.vertices.size()) {
-                        const auto& p = lod.vertices[fv.point_index];
-                        pos[ti][0] = -p[0];
-                        pos[ti][1] = p[1];
-                        pos[ti][2] = p[2];
-                    }
-                    uv[ti][0] = std::isfinite(fv.uv[0]) ? fv.uv[0] : 0.0f;
-                    uv[ti][1] = std::isfinite(fv.uv[1]) ? fv.uv[1] : 0.0f;
-                }
-                float e1x = pos[1][0] - pos[0][0];
-                float e1y = pos[1][1] - pos[0][1];
-                float e1z = pos[1][2] - pos[0][2];
-                float e2x = pos[2][0] - pos[0][0];
-                float e2y = pos[2][1] - pos[0][1];
-                float e2z = pos[2][2] - pos[0][2];
-                float du1 = uv[1][0] - uv[0][0];
-                float dv1 = uv[1][1] - uv[0][1];
-                float du2 = uv[2][0] - uv[0][0];
-                float dv2 = uv[2][1] - uv[0][1];
-                float denom = du1 * dv2 - dv1 * du2;
-                float tx = 1.0f, ty = 0.0f, tz = 0.0f;
-                if (std::abs(denom) > 1e-8f) {
-                    float r = 1.0f / denom;
-                    tx = (dv2 * e1x - dv1 * e2x) * r;
-                    ty = (dv2 * e1y - dv1 * e2y) * r;
-                    tz = (dv2 * e1z - dv1 * e2z) * r;
-                    float tlen = std::sqrt(tx * tx + ty * ty + tz * tz);
-                    if (tlen > 1e-8f) {
-                        tx /= tlen;
-                        ty /= tlen;
-                        tz /= tlen;
-                    } else {
-                        tx = 1.0f; ty = 0.0f; tz = 0.0f;
-                    }
-                }
-                for (auto vi : tri) {
-                    const auto& fv = fvs[vi];
+    std::vector<float> all_positions;
+    size_t empty_key_groups = 0;
 
-                    // Position (negate X to convert from P3D left-handed to GL right-handed)
-                    if (fv.point_index < lod.vertices.size()) {
-                        const auto& p = lod.vertices[fv.point_index];
-                        buf.push_back(-p[0]);
-                        buf.push_back(p[1]);
-                        buf.push_back(p[2]);
-                    } else {
-                        buf.push_back(0); buf.push_back(0); buf.push_back(0);
-                    }
+    for (uint32_t mesh_idx = 0; mesh_idx < blob.mesh_count; ++mesh_idx) {
+        const auto& mesh = meshes[mesh_idx];
+        if (mesh.index_count < 3) continue;
 
-                    // Normal (negate X to match the coordinate flip)
-                    if (fv.normal_index >= 0 &&
-                        static_cast<size_t>(fv.normal_index) < lod.normals.size()) {
-                        const auto& n = lod.normals[static_cast<size_t>(fv.normal_index)];
-                        buf.push_back(-n[0]);
-                        buf.push_back(n[1]);
-                        buf.push_back(n[2]);
-                    } else {
-                        buf.push_back(0); buf.push_back(1); buf.push_back(0);
-                    }
+        std::vector<float> verts;
+        verts.reserve(static_cast<size_t>(mesh.index_count) * 11);
 
-                    // UV (pass through raw; GL's bottom-up convention cancels P3D's top-down UVs)
-                    float u = fv.uv[0];
-                    float v = fv.uv[1];
+        for (uint32_t i = 0; i + 2 < mesh.index_count; i += 3) {
+            const uint32_t i0 = mesh.index_offset + i;
+            const uint32_t i1 = mesh.index_offset + i + 1;
+            const uint32_t i2 = mesh.index_offset + i + 2;
 
-                    // Sanitize NaN / infinity
-                    if (!std::isfinite(u)) u = 0.0f;
-                    if (!std::isfinite(v)) v = 0.0f;
+            const uint32_t v0 = index32 ? indices_u32[i0] : static_cast<uint32_t>(indices_u16[i0]);
+            const uint32_t v1 = index32 ? indices_u32[i1] : static_cast<uint32_t>(indices_u16[i1]);
+            const uint32_t v2 = index32 ? indices_u32[i2] : static_cast<uint32_t>(indices_u16[i2]);
+            if (v0 >= blob.vertex_count || v1 >= blob.vertex_count || v2 >= blob.vertex_count) {
+                continue;
+            }
 
-                    buf.push_back(u);
-                    buf.push_back(v);
-                    buf.push_back(tx);
-                    buf.push_back(ty);
-                    buf.push_back(tz);
+            const float p0x = positions[v0 * 3 + 0];
+            const float p0y = positions[v0 * 3 + 1];
+            const float p0z = positions[v0 * 3 + 2];
+            const float p1x = positions[v1 * 3 + 0];
+            const float p1y = positions[v1 * 3 + 1];
+            const float p1z = positions[v1 * 3 + 2];
+            const float p2x = positions[v2 * 3 + 0];
+            const float p2y = positions[v2 * 3 + 1];
+            const float p2z = positions[v2 * 3 + 2];
+
+            const float u0 = uv0 ? uv0[v0 * 2 + 0] : 0.0f;
+            const float vv0 = uv0 ? uv0[v0 * 2 + 1] : 0.0f;
+            const float u1 = uv0 ? uv0[v1 * 2 + 0] : 0.0f;
+            const float vv1 = uv0 ? uv0[v1 * 2 + 1] : 0.0f;
+            const float u2 = uv0 ? uv0[v2 * 2 + 0] : 0.0f;
+            const float vv2 = uv0 ? uv0[v2 * 2 + 1] : 0.0f;
+
+            const float e1x = p1x - p0x;
+            const float e1y = p1y - p0y;
+            const float e1z = p1z - p0z;
+            const float e2x = p2x - p0x;
+            const float e2y = p2y - p0y;
+            const float e2z = p2z - p0z;
+            const float du1 = u1 - u0;
+            const float dv1 = vv1 - vv0;
+            const float du2 = u2 - u0;
+            const float dv2 = vv2 - vv0;
+            const float denom = du1 * dv2 - dv1 * du2;
+
+            float tx = 1.0f;
+            float ty = 0.0f;
+            float tz = 0.0f;
+            if (std::abs(denom) > 1e-8f) {
+                const float r = 1.0f / denom;
+                tx = (dv2 * e1x - dv1 * e2x) * r;
+                ty = (dv2 * e1y - dv1 * e2y) * r;
+                tz = (dv2 * e1z - dv1 * e2z) * r;
+                const float tlen = std::sqrt(tx * tx + ty * ty + tz * tz);
+                if (tlen > 1e-8f) {
+                    tx /= tlen;
+                    ty /= tlen;
+                    tz /= tlen;
+                } else {
+                    tx = 1.0f;
+                    ty = 0.0f;
+                    tz = 0.0f;
                 }
             }
-        }
-    }
 
-    // Upload each group
-    size_t empty_key_groups = 0;
-    for (auto& [tex_key, verts] : grouped_verts) {
+            const uint32_t tri_vertices[3] = {v0, v1, v2};
+            for (uint32_t v : tri_vertices) {
+                verts.push_back(positions[v * 3 + 0]);
+                verts.push_back(positions[v * 3 + 1]);
+                verts.push_back(positions[v * 3 + 2]);
+
+                if (normals) {
+                    verts.push_back(normals[v * 3 + 0]);
+                    verts.push_back(normals[v * 3 + 1]);
+                    verts.push_back(normals[v * 3 + 2]);
+                } else {
+                    verts.push_back(0.0f);
+                    verts.push_back(1.0f);
+                    verts.push_back(0.0f);
+                }
+
+                if (uv0) {
+                    verts.push_back(uv0[v * 2 + 0]);
+                    verts.push_back(uv0[v * 2 + 1]);
+                } else {
+                    verts.push_back(0.0f);
+                    verts.push_back(0.0f);
+                }
+
+                verts.push_back(tx);
+                verts.push_back(ty);
+                verts.push_back(tz);
+
+                all_positions.push_back(positions[v * 3 + 0]);
+                all_positions.push_back(positions[v * 3 + 1]);
+                all_positions.push_back(positions[v * 3 + 2]);
+            }
+        }
+
+        if (verts.empty()) continue;
+
         MeshGroup g;
-        g.texture_key = tex_key;
+        if (mesh.material_index < material_texture_keys.size()) {
+            g.texture_key = material_texture_keys[mesh.material_index];
+        }
         if (g.texture_key.empty()) ++empty_key_groups;
-        g.vertex_count = static_cast<int>(verts.size()) / 11;
+        g.vertex_count = static_cast<int>(verts.size() / 11);
 
         glGenVertexArrays(1, &g.vao);
         glGenBuffers(1, &g.vbo);
-
         glBindVertexArray(g.vao);
         glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
         glBufferData(GL_ARRAY_BUFFER,
                      static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
                      verts.data(), GL_STATIC_DRAW);
 
-        // aPos (location 0)
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(0));
-        // aNormal (location 1)
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(3 * sizeof(float)));
-        // aUV (location 2)
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(6 * sizeof(float)));
-        // aTangent (location 3)
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 11 * sizeof(float),
                               reinterpret_cast<void*>(8 * sizeof(float)));
-
         glBindVertexArray(0);
+
         groups_.push_back(std::move(g));
     }
 
-    // Build wireframe line buffer for GLES path
-    if (wire_vao_) { glDeleteVertexArrays(1, &wire_vao_); wire_vao_ = 0; }
-    if (wire_vbo_) { glDeleteBuffers(1, &wire_vbo_); wire_vbo_ = 0; }
-    if (wire_ebo_) { glDeleteBuffers(1, &wire_ebo_); wire_ebo_ = 0; }
-    wire_index_count_ = 0;
-
     if (!is_desktop_gl_) {
-        // Collect all triangle positions into a flat buffer
-        std::vector<float> all_positions;
-        for (const auto& [tex_key, verts] : grouped_verts) {
-            size_t vert_count = verts.size() / 11;
-            for (size_t i = 0; i < vert_count; i++) {
-                all_positions.push_back(verts[i * 11 + 0]);
-                all_positions.push_back(verts[i * 11 + 1]);
-                all_positions.push_back(verts[i * 11 + 2]);
-            }
-        }
-
-        size_t total_verts = all_positions.size() / 3;
-        size_t total_triangles = total_verts / 3;
-
-        // Build line indices: for each triangle (v0,v1,v2), emit edges v0-v1, v1-v2, v2-v0
+        const size_t total_triangles = all_positions.size() / 9;
         std::vector<uint32_t> line_indices;
         line_indices.reserve(total_triangles * 6);
-        for (size_t t = 0; t < total_triangles; t++) {
-            uint32_t base = static_cast<uint32_t>(t * 3);
+        for (size_t t = 0; t < total_triangles; ++t) {
+            const uint32_t base = static_cast<uint32_t>(t * 3);
             line_indices.push_back(base);     line_indices.push_back(base + 1);
             line_indices.push_back(base + 1); line_indices.push_back(base + 2);
             line_indices.push_back(base + 2); line_indices.push_back(base);
         }
 
         wire_index_count_ = static_cast<int>(line_indices.size());
-
         if (wire_index_count_ > 0) {
             glGenVertexArrays(1, &wire_vao_);
             glGenBuffers(1, &wire_vbo_);
             glGenBuffers(1, &wire_ebo_);
-
             glBindVertexArray(wire_vao_);
-
             glBindBuffer(GL_ARRAY_BUFFER, wire_vbo_);
             glBufferData(GL_ARRAY_BUFFER,
                          static_cast<GLsizeiptr>(all_positions.size() * sizeof(float)),
@@ -693,12 +703,10 @@ void GLModelView::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
                                   reinterpret_cast<void*>(0));
-
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, wire_ebo_);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                          static_cast<GLsizeiptr>(line_indices.size() * sizeof(uint32_t)),
                          line_indices.data(), GL_STATIC_DRAW);
-
             glBindVertexArray(0);
         }
     }
@@ -706,10 +714,12 @@ void GLModelView::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
     has_geometry_ = !groups_.empty();
     debug_group_report_pending_ = true;
     app_log(LogLevel::Debug,
-            "GLModelView: set_lods groups=" + std::to_string(groups_.size())
-            + " textures_loaded=" + std::to_string(textures_.size())
-            + " materials_loaded=" + std::to_string(material_params_.size())
-            + " empty_group_keys=" + std::to_string(empty_key_groups));
+            "GLModelView: scene blob applied | " +
+                render_domain::summarize_scene_blob_v1(blob) +
+                " groups=" + std::to_string(groups_.size()) +
+                " textures_loaded=" + std::to_string(textures_.size()) +
+                " materials_loaded=" + std::to_string(material_params_.size()) +
+                " empty_group_keys=" + std::to_string(empty_key_groups));
     queue_render();
 }
 
@@ -1024,8 +1034,19 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
     float proj[16];
     mat4_perspective(proj, 45.0f * 3.14159265f / 180.0f, aspect, 0.1f, far_plane);
 
-    mat4_multiply(mvp, proj, view);
-    mat3_normal_from_mat4(normal_mat, view);
+    const rd_camera_blob_v1 camera = render_domain::make_camera_blob_v1(view, proj, eye);
+    std::string camera_error;
+    if (!render_domain::validate_camera_blob_v1(camera, &camera_error)) {
+        app_log(LogLevel::Error, "GLModelView: invalid camera blob: " + camera_error);
+        mat4_identity(mvp);
+        float identity4[16];
+        mat4_identity(identity4);
+        mat3_normal_from_mat4(normal_mat, identity4);
+        return;
+    }
+
+    mat4_multiply(mvp, camera.projection, camera.view);
+    mat3_normal_from_mat4(normal_mat, camera.view);
 }
 
 bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {

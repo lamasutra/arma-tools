@@ -3,8 +3,8 @@
 #include <gtkmm.h>
 #include <sigc++/connection.h>
 #include "app/model_view_panel_presenter.h"
-#include "gl_model_view.h"
 #include "p3d_model_loader.h"
+#include "render_domain/model_view_widget.h"
 #include "textures_loader.h"
 
 #include <armatools/p3d.h>
@@ -54,7 +54,7 @@ public:
     void set_background_color(float r, float g, float b);
 
     // Access to underlying GL widget
-    GLModelView& gl_view();
+    render_domain::ModelViewWidget& gl_view();
 
 private:
     Config* cfg_ = nullptr;
@@ -92,7 +92,7 @@ private:
     Gtk::Label loading_label_{"Loading model..."};
 
     // GL view
-    GLModelView gl_view_;
+    render_domain::ModelViewWidget gl_view_;
 
     // Texture cache: tracks which keys have been uploaded to GL
     std::unordered_set<std::string> loaded_textures_;

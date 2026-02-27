@@ -18,10 +18,10 @@
 
 namespace {
 
-GLModelView::HighlightMode to_gl_highlight_mode(modelview::HighlightMode mode) {
+render_domain::ModelViewWidget::HighlightMode to_gl_highlight_mode(modelview::HighlightMode mode) {
     return mode == modelview::HighlightMode::Lines
-        ? GLModelView::HighlightMode::Lines
-        : GLModelView::HighlightMode::Points;
+        ? render_domain::ModelViewWidget::HighlightMode::Lines
+        : render_domain::ModelViewWidget::HighlightMode::Points;
 }
 
 }  // namespace
@@ -158,8 +158,8 @@ ModelViewPanel::ModelViewPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 0) {
     };
     camera_mode_btn_.signal_toggled().connect([this, update_camera_mode_button]() {
         gl_view_.set_camera_mode(camera_mode_btn_.get_active()
-                                     ? GLModelView::CameraMode::Orbit
-                                     : GLModelView::CameraMode::FirstPerson);
+                                     ? render_domain::ModelViewWidget::CameraMode::Orbit
+                                     : render_domain::ModelViewWidget::CameraMode::FirstPerson);
         update_camera_mode_button();
     });
     update_camera_mode_button();
@@ -318,7 +318,7 @@ void ModelViewPanel::clear() {
     presenter_.clear();
     while (auto* child = named_selections_box_.get_first_child())
         named_selections_box_.remove(*child);
-    gl_view_.set_highlight_geometry({}, GLModelView::HighlightMode::Points);
+    gl_view_.set_highlight_geometry({}, render_domain::ModelViewWidget::HighlightMode::Points);
     p3d_file_.reset();
 }
 
@@ -363,7 +363,7 @@ bool ModelViewPanel::on_load_poll() {
     return true;
 }
 
-GLModelView& ModelViewPanel::gl_view() {
+render_domain::ModelViewWidget& ModelViewPanel::gl_view() {
     return gl_view_;
 }
 
@@ -451,7 +451,7 @@ void ModelViewPanel::load_textures_for_lod(const armatools::p3d::LOD& lod,
                                       tex.specular_map.pixels.data());
         }
         if (tex.has_material) {
-            GLModelView::MaterialParams mp;
+            render_domain::ModelViewWidget::MaterialParams mp;
             mp.ambient[0] = tex.material.ambient[0];
             mp.ambient[1] = tex.material.ambient[1];
             mp.ambient[2] = tex.material.ambient[2];

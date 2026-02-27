@@ -2,9 +2,9 @@
 
 #include "app/gl_model_camera_controller.h"
 #include "domain/gl_model_camera_types.h"
+#include "render_domain/rd_backend_abi.h"
 
 #include <gtkmm.h>
-#include <armatools/p3d.h>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -24,8 +24,8 @@ public:
     GLModelView();
     ~GLModelView() override;
 
-    void set_lod(const armatools::p3d::LOD& lod);
-    void set_lods(const std::vector<armatools::p3d::LOD>& lods);
+    void set_scene_blob(const rd_scene_blob_v1& blob,
+                        const std::vector<std::string>& material_texture_keys = {});
     void set_texture(const std::string& key, int width, int height,
                      const uint8_t* rgba_data);
     void set_normal_map(const std::string& key, int width, int height,
@@ -167,6 +167,7 @@ private:
     uint32_t compile_shader(uint32_t type, const char* source);
     uint32_t link_program(uint32_t vert, uint32_t frag);
     void cleanup_gl();
+    void clear_mesh_groups();
     void build_matrices(float* mvp, float* normal_mat);
     void build_grid_and_axis();
     void draw_grid_and_axis(const float* mvp);

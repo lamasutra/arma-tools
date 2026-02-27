@@ -1,9 +1,9 @@
 #pragma once
 
 #include "config.h"
-#include "gl_wrp_terrain_view.h"
 #include "model_view_panel.h"
 #include "pbo_index_service.h"
+#include "render_domain/wrp_terrain_widget.h"
 #include "textures_loader.h"
 
 #include <armatools/wrp.h>
@@ -119,7 +119,7 @@ private:
     Gtk::Label terrain3d_status_label_;
     std::string terrain3d_base_status_;
     Gtk::Overlay terrain3d_overlay_;
-    GLWrpTerrainView terrain3d_view_;
+    render_domain::WrpTerrainWidget terrain3d_view_;
     Gtk::Label terrain3d_debug_overlay_;
     Gtk::Label terrain3d_compass_overlay_;
     bool allow_texture_mode_ = true;

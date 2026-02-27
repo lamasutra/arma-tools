@@ -152,10 +152,10 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         rvmat_shape_updating_ = true;
         if (rvmat_shape_sphere_.get_active()) {
             rvmat_shape_tile_.set_active(false);
-            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+            rvmat_preview_.set_shape(render_domain::RvmatPreviewWidget::Shape::Sphere);
         } else if (!rvmat_shape_tile_.get_active()) {
             rvmat_shape_tile_.set_active(true);
-            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Tile);
+            rvmat_preview_.set_shape(render_domain::RvmatPreviewWidget::Shape::Tile);
         }
         rvmat_shape_updating_ = false;
     });
@@ -164,10 +164,10 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         rvmat_shape_updating_ = true;
         if (rvmat_shape_tile_.get_active()) {
             rvmat_shape_sphere_.set_active(false);
-            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Tile);
+            rvmat_preview_.set_shape(render_domain::RvmatPreviewWidget::Shape::Tile);
         } else if (!rvmat_shape_sphere_.get_active()) {
             rvmat_shape_sphere_.set_active(true);
-            rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+            rvmat_preview_.set_shape(render_domain::RvmatPreviewWidget::Shape::Sphere);
         }
         rvmat_shape_updating_ = false;
     });
@@ -176,7 +176,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     rvmat_shape_sphere_.set_active(true);
     rvmat_shape_tile_.set_active(false);
     rvmat_shape_updating_ = false;
-    rvmat_preview_.set_shape(GLRvmatPreview::Shape::Sphere);
+    rvmat_preview_.set_shape(render_domain::RvmatPreviewWidget::Shape::Sphere);
 
     rvmat_preview_toolbar_.append(rvmat_shape_sphere_);
     rvmat_preview_toolbar_.append(rvmat_shape_tile_);
@@ -196,7 +196,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             rvmat_view_normal_.set_active(false);
             rvmat_view_spec_.set_active(false);
             rvmat_view_ao_.set_active(false);
-            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Final);
+            rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::Final);
         } else if (!rvmat_view_albedo_.get_active() && !rvmat_view_normal_.get_active() &&
                    !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
             rvmat_view_final_.set_active(true);
@@ -211,7 +211,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             rvmat_view_normal_.set_active(false);
             rvmat_view_spec_.set_active(false);
             rvmat_view_ao_.set_active(false);
-            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Albedo);
+            rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::Albedo);
         } else if (!rvmat_view_final_.get_active() && !rvmat_view_normal_.get_active() &&
                    !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
             rvmat_view_final_.set_active(true);
@@ -226,7 +226,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             rvmat_view_albedo_.set_active(false);
             rvmat_view_spec_.set_active(false);
             rvmat_view_ao_.set_active(false);
-            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Normal);
+            rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::Normal);
         } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
                    !rvmat_view_spec_.get_active() && !rvmat_view_ao_.get_active()) {
             rvmat_view_final_.set_active(true);
@@ -241,7 +241,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             rvmat_view_albedo_.set_active(false);
             rvmat_view_normal_.set_active(false);
             rvmat_view_ao_.set_active(false);
-            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Specular);
+            rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::Specular);
         } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
                    !rvmat_view_normal_.get_active() && !rvmat_view_ao_.get_active()) {
             rvmat_view_final_.set_active(true);
@@ -256,7 +256,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
             rvmat_view_albedo_.set_active(false);
             rvmat_view_normal_.set_active(false);
             rvmat_view_spec_.set_active(false);
-            rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::AO);
+            rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::AO);
         } else if (!rvmat_view_final_.get_active() && !rvmat_view_albedo_.get_active() &&
                    !rvmat_view_normal_.get_active() && !rvmat_view_spec_.get_active()) {
             rvmat_view_final_.set_active(true);
@@ -271,7 +271,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     rvmat_view_spec_.set_active(false);
     rvmat_view_ao_.set_active(false);
     rvmat_view_updating_ = false;
-    rvmat_preview_.set_view_mode(GLRvmatPreview::ViewMode::Final);
+    rvmat_preview_.set_view_mode(render_domain::RvmatPreviewWidget::ViewMode::Final);
 
     rvmat_preview_toolbar_.append(rvmat_view_final_);
     rvmat_preview_toolbar_.append(rvmat_view_albedo_);
@@ -1200,7 +1200,7 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
 
         auto mat = armatools::rvmat::parse(cfg);
         rvmat_preview_.clear_material();
-        GLRvmatPreview::MaterialParams mp;
+        render_domain::RvmatPreviewWidget::MaterialParams mp;
         mp.ambient[0] = mat.ambient[0];
         mp.ambient[1] = mat.ambient[1];
         mp.ambient[2] = mat.ambient[2];
@@ -1311,10 +1311,10 @@ void TabAssetBrowser::preview_rvmat(const armatools::pboindex::FindResult& file)
             return m;
         };
         auto uv_source = [&](const armatools::rvmat::TextureStage* st) {
-            if (!st) return GLRvmatPreview::UVSource::Tex0;
+            if (!st) return render_domain::RvmatPreviewWidget::UVSource::Tex0;
             auto uvs = lower(st->uv_source);
-            if (uvs == "tex1") return GLRvmatPreview::UVSource::Tex1;
-            return GLRvmatPreview::UVSource::Tex0;
+            if (uvs == "tex1") return render_domain::RvmatPreviewWidget::UVSource::Tex1;
+            return render_domain::RvmatPreviewWidget::UVSource::Tex0;
         };
         rvmat_preview_.set_diffuse_uv_matrix(uv_matrix(stage_diff));
         rvmat_preview_.set_normal_uv_matrix(uv_matrix(stage_nrm));

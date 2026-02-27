@@ -62,3 +62,25 @@ armatools_add_test(model_view_panel_presenter_tests
 target_include_directories(model_view_panel_presenter_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/gui/src
     ${CMAKE_SOURCE_DIR}/libs/p3d/include)
+
+armatools_add_test(render_domain_selection_tests
+    render_domain_selection_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_backend_registry.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_backend_selection.cpp)
+target_include_directories(render_domain_selection_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)
+
+armatools_add_test(render_domain_scene_blob_builder_tests
+    render_domain_scene_blob_builder_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_scene_blob.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_scene_blob_builder.cpp)
+target_include_directories(render_domain_scene_blob_builder_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src
+    ${CMAKE_SOURCE_DIR}/libs/p3d/include
+    ${CMAKE_SOURCE_DIR}/libs/armapath/include)
+
+armatools_add_test(render_domain_camera_blob_tests
+    render_domain_camera_blob_tests.cpp
+    ${CMAKE_SOURCE_DIR}/gui/src/render_domain/rd_scene_blob.cpp)
+target_include_directories(render_domain_camera_blob_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui/src)

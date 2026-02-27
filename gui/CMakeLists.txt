@@ -48,6 +48,51 @@ add_executable(arma-tools
     $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_BINARY_DIR}/arma-tools.rc>
 )
 
+set(RENDERER_PLUGIN_OUTPUT_DIR ${CMAKE_BINARY_DIR}/plugins/renderers)
+
+add_library(renderer_null MODULE
+    ${CMAKE_CURRENT_SOURCE_DIR}/render_domain_plugins/renderer_null.cpp
+)
+target_include_directories(renderer_null PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(renderer_null PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+)
+
+add_library(renderer_gles MODULE
+    ${CMAKE_CURRENT_SOURCE_DIR}/render_domain_plugins/renderer_gles.cpp
+)
+target_include_directories(renderer_gles PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(renderer_gles PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+)
+
+if(WIN32)
+    add_library(renderer_dx9 MODULE
+        ${CMAKE_CURRENT_SOURCE_DIR}/render_domain_plugins/renderer_dx9.cpp
+    )
+    target_include_directories(renderer_dx9 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    set_target_properties(renderer_dx9 PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+        RUNTIME_OUTPUT_DIRECTORY ${RENDERER_PLUGIN_OUTPUT_DIR}
+    )
+endif()
+
+add_dependencies(arma-tools renderer_null renderer_gles)
+if(WIN32)
+    add_dependencies(arma-tools renderer_dx9)
+endif()
+
 target_include_directories(arma-tools PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio
@@ -100,3 +145,13 @@ if(WIN32)
     set_target_properties(arma-tools PROPERTIES WIN32_EXECUTABLE ON)
 endif()
 install(TARGETS arma-tools RUNTIME DESTINATION bin)
+install(TARGETS renderer_null renderer_gles
+    LIBRARY DESTINATION bin/plugins/renderers
+    RUNTIME DESTINATION bin/plugins/renderers
+)
+if(WIN32)
+    install(TARGETS renderer_dx9
+        LIBRARY DESTINATION bin/plugins/renderers
+        RUNTIME DESTINATION bin/plugins/renderers
+    )
+endif()

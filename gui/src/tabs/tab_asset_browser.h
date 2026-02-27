@@ -3,9 +3,9 @@
 #include "audio_decode.h"
 #include "audio_engine.h"
 #include "config.h"
-#include "gl_rvmat_preview.h"
 #include "model_view_panel.h"
 #include "pbo_index_service.h"
+#include "render_domain/rvmat_preview_widget.h"
 #include "spectrogram.h"
 
 #include <armatools/pboindex.h>
@@ -104,7 +104,7 @@ private:
     bool rvmat_text_updating_ = false;
     std::string rvmat_text_parsed_cache_;
     std::string rvmat_text_source_cache_;
-    GLRvmatPreview rvmat_preview_;
+    render_domain::RvmatPreviewWidget rvmat_preview_;
     ModelViewPanel model_panel_;
 
     // --- Audio panel (embedded player) ---

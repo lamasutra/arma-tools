@@ -1,4 +1,10 @@
 #include "app_window.h"
+#include "render_domain/rd_backend_selection.h"
+#include "render_domain/rd_backend_registry.h"
+#include "render_domain/rd_builtin_backends.h"
+#include "render_domain/rd_cli_override.h"
+#include "render_domain/rd_runtime_config.h"
+#include "render_domain/rd_runtime_state.h"
 
 #include <adwaita.h>
 #include <libpanel.h>
@@ -14,6 +20,7 @@
 #endif
 
 #include <memory>
+#include <string>
 #include "cli_logger.h"
 
 extern "C" GResource* arma_tools_get_resource(void);
@@ -57,6 +64,89 @@ void setup_stderr_log() {
 }  // namespace
 #endif
 
+namespace {
+
+void log_renderer_events(const render_domain::RuntimeState& state) {
+    for (const auto& event : state.load_events) {
+        const bool non_fatal_info = !event.ok &&
+            event.message == "plugin directory does not exist";
+        if (event.ok || non_fatal_info) {
+            armatools::cli::log_plain(
+                "[renderer] source=", event.source_path,
+                " backend=", event.backend_id.empty() ? "-" : event.backend_id,
+                " status=", event.ok ? "ok" : "info",
+                " message=", event.message);
+        } else {
+            armatools::cli::log_warning(
+                "[renderer] source=", event.source_path,
+                " backend=", event.backend_id.empty() ? "-" : event.backend_id,
+                " status=error message=", event.message);
+        }
+    }
+
+    for (const auto& backend : state.backends) {
+        armatools::cli::log_plain(
+            "[renderer] detected id=", backend.id,
+            " name=", backend.name,
+            " available=", backend.probe.available ? "yes" : "no",
+            " score=", backend.probe.score,
+            " source=", backend.source,
+            " reason=", backend.probe.reason.empty() ? "-" : backend.probe.reason);
+    }
+
+    if (state.selection.success) {
+        armatools::cli::log_plain(
+            "[renderer] selected=", state.selection.selected_backend,
+            " detail=", state.selection.message);
+    } else {
+        armatools::cli::log_error("[renderer] selection failed:", state.selection.message);
+    }
+}
+
+render_domain::RuntimeState initialize_render_domain(int* argc, char** argv) {
+    render_domain::RuntimeState state;
+    state.config_path = render_domain::runtime_config_path();
+    state.plugin_dir = render_domain::default_plugin_dir();
+
+    const auto cli = render_domain::parse_renderer_override_and_strip_args(argc, argv);
+    for (const auto& warning : cli.warnings) {
+        armatools::cli::log_warning("[renderer]", warning);
+    }
+
+    const auto cfg = render_domain::load_runtime_config();
+    render_domain::BackendRegistry registry;
+    render_domain::register_builtin_backends(registry);
+    registry.discover_plugin_backends(state.plugin_dir);
+
+    render_domain::SelectionRequest request;
+    request.config_backend = cfg.backend;
+    request.has_cli_override = cli.has_renderer_override;
+    request.cli_backend = cli.renderer_backend;
+
+    const std::string requested_backend = request.has_cli_override
+        ? request.cli_backend
+        : request.config_backend;
+
+    state.requested_backend = requested_backend;
+    state.requested_from_cli = request.has_cli_override;
+    state.selection = render_domain::select_backend(registry, request);
+    if (!state.selection.success && state.selection.used_explicit_request) {
+        const std::string failure_message = state.selection.message;
+        render_domain::SelectionRequest fallback_request;
+        fallback_request.config_backend = "auto";
+        state.selection = render_domain::select_backend(registry, fallback_request);
+        if (state.selection.success) {
+            state.selection.message = failure_message + " | fallback: " + state.selection.message;
+        }
+    }
+
+    state.backends = registry.backends();
+    state.load_events = registry.load_events();
+    return state;
+}
+
+}  // namespace
+
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     setup_gtk_runtime_env();
@@ -76,6 +166,10 @@ int main(int argc, char* argv[]) {
 
     adw_init();
     panel_init();
+
+    const auto renderer_state = initialize_render_domain(&argc, argv);
+    render_domain::set_runtime_state(renderer_state);
+    log_renderer_events(renderer_state);
 
     auto app = Gtk::Application::create("com.armatools.gui");
 

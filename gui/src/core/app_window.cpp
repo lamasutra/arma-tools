@@ -4,6 +4,7 @@
 #include "dockable_panel.h"
 #include "panel_wrapper.h"
 #include "pbo_index_service.h"
+#include "render_domain/rd_runtime_state.h"
 
 #include <adwaita.h>
 
@@ -597,6 +598,25 @@ AppWindow::AppWindow(GtkApplication* app) {
 
     app_log(LogLevel::Info, "Application started");
     app_log(LogLevel::Info, "Configuration loaded from " + config_path());
+    const auto& renderer_state = render_domain::runtime_state();
+    if (renderer_state.selection.success) {
+        app_log(LogLevel::Info,
+                "Renderer selected: " + renderer_state.selection.selected_backend +
+                " (" + renderer_state.selection.message + ")");
+    } else if (!renderer_state.selection.message.empty()) {
+        app_log(LogLevel::Warning,
+                "Renderer selection failed: " + renderer_state.selection.message);
+    }
+    for (const auto& backend : renderer_state.backends) {
+        app_log(LogLevel::Info,
+                "Renderer backend " + backend.id +
+                " | available=" + (backend.probe.available ? "yes" : "no") +
+                " | score=" + std::to_string(backend.probe.score) +
+                " | source=" + backend.source +
+                " | reason=" + (backend.probe.reason.empty()
+                                    ? std::string("-")
+                                    : backend.probe.reason));
+    }
     register_tab_config_presenter();
 
     tab_asset_browser_.set_pbo_index_service(services_.pbo_index_service);
