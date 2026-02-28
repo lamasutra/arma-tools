@@ -1050,8 +1050,15 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
 }
 
 bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
-    // Reset framebuffer state in case previous UI GL passes left scissor/viewport modified.
+    // Reset framebuffer state in case previous UI GL passes left scissor/viewport/depth modified.
     glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE); // MUST be true for glClear(GL_DEPTH_BUFFER_BIT) to work!
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CW);
+
     glViewport(0, 0, std::max(1, get_width()), std::max(1, get_height()));
     glClearColor(bg_color_[0], bg_color_[1], bg_color_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1176,10 +1183,10 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
             draw_group(g);
         }
 
-        // Pass 2: Transparent groups — blending ON, depth write OFF
+        // Pass 2: Transparent groups — blending ON, depth write ON (for alpha-tested foliage)
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
+        glDepthMask(GL_TRUE);
         for (const auto& g : groups_) {
             if (!group_has_alpha(g)) continue;
             draw_group(g);
@@ -1221,12 +1228,29 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         glUniformMatrix4fv(loc_mvp_wire_, 1, GL_FALSE, mvp);
         glUniform3f(loc_color_wire_, 1.0f, 0.9f, 0.1f);
         glBindVertexArray(highlight_vao_);
-        glDisable(GL_DEPTH_TEST);
-        if (is_desktop_gl_) glPointSize(6.0f);
+
+        if (is_desktop_gl_) {
+            glEnable(GL_POLYGON_OFFSET_POINT);
+            glEnable(GL_POLYGON_OFFSET_LINE);
+            glPolygonOffset(-2.0f, -2.0f);
+            glPointSize(6.0f);
+        } else {
+            // For GLES, pull depth range closer to avoid z-fighting
+            // instead of using missing GL_POLYGON_OFFSET_POINT/LINE.
+            // glDepthRangef is GLES 2.0+ standard.
+            glDepthRangef(0.0f, 0.998f);
+        }
+
         GLenum draw_mode = (highlight_mode_ == HighlightMode::Lines) ? GL_LINES : GL_POINTS;
         glDrawArrays(draw_mode, 0, highlight_vertex_count_);
-        if (is_desktop_gl_) glPointSize(1.0f);
-        glEnable(GL_DEPTH_TEST);
+
+        if (is_desktop_gl_) {
+            glPointSize(1.0f);
+            glDisable(GL_POLYGON_OFFSET_POINT);
+            glDisable(GL_POLYGON_OFFSET_LINE);
+        } else {
+            glDepthRangef(0.0f, 1.0f);
+        }
     }
 
     glBindVertexArray(0);

@@ -1575,6 +1575,9 @@ void GLWrpTerrainView::on_unrealize_gl() {
 bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     // Reset framebuffer state in case previous UI GL passes left scissor/viewport modified.
     glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE); // MUST be true for glClear(GL_DEPTH_BUFFER_BIT) to work!
     glViewport(0, 0, std::max(1, get_width()), std::max(1, get_height()));
     glClearColor(0.14f, 0.17f, 0.20f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -3573,6 +3576,8 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
             terrain_draw_calls_++;
         };
 
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         for (const auto& batch : batches) {
@@ -3588,6 +3593,7 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
         }
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
         if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
