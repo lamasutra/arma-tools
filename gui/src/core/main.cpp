@@ -99,7 +99,9 @@ void print_help(const char* prog_name) {
               << "Usage: " << prog_name << " [options]\n\n"
               << "Options:\n"
               << "  -h, --help               Show this help message\n"
-              << "  -v, --version            Show version information\n"
+              << "  --version                Show version information\n"
+              << "  -v, --verbose            Enable verbose logging\n"
+              << "  -vv, --debug             Enable debug logging\n"
               << "  --renderer=BACKEND       Force a specific renderer backend\n"
               << "  --ui=BACKEND             Force a specific UI backend\n"
               << "\n"
@@ -553,7 +555,12 @@ int main(int argc, char* argv[]) {
     setup_stderr_log();
 #endif
 
-    // Check for --help / --version before initializing GTK so these flags
+    int verbosity = 0;
+#if ARMA_DEBUG
+    verbosity = 2; // Default to debug verbosity in debug builds
+#endif
+
+    // Check for --help / --version / --debug / --verbose before initializing GTK so these flags
     // work even on systems without a display.
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -561,11 +568,18 @@ int main(int argc, char* argv[]) {
             print_help(argv[0]);
             return 0;
         }
-        if (arg == "-v" || arg == "--version") {
+        if (arg == "--version") {
             std::cout << "Arma Tools v" << armatools::version_string() << std::endl;
             return 0;
         }
+        if (arg == "-vv" || arg == "--debug") {
+            verbosity = 2;
+        } else if (arg == "-v" || arg == "--verbose") {
+            if (verbosity < 1) verbosity = 1;
+        }
     }
+
+    armatools::log::set_verbosity(verbosity);
 
     const auto renderer_state = initialize_render_domain(&argc, argv);
     render_domain::set_runtime_state(renderer_state);
