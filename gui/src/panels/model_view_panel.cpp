@@ -200,7 +200,7 @@ void ModelViewPanel::set_info_line(const std::string& text) {
 }
 
 void ModelViewPanel::set_model_data(
-    const std::shared_ptr<armatools::p3d::P3DFile>& model,
+    const std::shared_ptr<const armatools::p3d::P3DFile>& model,
     const std::string& model_path) {
     clear();
     current_model_path_ = model_path;
@@ -253,7 +253,7 @@ void ModelViewPanel::load_p3d(const std::string& model_path) {
         result.request_id = request_id;
         result.model_path = model_path;
         try {
-            result.model = std::make_shared<armatools::p3d::P3DFile>(loader->load_p3d(model_path));
+            result.model = loader->load_p3d(model_path);
             std::ostringstream info;
             info << "Format: " << result.model->format << " v" << result.model->version
                  << " | LODs: " << result.model->lods.size();
@@ -435,7 +435,9 @@ void ModelViewPanel::load_textures_for_lod(const armatools::p3d::LOD& lod,
         const_cast<armatools::p3d::LOD&>(lod), model_path);
     
     // Apply each texture to the GL view
-    for (const auto& tex : textures) {
+    for (const auto& tex_ptr : textures) {
+        if (!tex_ptr) continue;
+        const auto& tex = *tex_ptr;
         auto normalized = armatools::armapath::to_slash_lower(tex.path);
         if (!loaded_textures_.count(normalized)) {
             gl_view_.set_texture(tex.path, tex.image.width, tex.image.height,

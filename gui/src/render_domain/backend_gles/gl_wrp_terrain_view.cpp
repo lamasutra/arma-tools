@@ -603,7 +603,6 @@ void GLWrpTerrainView::clear_world() {
     cell_size_ = 1.0f;
     terrain_max_z_ = 0.0f;
     tile_cell_size_ = 1.0f;
-    object_points_.clear();
     object_positions_.clear();
     objects_.clear();
     clear_object_scene();
@@ -614,7 +613,6 @@ void GLWrpTerrainView::clear_world() {
 
     if (get_realized()) {
         rebuild_terrain_buffers();
-        rebuild_object_buffers();
     }
 
     emit_terrain_stats();
@@ -786,7 +784,6 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
 
     if (get_realized()) {
         rebuild_terrain_buffers();
-        rebuild_object_buffers();
         upload_texture_index();
     }
 
@@ -809,28 +806,18 @@ void GLWrpTerrainView::set_objects(std::vector<armatools::wrp::ObjectRecord> obj
     objects_ = std::move(objects);
     build_object_instances();
 
-    object_points_.clear();
     object_positions_.clear();
     const size_t count = object_instances_.size();
-    object_points_.reserve(count * 6);
     object_positions_.reserve(count * 3);
     for (const auto& inst : object_instances_) {
-        const auto color = object_category_color(inst.category);
         const float px = inst.position[0];
         const float py = inst.position[1] + 1.0f;
         const float pz = inst.position[2];
-        object_points_.push_back(px);
-        object_points_.push_back(py);
-        object_points_.push_back(pz);
-        object_points_.push_back(color[0]);
-        object_points_.push_back(color[1]);
-        object_points_.push_back(color[2]);
         object_positions_.push_back(px);
         object_positions_.push_back(py);
         object_positions_.push_back(pz);
     }
     clear_selected_object_render();
-    if (get_realized()) rebuild_object_buffers();
     queue_render();
 }
 
@@ -1206,7 +1193,6 @@ void GLWrpTerrainView::on_realize_gl() {
     glDisable(GL_CULL_FACE);
 
     rebuild_terrain_buffers();
-    rebuild_object_buffers();
     upload_texture_atlas();
     upload_texture_lookup();
     upload_texture_index();
@@ -1392,13 +1378,7 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
         }
     }
 
-    if (show_objects_ && points_vao_ && points_count_ > 0 && prog_points_
-        && object_placeholder_count_ > 0) {
-        glUseProgram(prog_points_);
-        glUniformMatrix4fv(loc_mvp_points_, 1, GL_FALSE, mvp);
-        glBindVertexArray(points_vao_);
-        glDrawArrays(GL_POINTS, 0, points_count_);
-    }
+
 
     glBindVertexArray(0);
     glUseProgram(0);
@@ -1499,9 +1479,6 @@ void GLWrpTerrainView::cleanup_gl() {
     cleanup_object_model_assets();
     clear_selected_object_render();
 
-    if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
-    if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
-    points_count_ = 0;
     if (objects_instance_vbo_) { glDeleteBuffers(1, &objects_instance_vbo_); objects_instance_vbo_ = 0; }
 
     for (auto& [_, program] : terrain_program_cache_) {
@@ -2667,14 +2644,15 @@ void GLWrpTerrainView::delete_object_model_asset_gl(ObjectModelAsset& asset) {
 }
 
 bool GLWrpTerrainView::build_object_model_asset(
-    ObjectModelAsset& asset, const armatools::p3d::P3DFile& model) {
+    ObjectModelAsset& asset, const std::shared_ptr<const armatools::p3d::P3DFile>& model) {
     delete_object_model_asset_gl(asset);
     asset.lod_meshes.clear();
     asset.bounding_radius = 1.0f;
 
     std::vector<const armatools::p3d::LOD*> render_lods;
-    render_lods.reserve(model.lods.size());
-    for (const auto& lod : model.lods) {
+    if (!model) return false;
+    render_lods.reserve(model->lods.size());
+    for (const auto& lod : model->lods) {
         if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
     }
     if (render_lods.empty()) return false;
@@ -2699,7 +2677,7 @@ bool GLWrpTerrainView::build_object_model_asset(
         auto it = texture_cache.find(norm);
         if (it != texture_cache.end()) return it->second;
 
-        std::optional<TexturesLoaderService::TextureData> td = texture_loader_->load_texture(norm);
+        std::shared_ptr<const TexturesLoaderService::TextureData> td = texture_loader_->load_texture(norm);
         if (!td && std::filesystem::path(norm).extension().empty()) {
             td = texture_loader_->load_texture(norm + ".paa");
             if (!td) td = texture_loader_->load_texture(norm + ".pac");
@@ -2803,7 +2781,9 @@ bool GLWrpTerrainView::build_object_model_asset(
         if (texture_loader_) {
             auto lod_copy = *lod;
             auto resolved = texture_loader_->load_textures(lod_copy, asset.model_name);
-            for (const auto& tex : resolved) {
+            for (const auto& tex_ptr : resolved) {
+                if (!tex_ptr) continue;
+                const auto& tex = *tex_ptr;
                 std::string key = armatools::armapath::to_slash_lower(tex.path);
                 if (key.empty()) continue;
                 auto cached = texture_cache.find(key);
@@ -3045,6 +3025,8 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
     std::unordered_map<uint64_t, size_t> batch_lookup;
     std::vector<float> bounds_lines;
     bounds_lines.reserve(4096);
+    std::vector<float> placeholder_points;
+    placeholder_points.reserve(4096);
     static constexpr int kMaxBoundsInstances = 600;
     int bounds_instances = 0;
     bool has_visible_unloaded_assets = false;
@@ -3096,6 +3078,13 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
                     if (asset.state == ObjectModelAsset::State::Unloaded)
                         has_visible_unloaded_assets = true;
                     object_placeholder_count_++;
+                    const auto color = object_category_color(inst.category);
+                    placeholder_points.push_back(inst.position[0]);
+                    placeholder_points.push_back(inst.position[1] + 1.0f);
+                    placeholder_points.push_back(inst.position[2]);
+                    placeholder_points.push_back(color[0]);
+                    placeholder_points.push_back(color[1]);
+                    placeholder_points.push_back(color[2]);
                     continue;
                 }
 
@@ -3142,6 +3131,12 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
                     object_rendered_instances_++;
                 } else {
                     object_placeholder_count_++;
+                    placeholder_points.push_back(inst.position[0]);
+                    placeholder_points.push_back(inst.position[1] + 1.0f);
+                    placeholder_points.push_back(inst.position[2]);
+                    placeholder_points.push_back(batch_color[0]);
+                    placeholder_points.push_back(batch_color[1]);
+                    placeholder_points.push_back(batch_color[2]);
                 }
 
                 if (show_object_bounds_ && bounds_instances < kMaxBoundsInstances) {
@@ -3236,35 +3231,32 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
         glDeleteVertexArrays(1, &bounds_vao);
     }
 
+    if (show_objects_ && !placeholder_points.empty() && prog_points_) {
+        uint32_t ph_vao = 0;
+        uint32_t ph_vbo = 0;
+        glGenVertexArrays(1, &ph_vao);
+        glGenBuffers(1, &ph_vbo);
+        glBindVertexArray(ph_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, ph_vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(placeholder_points.size() * sizeof(float)),
+                     placeholder_points.data(), GL_STREAM_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glUseProgram(prog_points_);
+        if (loc_mvp_points_ >= 0) glUniformMatrix4fv(loc_mvp_points_, 1, GL_FALSE, mvp);
+        glDrawArrays(GL_POINTS, 0, static_cast<int>(placeholder_points.size() / 6u));
+        glDeleteBuffers(1, &ph_vbo);
+        glDeleteVertexArrays(1, &ph_vao);
+    }
+
     evict_object_model_assets();
 }
 
-void GLWrpTerrainView::rebuild_object_buffers() {
-    make_current();
-    if (has_error()) return;
-
-    if (points_vao_) { glDeleteVertexArrays(1, &points_vao_); points_vao_ = 0; }
-    if (points_vbo_) { glDeleteBuffers(1, &points_vbo_); points_vbo_ = 0; }
-    points_count_ = 0;
-
-    if (object_points_.empty()) return;
-    points_count_ = static_cast<int>(object_points_.size() / 6);
-
-    glGenVertexArrays(1, &points_vao_);
-    glGenBuffers(1, &points_vbo_);
-    glBindVertexArray(points_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, points_vbo_);
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(object_points_.size() * sizeof(float)),
-                 object_points_.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glBindVertexArray(0);
-}
 
 void GLWrpTerrainView::clear_selected_object_render() {
     const bool can_delete = get_realized();
@@ -3313,16 +3305,16 @@ int GLWrpTerrainView::choose_selected_object_lod(const float* eye) {
 }
 
 bool GLWrpTerrainView::build_selected_object_render(
-    size_t object_index, const armatools::p3d::P3DFile& model) {
-    if (object_index >= objects_.size() || !get_realized()) return false;
+    size_t object_index, const std::shared_ptr<const armatools::p3d::P3DFile>& model) {
+    if (object_index >= objects_.size() || !get_realized() || !model) return false;
 
     make_current();
     if (has_error()) return false;
     clear_selected_object_render();
 
     std::vector<const armatools::p3d::LOD*> render_lods;
-    render_lods.reserve(model.lods.size());
-    for (const auto& lod : model.lods) {
+    render_lods.reserve(model->lods.size());
+    for (const auto& lod : model->lods) {
         if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
     }
     if (render_lods.empty()) return false;

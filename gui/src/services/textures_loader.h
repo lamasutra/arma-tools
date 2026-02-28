@@ -65,9 +65,9 @@ public:
         armatools::paa::Image specular_map;
     };
 
-    std::vector<TextureData> load_textures(armatools::p3d::LOD& lod, const std::string& model_path);
-    std::optional<TextureData> load_texture(const std::string& texture_path);
-    std::optional<TextureData> load_terrain_texture_entry(const std::string& entry_path);
+    std::vector<std::shared_ptr<const TextureData>> load_textures(armatools::p3d::LOD& lod, const std::string& model_path);
+    std::shared_ptr<const TextureData> load_texture(const std::string& texture_path);
+    std::shared_ptr<const TextureData> load_terrain_texture_entry(const std::string& entry_path);
     std::optional<TerrainLayeredMaterial> load_terrain_layered_material(
         const std::vector<std::string>& entry_paths);
 
@@ -77,9 +77,9 @@ public:
                     const std::shared_ptr<armatools::pboindex::Index>& index_in);
 
 private:
-    struct TerrainEntryCacheItem {
+    struct TextureCacheItem {
         bool has_value = false;
-        TextureData value;
+        std::shared_ptr<const TextureData> value;
         uint64_t last_used = 0;
     };
 
@@ -87,10 +87,10 @@ private:
     Config* cfg = nullptr;
     std::shared_ptr<armatools::pboindex::DB> db;
     std::shared_ptr<armatools::pboindex::Index> index;
-    std::mutex terrain_entry_cache_mutex_;
-    std::unordered_map<std::string, TerrainEntryCacheItem> terrain_entry_cache_;
-    uint64_t terrain_entry_cache_tick_ = 1;
-    size_t terrain_entry_cache_capacity_ = 1024;
+    std::mutex texture_cache_mutex_;
+    std::unordered_map<std::string, TextureCacheItem> texture_cache_;
+    uint64_t texture_cache_tick_ = 1;
+    size_t texture_cache_capacity_ = 1024;
     std::mutex terrain_layered_cache_mutex_;
     std::unordered_map<std::string, TerrainLayeredMaterial> terrain_layered_cache_;
     std::unordered_set<std::string> terrain_layered_cache_missing_;
@@ -98,8 +98,8 @@ private:
     std::unordered_map<std::string, uint64_t> terrain_layered_cache_last_used_;
     size_t terrain_layered_cache_capacity_ = 1024;
 
-    std::optional<TextureData> load_single_texture(const std::string& tex_path,
+    std::shared_ptr<const TextureData> load_single_texture(const std::string& tex_path,
                                                    const std::string& model_path);
-    std::optional<TextureData> load_single_material(const std::string& material_path,
+    std::shared_ptr<const TextureData> load_single_material(const std::string& material_path,
                                                     const std::string& model_path);
 };

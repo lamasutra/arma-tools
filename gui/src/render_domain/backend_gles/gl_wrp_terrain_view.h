@@ -151,7 +151,6 @@ private:
     int tile_grid_h_ = 0;
     float tile_cell_size_ = 1.0f;
     std::vector<std::array<float, 3>> satellite_palette_;
-    std::vector<float> object_points_;
     std::vector<float> object_positions_;
     std::vector<armatools::wrp::ObjectRecord> objects_;
 
@@ -194,9 +193,7 @@ private:
     // GL resources.
     uint32_t prog_points_ = 0;
     int loc_mvp_points_ = -1;
-    uint32_t points_vao_ = 0;
-    uint32_t points_vbo_ = 0;
-    int points_count_ = 0;
+
     uint32_t prog_objects_ = 0;
     int loc_mvp_objects_ = -1;
     int loc_light_dir_objects_ = -1;
@@ -422,7 +419,7 @@ private:
     void rebuild_shared_lod_buffers();
     void cleanup_patch_buffers();
     void cleanup_lod_buffers();
-    void rebuild_object_buffers();
+
     void clear_object_scene();
     void cleanup_object_model_assets();
     void build_object_instances();
@@ -433,7 +430,7 @@ private:
     bool object_category_enabled(ObjectCategory category) const;
     float object_category_max_distance(ObjectCategory category) const;
     bool ensure_object_model_asset(uint32_t model_id);
-    bool build_object_model_asset(ObjectModelAsset& asset, const armatools::p3d::P3DFile& model);
+    bool build_object_model_asset(ObjectModelAsset& asset, const std::shared_ptr<const armatools::p3d::P3DFile>& model);
     void delete_object_model_asset_gl(ObjectModelAsset& asset);
     void evict_object_model_assets();
     int choose_object_lod(ObjectInstance& instance,
@@ -444,7 +441,7 @@ private:
     void append_object_bounds_vertices(const ObjectInstance& instance,
                                        const std::array<float, 3>& color,
                                        std::vector<float>& out) const;
-    bool build_selected_object_render(size_t object_index, const armatools::p3d::P3DFile& model);
+    bool build_selected_object_render(size_t object_index, const std::shared_ptr<const armatools::p3d::P3DFile>& model);
     void clear_selected_object_render();
     int choose_selected_object_lod(const float* eye);
     static bool is_renderable_object_lod(const armatools::p3d::LOD& lod);

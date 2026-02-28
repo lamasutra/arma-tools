@@ -1345,11 +1345,11 @@ void TabObjReplace::load_p3d_into_panel(ModelViewPanel& panel, Gtk::Label& label
         return;
     }
 
-    auto maybe_auto_extract = [this](const auto& p3d) {
-        if (!auto_extract_textures_check_.get_active()) return;
+    auto maybe_auto_extract = [this](const std::shared_ptr<const armatools::p3d::P3DFile>& p3d) {
+        if (!auto_extract_textures_check_.get_active() || !p3d) return;
 
         std::set<std::string> textures;
-        for (const auto& lod : p3d.lods) {
+        for (const auto& lod : p3d->lods) {
             for (const auto& t : lod.textures) textures.insert(t);
         }
         enqueue_auto_extract_textures(textures);

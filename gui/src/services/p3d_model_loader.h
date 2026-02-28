@@ -38,7 +38,10 @@ public:
     // Load and parse the P3D file from model_path.
     // model_path can be a physical disk path or a virtual path like "a3\...\model.p3d".
     // Returns a parsed P3DFile struct; check its validity before use.
-    armatools::p3d::P3DFile load_p3d(const std::string& model_path);
+    std::shared_ptr<const armatools::p3d::P3DFile> load_p3d(const std::string& model_path);
+
+    // Clears the internal model cache to free memory.
+    void clear_cache();
 
 private:
     std::string db_path;             // Path to the A3 PBO database file.
@@ -46,7 +49,10 @@ private:
     std::shared_ptr<armatools::pboindex::DB> db;      // PBO database for path lookup.
     std::shared_ptr<armatools::pboindex::Index> index; // PBO index for virtual path resolution.
 
+    std::unordered_map<std::string, std::shared_ptr<const armatools::p3d::P3DFile>> cache_;
+    std::mutex cache_mutex_;
+
     // Internal helper: given raw binary data, parse it as a P3D file.
-    armatools::p3d::P3DFile try_load_p3d_from_data(const std::vector<uint8_t>& data);
+    std::shared_ptr<const armatools::p3d::P3DFile> try_load_p3d_from_data(const std::vector<uint8_t>& data);
 };
 

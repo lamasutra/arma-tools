@@ -56,20 +56,20 @@ TexturesLoaderService::TexturesLoaderService(const std::string& db_path_in,
     index = index_in;
 }
 
-std::vector<TexturesLoaderService::TextureData> 
+std::vector<std::shared_ptr<const TexturesLoaderService::TextureData>> 
 TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string& model_path) {
-    std::vector<TextureData> result;
+    std::vector<std::shared_ptr<const TextureData>> result;
     LOGD(            "LodTextures: load_textures model=" + model_path
             + " lod_textures=" + std::to_string(lod.textures.size())
             + " lod_materials=" + std::to_string(lod.materials.size()));
 
-    auto add_if_loaded = [&](const std::optional<TextureData>& tex) {
+    auto add_if_loaded = [&](const std::shared_ptr<const TextureData>& tex) {
         if (!tex) return;
         auto key = armatools::armapath::to_slash_lower(tex->path);
         for (const auto& it : result) {
-            if (armatools::armapath::to_slash_lower(it.path) == key) return;
+            if (armatools::armapath::to_slash_lower(it->path) == key) return;
         }
-        result.push_back(*tex);
+        result.push_back(tex);
     };
 
     for (const auto& tex_path : lod.textures) {
@@ -79,7 +79,7 @@ TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string
                 armatools::paa::Header hdr;
                 hdr.width = img->width;
                 hdr.height = img->height;
-                add_if_loaded(TextureData{tex_path, hdr, *img, false, false, {}, false, {}, false, {}});
+                add_if_loaded(std::make_shared<const TextureData>(TextureData{tex_path, hdr, *img, false, false, {}, false, {}, false, {}}));
             }
             continue;
         }
@@ -97,47 +97,80 @@ TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string
     return result;
 }
 
-std::optional<TexturesLoaderService::TextureData> 
+std::shared_ptr<const TexturesLoaderService::TextureData> 
 TexturesLoaderService::load_single_texture(const std::string& tex_path, 
                                             const std::string& model_path) 
                                             {
+    auto normalized = armatools::armapath::to_slash_lower(tex_path);
+    while (!normalized.empty() && (normalized.front() == '/' || normalized.front() == '\\'))
+        normalized.erase(normalized.begin());
+
+    {
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        auto it = texture_cache_.find(normalized);
+        if (it != texture_cache_.end()) {
+            it->second.last_used = texture_cache_tick_++;
+            if (it->second.has_value) return it->second.value;
+            return nullptr;
+        }
+    }
+
+    auto cache_result = [&](std::shared_ptr<const TextureData> tex) {
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        TextureCacheItem item;
+        item.has_value = (tex != nullptr);
+        item.value = tex;
+        item.last_used = texture_cache_tick_++;
+        texture_cache_[normalized] = std::move(item);
+
+        while (texture_cache_.size() > texture_cache_capacity_) {
+            auto victim = texture_cache_.end();
+            uint64_t oldest = std::numeric_limits<uint64_t>::max();
+            for (auto it = texture_cache_.begin(); it != texture_cache_.end(); ++it) {
+                if (it->second.last_used < oldest) {
+                    oldest = it->second.last_used;
+                    victim = it;
+                }
+            }
+            if (victim == texture_cache_.end()) break;
+            texture_cache_.erase(victim);
+        }
+        return tex;
+    };
+
     auto try_decode_data = [&](const std::vector<uint8_t>& data)
-        -> std::optional<TextureData> {
-        if (data.empty()) return std::nullopt;
+        -> std::shared_ptr<const TextureData> {
+        if (data.empty()) return nullptr;
         try {
             std::string str(data.begin(), data.end());
             std::istringstream stream(str);
             auto [img, hdr] = armatools::paa::decode(stream);
             if (img.width > 0 && img.height > 0)
-                return TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}};
+                return std::make_shared<const TextureData>(TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}});
         } catch (...) {}
-        return std::nullopt;
+        return nullptr;
     };
 
     auto try_decode_file = [&](const std::filesystem::path& path)
-        -> std::optional<TextureData> {
+        -> std::shared_ptr<const TextureData> {
         std::error_code ec;
-        if (!std::filesystem::exists(path, ec)) return std::nullopt;
+        if (!std::filesystem::exists(path, ec)) return nullptr;
         std::ifstream f(path, std::ios::binary);
-        if (!f.is_open()) return std::nullopt;
+        if (!f.is_open()) return nullptr;
         try {
             auto [img, hdr] = armatools::paa::decode(f);
             if (img.width > 0 && img.height > 0)
-                return TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}};
+                return std::make_shared<const TextureData>(TextureData{tex_path, hdr, img, false, false, {}, false, {}, false, {}});
         } catch (...) {}
-        return std::nullopt;
+        return nullptr;
     };
-
-    auto normalized = armatools::armapath::to_slash_lower(tex_path);
-    while (!normalized.empty() && (normalized.front() == '/' || normalized.front() == '\\'))
-        normalized.erase(normalized.begin());
 
     // 1) Resolve via index first
     if (index) {
         armatools::pboindex::ResolveResult rr;
         if (index->resolve(normalized, rr)) {
             auto tex = try_decode_data(extract_from_pbo(rr.pbo_path, rr.entry_name));
-            if (tex) return tex;
+            if (tex) return cache_result(tex);
         }
     }
 
@@ -149,7 +182,7 @@ TexturesLoaderService::load_single_texture(const std::string& tex_path,
             auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
             if (full == normalized || full.ends_with("/" + normalized)) {
                 auto tex = try_decode_data(extract_from_pbo(r.pbo_path, r.file_path));
-                if (tex) return tex;
+                if (tex) return cache_result(tex);
             }
         }
     }
@@ -165,16 +198,58 @@ TexturesLoaderService::load_single_texture(const std::string& tex_path,
         };
         for (const auto& cand : candidates) {
             auto tex = try_decode_file(cand);
-            if (tex) return tex;
+            if (tex) return cache_result(tex);
         }
     }
 
-    return std::nullopt;
+    return cache_result(nullptr);
 }
 
-std::optional<TexturesLoaderService::TextureData>
+std::shared_ptr<const TexturesLoaderService::TextureData>
 TexturesLoaderService::load_single_material(const std::string& material_path,
                                                const std::string& model_path) {
+    auto normalize = [](std::string p) {
+        p = armatools::armapath::to_slash_lower(p);
+        while (!p.empty() && (p.front() == '/' || p.front() == '\\'))
+            p.erase(p.begin());
+        return p;
+    };
+    auto mat_norm = normalize(material_path);
+    if (mat_norm.empty()) return nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        auto it = texture_cache_.find(mat_norm);
+        if (it != texture_cache_.end()) {
+            it->second.last_used = texture_cache_tick_++;
+            if (it->second.has_value) return it->second.value;
+            return nullptr;
+        }
+    }
+
+    auto cache_result = [&](std::shared_ptr<const TextureData> tex) {
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        TextureCacheItem item;
+        item.has_value = (tex != nullptr);
+        item.value = tex;
+        item.last_used = texture_cache_tick_++;
+        texture_cache_[mat_norm] = std::move(item);
+
+        while (texture_cache_.size() > texture_cache_capacity_) {
+            auto victim = texture_cache_.end();
+            uint64_t oldest = std::numeric_limits<uint64_t>::max();
+            for (auto it = texture_cache_.begin(); it != texture_cache_.end(); ++it) {
+                if (it->second.last_used < oldest) {
+                    oldest = it->second.last_used;
+                    victim = it;
+                }
+            }
+            if (victim == texture_cache_.end()) break;
+            texture_cache_.erase(victim);
+        }
+        return tex;
+    };
+
     LOGD(            "LodTextures: material begin raw='" + material_path
             + "' model='" + model_path + "'");
     auto shader_mode_from_ids = [](const std::string& ps, const std::string& vs) {
@@ -231,12 +306,6 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
         }
         return false;
     };
-    auto normalize = [](std::string p) {
-        p = armatools::armapath::to_slash_lower(p);
-        while (!p.empty() && (p.front() == '/' || p.front() == '\\'))
-            p.erase(p.begin());
-        return p;
-    };
 
     auto load_bytes = [&](const std::string& asset_path) -> std::vector<uint8_t> {
         auto normalized = normalize(asset_path);
@@ -286,16 +355,16 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
 
     auto decode_texture_bytes = [&](const std::vector<uint8_t>& data,
                                     const std::string& key)
-        -> std::optional<TextureData> {
-        if (data.empty()) return std::nullopt;
+        -> std::shared_ptr<TextureData> {
+        if (data.empty()) return nullptr;
         try {
             std::string str(data.begin(), data.end());
             std::istringstream stream(str);
             auto [img, hdr] = armatools::paa::decode(stream);
             if (img.width > 0 && img.height > 0)
-                return TextureData{key, hdr, img, false, false, {}, false, {}, false, {}};
+                return std::make_shared<TextureData>(TextureData{key, hdr, img, false, false, {}, false, {}, false, {}});
         } catch (...) {}
-        return std::nullopt;
+        return nullptr;
     };
 
     auto resolve_relative = [&](const std::string& base, const std::string& rel) {
@@ -310,8 +379,6 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
         return normalize(out.generic_string());
     };
 
-    auto mat_norm = normalize(material_path);
-    if (mat_norm.empty()) return std::nullopt;
     LOGD("LodTextures: material normalized='" + mat_norm + "'");
 
     std::vector<std::string> mat_candidates{mat_norm};
@@ -353,7 +420,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
     if (mat_bytes.empty()) {
         LOGW(                "LodTextures: material not found raw='" + material_path
                 + "' normalized='" + mat_norm + "'");
-        return std::nullopt;
+        return cache_result(nullptr);
     }
     LOGD("LodTextures: material loaded as '" + mat_used + "'");
 
@@ -380,7 +447,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
     }
     if (candidates.empty()) {
         LOGW(                "LodTextures: rvmat has no stage textures '" + mat_used + "'");
-        return std::nullopt;
+        return cache_result(nullptr);
     }
     LOGD(            "LodTextures: rvmat stage texture candidates count="
             + std::to_string(candidates.size()) + " material='" + mat_used + "'");
@@ -484,7 +551,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                 }
             }
             LOGD(                    "LodTextures: rvmat texture loaded '" + tex + "' for material '" + mat_used + "'");
-            return out;
+            return cache_result(out);
         }
         if (std::filesystem::path(tex).extension().empty()) {
             if (auto out = decode_texture_bytes(load_bytes(tex + ".paa"), mat_norm)) {
@@ -506,7 +573,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                     }
                 }
                 LOGD(                        "LodTextures: rvmat texture loaded '" + tex + ".paa' for material '" + mat_used + "'");
-                return out;
+                return cache_result(out);
             }
             if (auto out = decode_texture_bytes(load_bytes(tex + ".pac"), mat_norm)) {
                 out->has_material = material_result.has_material;
@@ -527,17 +594,17 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                     }
                 }
                 LOGD(                        "LodTextures: rvmat texture loaded '" + tex + ".pac' for material '" + mat_used + "'");
-                return out;
+                return cache_result(out);
             }
         }
     }
     LOGW(            "LodTextures: failed to load any rvmat texture for material '" + mat_used + "'");
-    return std::nullopt;
+    return cache_result(nullptr);
 }
 
-std::optional<TexturesLoaderService::TextureData>
+std::shared_ptr<const TexturesLoaderService::TextureData>
 TexturesLoaderService::load_texture(const std::string& texture_path) {
-    if (texture_path.empty()) return std::nullopt;
+    if (texture_path.empty()) return nullptr;
     return load_single_texture(texture_path, "");
 }
 
@@ -816,24 +883,24 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
     return resolved;
 }
 
-std::optional<TexturesLoaderService::TextureData>
+std::shared_ptr<const TexturesLoaderService::TextureData>
 TexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path) {
-    if (entry_path.empty()) return std::nullopt;
+    if (entry_path.empty()) return nullptr;
     auto normalized = normalize_asset_path(entry_path);
-    if (normalized.empty()) return std::nullopt;
+    if (normalized.empty()) return nullptr;
 
     {
-        std::lock_guard<std::mutex> lock(terrain_entry_cache_mutex_);
-        auto it = terrain_entry_cache_.find(normalized);
-        if (it != terrain_entry_cache_.end()) {
-            it->second.last_used = terrain_entry_cache_tick_++;
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        auto it = texture_cache_.find(normalized);
+        if (it != texture_cache_.end()) {
+            it->second.last_used = texture_cache_tick_++;
             if (it->second.has_value) return it->second.value;
-            return std::nullopt;
+            return nullptr;
         }
     }
 
     const auto ext = std::filesystem::path(normalized).extension().string();
-    std::optional<TextureData> resolved;
+    std::shared_ptr<const TextureData> resolved;
 
     if (ext == ".rvmat") resolved = load_single_material(entry_path, "");
     else if (ext == ".paa" || ext == ".pac") resolved = load_single_texture(entry_path, "");
@@ -848,24 +915,24 @@ TexturesLoaderService::load_terrain_texture_entry(const std::string& entry_path)
     }
 
     {
-        std::lock_guard<std::mutex> lock(terrain_entry_cache_mutex_);
-        TerrainEntryCacheItem item;
-        item.has_value = resolved.has_value();
-        if (resolved) item.value = *resolved;
-        item.last_used = terrain_entry_cache_tick_++;
-        terrain_entry_cache_[normalized] = std::move(item);
+        std::lock_guard<std::mutex> lock(texture_cache_mutex_);
+        TextureCacheItem item;
+        item.has_value = (resolved != nullptr);
+        item.value = resolved;
+        item.last_used = texture_cache_tick_++;
+        texture_cache_[normalized] = std::move(item);
 
-        while (terrain_entry_cache_.size() > terrain_entry_cache_capacity_) {
-            auto victim = terrain_entry_cache_.end();
+        while (texture_cache_.size() > texture_cache_capacity_) {
+            auto victim = texture_cache_.end();
             uint64_t oldest = std::numeric_limits<uint64_t>::max();
-            for (auto it = terrain_entry_cache_.begin(); it != terrain_entry_cache_.end(); ++it) {
+            for (auto it = texture_cache_.begin(); it != texture_cache_.end(); ++it) {
                 if (it->second.last_used < oldest) {
                     oldest = it->second.last_used;
                     victim = it;
                 }
             }
-            if (victim == terrain_entry_cache_.end()) break;
-            terrain_entry_cache_.erase(victim);
+            if (victim == texture_cache_.end()) break;
+            texture_cache_.erase(victim);
         }
     }
 

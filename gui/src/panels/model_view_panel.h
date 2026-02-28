@@ -52,7 +52,7 @@ public:
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
     void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_info_line(const std::string& text);
-    void set_model_data(const std::shared_ptr<armatools::p3d::P3DFile>& model,
+    void set_model_data(const std::shared_ptr<const armatools::p3d::P3DFile>& model,
                         const std::string& model_path);
     void set_on_lod_changed(std::function<void(const armatools::p3d::LOD&, int)> cb);
 
@@ -74,7 +74,7 @@ private:
     Config* cfg_ = nullptr;
     armatools::pboindex::DB* db_ = nullptr;
     armatools::pboindex::Index* index_ = nullptr;
-    std::shared_ptr<armatools::p3d::P3DFile> p3d_file_;
+    std::shared_ptr<const armatools::p3d::P3DFile> p3d_file_;
     std::shared_ptr<P3dModelLoaderService> model_loader_shared_;
     std::shared_ptr<TexturesLoaderService> texture_loader_shared_;
 
@@ -124,7 +124,7 @@ private:
     struct AsyncLoadResult {
         uint64_t request_id = 0;
         std::string model_path;
-        std::shared_ptr<armatools::p3d::P3DFile> model;
+        std::shared_ptr<const armatools::p3d::P3DFile> model;
         std::string info_line;
         std::string error;
     };
