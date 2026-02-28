@@ -79,7 +79,7 @@ TabAssetBrowser::TabAssetBrowser() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     left_box_.set_margin(8);
     left_box_.set_size_request(200, -1);
 
-    make_icon_button(build_button_, "database-add-symbolic",
+    make_icon_button(build_button_, "network-server-symbolic",
                      "Build DB: build a new asset database from configured sources");
     make_icon_button(update_button_, "view-refresh-symbolic",
                      "Update DB: incrementally update the asset database");

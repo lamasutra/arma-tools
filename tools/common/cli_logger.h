@@ -7,10 +7,21 @@
 #include <mutex>
 #include <unordered_set>
 #include <unordered_map>
+#include <functional>
+#include <sstream>
 
 #include "console_unicode.h"
 
 namespace armatools::log {
+
+// Global sink for routing logs (e.g. to a GUI panel instead of stdout/stderr)
+// If set, log_impl, warn, and error will write to this sink INSTEAD of the console.
+using GlobalSink = std::function<void(int level, const std::string& text)>;
+inline GlobalSink global_sink;
+
+inline void set_global_sink(GlobalSink sink) {
+    global_sink = std::move(sink);
+}
 
 enum class VerbosityLevel : int { Quiet = 0, Verbose = 1, Debug = 2 };
 
@@ -55,6 +66,20 @@ inline bool supports_utf() {
 template <typename... Args>
 void log_impl(VerbosityLevel min_level, Args&&... args) {
     if (current_level < min_level) return;
+    
+    if (global_sink) {
+        std::ostringstream ss;
+        if constexpr (sizeof...(Args) > 0) {
+            ((ss << std::forward<Args>(args) << ' '), ...);
+        }
+        std::string str = ss.str();
+        if (!str.empty() && str.back() == ' ') {
+            str.pop_back();
+        }
+        global_sink(static_cast<int>(min_level), str);
+        return;
+    }
+    
     auto& stream = std::cerr;
     if (supports_utf())
         stream << '[' << level_emoji(min_level) << "] ";
@@ -78,6 +103,20 @@ void debug(Args&&... args) {
 
 template <typename... Args>
 void warn(Args&&... args) {
+    if (global_sink) {
+        std::ostringstream ss;
+        if constexpr (sizeof...(Args) > 0) {
+            ((ss << std::forward<Args>(args) << ' '), ...);
+        }
+        std::string str = ss.str();
+        if (!str.empty() && str.back() == ' ') {
+            str.pop_back();
+        }
+        // Use a generic int to avoid dependency on LogLevel; map to warning in caller
+        global_sink(2 /* LogLevel::Warning equivalent */, str);
+        return;
+    }
+
     auto& stream = std::cerr;
     if (supports_utf())
         stream << "⚠️ ";
@@ -91,6 +130,20 @@ void warn(Args&&... args) {
 
 template <typename... Args>
 void error(Args&&... args) {
+    if (global_sink) {
+        std::ostringstream ss;
+        if constexpr (sizeof...(Args) > 0) {
+            ((ss << std::forward<Args>(args) << ' '), ...);
+        }
+        std::string str = ss.str();
+        if (!str.empty() && str.back() == ' ') {
+            str.pop_back();
+        }
+        // Use a generic int to avoid dependency on LogLevel; map to error in caller
+        global_sink(3 /* LogLevel::Error equivalent */, str);
+        return;
+    }
+
     auto& stream = std::cerr;
     if (supports_utf())
         stream << "❌ ";

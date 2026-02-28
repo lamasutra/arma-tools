@@ -10,6 +10,8 @@
 #include "ui_domain/ui_runtime_state.h"
 #include "ui_domain/ui_event_adapter.h"
 
+#include "console_unicode.h"
+
 #include <adwaita.h>
 
 #include <algorithm>
@@ -618,7 +620,12 @@ void AppWindow::restore_layout() {
 // Applies the hard-coded default panel layout from default_panel_catalog().
 // Called when no saved layout is found or the user resets the layout.
 void AppWindow::apply_default_layout() {
+    const bool is_cli = consoleu::detect_capabilities().stdout_is_tty;
+    
     for (const auto& descriptor : default_panel_catalog()) {
+        if (is_cli && descriptor.id == "log") {
+            continue; // Skip log panel if running in terminal
+        }
         auto* content = panel_content_by_id(descriptor.id);
         if (!content) continue;
         add_panel(*content,
@@ -1166,9 +1173,22 @@ AppWindow::AppWindow(GtkApplication* app) {
     panel_statusbar_add_prefix(statusbar_, 0, GTK_WIDGET(status_label_.gobj()));
 
     // Set up logging
+    const bool is_cli = consoleu::detect_capabilities().stdout_is_tty;
     set_global_log([this](LogLevel level, const std::string& text) {
         log_panel_.log(level, text);
     });
+    
+    // If NOT launched from CLI, hijack the cli_logger to feed the log panel
+    if (!is_cli) {
+        armatools::log::set_global_sink([this](int level_int, const std::string& text) {
+            LogLevel level = LogLevel::Info;
+            if (level_int == 2) level = LogLevel::Warning;
+            else if (level_int == 3) level = LogLevel::Error;
+            else if (level_int == static_cast<int>(armatools::log::VerbosityLevel::Debug)) level = LogLevel::Debug;
+            app_log(level, text);
+        });
+    }
+    
     log_panel_.set_on_toggle_maximize([this](bool maximized) {
         panel_dock_set_reveal_bottom(dock_, TRUE);
         if (maximized) {
@@ -1278,8 +1298,12 @@ AppWindow::AppWindow(GtkApplication* app) {
 
     // Restore layout or apply default
     if (!layout_cfg_.panels.empty()) {
+        const bool is_cli = consoleu::detect_capabilities().stdout_is_tty;
         // First create all panels (unparented) so restore can place by id.
         for (const auto& descriptor : default_panel_catalog()) {
+            if (is_cli && descriptor.id == "log") {
+                continue; // Skip creating log panel if running in terminal
+            }
             auto* content = panel_content_by_id(descriptor.id);
             if (!content) continue;
             panels_[descriptor.id] = descriptor.simple_panel
@@ -1292,8 +1316,10 @@ AppWindow::AppWindow(GtkApplication* app) {
     }
 
     // Reveal bottom area if log panel is there
-    panel_dock_set_reveal_bottom(dock_, TRUE);
-    panel_dock_set_bottom_height(dock_, 200);
+    if (!consoleu::detect_capabilities().stdout_is_tty) {
+        panel_dock_set_reveal_bottom(dock_, TRUE);
+        panel_dock_set_bottom_height(dock_, 200);
+    }
 
     // Hook AdwTabView::create-window on all frames for tear-off support.
     // Deferred to after the window is realized (AdwTabViews exist then).
@@ -1323,6 +1349,7 @@ AppWindow::~AppWindow() {
         ui_tick_connection_.disconnect();
     }
     set_global_log({});
+    armatools::log::set_global_sink({});
     if (services_.pbo_index_service)
         services_.pbo_index_service->unsubscribe(this);
     // Everything was already detached in close-request handler.
