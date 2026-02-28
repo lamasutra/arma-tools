@@ -562,6 +562,7 @@ int main(int argc, char* argv[]) {
 
     // Check for --help / --version / --debug / --verbose before initializing GTK so these flags
     // work even on systems without a display.
+    int new_argc = 1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
@@ -576,8 +577,12 @@ int main(int argc, char* argv[]) {
             verbosity = 2;
         } else if (arg == "-v" || arg == "--verbose") {
             if (verbosity < 1) verbosity = 1;
+        } else {
+            argv[new_argc++] = argv[i];
         }
     }
+    argv[new_argc] = nullptr;
+    argc = new_argc;
 
     armatools::log::set_verbosity(verbosity);
 

@@ -29,6 +29,8 @@ public:
     void set_object_max_distance(float distance_m);
     void set_object_category_filters(bool buildings, bool vegetation, bool rocks, bool props);
     void set_show_object_bounds(bool on);
+    void set_show_water(bool on);
+    void set_water_level(float level);
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);

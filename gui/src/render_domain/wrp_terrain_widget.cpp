@@ -93,6 +93,14 @@ void WrpTerrainWidget::set_show_object_bounds(bool on) {
     if (has_gles()) impl_->gles.set_show_object_bounds(on);
 }
 
+void WrpTerrainWidget::set_show_water(bool on) {
+    if (has_gles()) impl_->gles.set_show_water(on);
+}
+
+void WrpTerrainWidget::set_water_level(float level) {
+    if (has_gles()) impl_->gles.set_water_level(level);
+}
+
 void WrpTerrainWidget::set_color_mode(int mode) {
     if (has_gles()) impl_->gles.set_color_mode(mode);
 }

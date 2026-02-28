@@ -108,6 +108,8 @@ private:
     Gtk::ToggleButton terrain3d_patch_bounds_btn_;
     Gtk::ToggleButton terrain3d_lod_tint_btn_;
     Gtk::ToggleButton terrain3d_tile_bounds_btn_;
+    Gtk::ToggleButton terrain3d_water_btn_;
+    Gtk::SpinButton terrain3d_water_level_spin_;
     Gtk::Label terrain3d_far_label_{"Far:"};
     Gtk::Scale terrain3d_far_scale_{Gtk::Orientation::HORIZONTAL};
     Gtk::Label terrain3d_obj_far_label_{"Obj Far:"};

@@ -175,6 +175,12 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     make_icon_toggle(terrain3d_patch_bounds_btn_, "view-fullscreen-symbolic", "Patch bounds");
     make_icon_toggle(terrain3d_lod_tint_btn_, "dialog-information-symbolic", "LOD colors");
     make_icon_toggle(terrain3d_tile_bounds_btn_, "view-grid-symbolic", "Tile grid");
+    make_icon_toggle(terrain3d_water_btn_, "weather-showers-scattered-symbolic", "Show water plane");
+    terrain3d_water_btn_.set_active(true);
+    terrain3d_water_level_spin_.set_adjustment(Gtk::Adjustment::create(0.0, -1000.0, 10000.0, 1.0, 10.0, 0.0));
+    terrain3d_water_level_spin_.set_digits(1);
+    terrain3d_water_level_spin_.set_tooltip_text("Water level (meters)");
+    terrain3d_water_level_spin_.set_size_request(80, -1);
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
     terrain3d_obj_buildings_btn_.set_active(true);
@@ -219,6 +225,8 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_patch_bounds_btn_);
     terrain3d_toolbar_.append(terrain3d_lod_tint_btn_);
     terrain3d_toolbar_.append(terrain3d_tile_bounds_btn_);
+    terrain3d_toolbar_.append(terrain3d_water_btn_);
+    terrain3d_toolbar_.append(terrain3d_water_level_spin_);
     terrain3d_toolbar_.append(terrain3d_far_label_);
     terrain3d_toolbar_.append(terrain3d_far_scale_);
     terrain3d_toolbar_.append(terrain3d_obj_far_label_);
@@ -337,6 +345,17 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     });
     terrain3d_tile_bounds_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_tile_boundaries(terrain3d_tile_bounds_btn_.get_active());
+    });
+    terrain3d_water_btn_.signal_toggled().connect([this]() {
+        bool active = terrain3d_water_btn_.get_active();
+        LOGI("Water button toggled: " + std::to_string(active));
+        terrain3d_view_.set_show_water(active);
+        terrain3d_water_level_spin_.set_sensitive(active);
+    });
+    terrain3d_water_level_spin_.signal_value_changed().connect([this]() {
+        float val = static_cast<float>(terrain3d_water_level_spin_.get_value());
+        LOGI("Water level changed: " + std::to_string(val));
+        terrain3d_view_.set_water_level(val);
     });
     terrain3d_far_scale_.signal_value_changed().connect([this]() {
         terrain3d_view_.set_terrain_far_distance(

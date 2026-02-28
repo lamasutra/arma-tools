@@ -99,6 +99,7 @@ void main() {
 }
 )";
 
+
 struct FrustumPlane {
     float a = 0.0f;
     float b = 0.0f;
@@ -850,6 +851,16 @@ void GLWrpTerrainView::set_show_object_bounds(bool on) {
     queue_render();
 }
 
+void GLWrpTerrainView::set_show_water(bool on) {
+    show_water_ = on;
+    queue_render();
+}
+
+void GLWrpTerrainView::set_water_level(float level) {
+    water_level_ = level;
+    queue_render();
+}
+
 void GLWrpTerrainView::set_show_patch_boundaries(bool on) {
     show_patch_boundaries_ = on;
     queue_render();
@@ -1173,6 +1184,9 @@ void GLWrpTerrainView::on_realize_gl() {
     loc_offset_selected_object_ = glGetUniformLocation(prog_selected_object_, "uOffset");
     loc_light_dir_selected_object_ = glGetUniformLocation(prog_selected_object_, "uLightDir");
     loc_color_selected_object_ = glGetUniformLocation(prog_selected_object_, "uColor");
+    loc_mvp_water_ = glGetUniformLocation(prog_water_, "uMVP");
+    loc_offset_water_ = glGetUniformLocation(prog_water_, "uOffset");
+    loc_color_water_ = glGetUniformLocation(prog_water_, "uColor");
     glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_fragment_samplers_);
     if (max_fragment_samplers_ <= 0) max_fragment_samplers_ = 16;
 
@@ -1383,6 +1397,68 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     glBindVertexArray(0);
     glUseProgram(0);
 
+    // Render water plane
+    if (show_water_ && prog_water_ != 0 && world_size_x_ > 0.0f && world_size_z_ > 0.0f) {
+        
+        float cx = eye[0];
+        float cz = eye[2];
+        float water_verts[] = {
+            // POS (3)                   
+            // Giant mesh
+            0.0f,          0.0f, 0.0f,            
+            world_size_x_, 0.0f, 0.0f,            
+            world_size_x_, 0.0f, world_size_z_,   
+            0.0f,          0.0f, 0.0f,            
+            world_size_x_, 0.0f, world_size_z_,   
+            0.0f,          0.0f, world_size_z_,   
+            
+            // Debug mesh right under camera
+            cx - 50.0f, 0.0f, cz - 50.0f,   
+            cx + 50.0f, 0.0f, cz - 50.0f,   
+            cx + 50.0f, 0.0f, cz + 50.0f,   
+            cx - 50.0f, 0.0f, cz - 50.0f,   
+            cx + 50.0f, 0.0f, cz + 50.0f,   
+            cx - 50.0f, 0.0f, cz + 50.0f    
+        };
+
+        uint32_t water_vao = 0, water_vbo = 0;
+        glGenVertexArrays(1, &water_vao);
+        glGenBuffers(1, &water_vbo);
+        glBindVertexArray(water_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(water_verts), water_verts, GL_STREAM_DRAW);
+        
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), reinterpret_cast<void*>(0));
+
+        glUseProgram(prog_water_);
+        if (loc_mvp_water_ >= 0) glUniformMatrix4fv(loc_mvp_water_, 1, GL_FALSE, mvp);
+        if (loc_offset_water_ >= 0) glUniform3f(loc_offset_water_, 0.0f, water_level_, 0.0f);
+        if (loc_color_water_ >= 0) glUniform3f(loc_color_water_, 0.1f, 0.4f, 0.7f);
+
+        // Blending for water
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_CULL_FACE);
+
+        if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glDrawArrays(GL_TRIANGLES, 0, 12);
+        if (wireframe_) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+        // Restore state
+        // Object rendering doesn't need CULL_FACE, but terrain DOES need it disabled. 
+        // We'll leave it disabled.
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+
+        glDisableVertexAttribArray(0);
+        glBindVertexArray(0);
+        glDeleteBuffers(1, &water_vbo);
+        glDeleteVertexArrays(1, &water_vao);
+        glUseProgram(0);
+    }
+
     if (on_texture_debug_info_) {
         std::string info;
         if (color_mode_ == 2 && tile_grid_w_ > 0 && tile_grid_h_ > 0 && !tile_texture_indices_.empty()) {
@@ -1428,7 +1504,12 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
 
     emit_terrain_stats();
     if (on_compass_info_) {
-        const auto compass = make_compass_text(camera_state.azimuth);
+        std::string compass = make_compass_text(camera_state.azimuth);
+        
+        char buf[128];
+        snprintf(buf, sizeof(buf), " | Cam: %.1f, %.1f, %.1f | Wat: %.1f", eye[0], eye[1], eye[2], water_level_);
+        compass += buf;
+
         if (compass != last_compass_info_) {
             last_compass_info_ = compass;
             on_compass_info_(compass);
@@ -1492,6 +1573,10 @@ void GLWrpTerrainView::cleanup_gl() {
     if (prog_selected_object_) {
         glDeleteProgram(prog_selected_object_);
         prog_selected_object_ = 0;
+    }
+    if (prog_water_) {
+        glDeleteProgram(prog_water_);
+        prog_water_ = 0;
     }
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();

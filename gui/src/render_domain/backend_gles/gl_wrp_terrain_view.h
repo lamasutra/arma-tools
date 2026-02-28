@@ -38,6 +38,8 @@ public:
     void set_object_max_distance(float distance_m);
     void set_object_category_filters(bool buildings, bool vegetation, bool rocks, bool props);
     void set_show_object_bounds(bool on);
+    void set_show_water(bool on);
+    void set_water_level(float level);
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
@@ -169,6 +171,8 @@ private:
     bool show_patch_lod_colors_ = false;
     bool show_tile_boundaries_ = false;
     bool show_object_bounds_ = false;
+    bool show_water_ = true;
+    float water_level_ = 0.0f;
     bool object_filter_buildings_ = true;
     bool object_filter_vegetation_ = true;
     bool object_filter_rocks_ = true;
@@ -206,6 +210,11 @@ private:
     int loc_offset_selected_object_ = -1;
     int loc_light_dir_selected_object_ = -1;
     int loc_color_selected_object_ = -1;
+
+    uint32_t prog_water_ = 0;
+    int loc_mvp_water_ = -1;
+    int loc_offset_water_ = -1;
+    int loc_color_water_ = -1;
 
     struct SelectedObjectLodMesh {
         uint32_t vao = 0;
