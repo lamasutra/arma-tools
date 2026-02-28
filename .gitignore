@@ -1,2 +1,9 @@
 build/
 .cache/
+.vscode/
+.claude/
+.codex/
+tasks/
+spec/
+demo/
+docs/*.md
