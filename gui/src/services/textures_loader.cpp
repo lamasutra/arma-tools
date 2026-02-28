@@ -35,14 +35,7 @@ std::string join_cache_key(const std::vector<std::string>& values) {
     return key;
 }
 
-bool starts_with_ascii(const std::string& s, const std::string& prefix) {
-    return s.size() >= prefix.size()
-        && s.compare(0, prefix.size(), prefix) == 0;
-}
 
-std::string filename_lower(const std::string& p) {
-    return armatools::armapath::to_slash_lower(std::filesystem::path(p).filename().string());
-}
 
 } // namespace
 
@@ -608,7 +601,7 @@ TexturesLoaderService::load_texture(const std::string& texture_path) {
     return load_single_texture(texture_path, "");
 }
 
-std::optional<TexturesLoaderService::TerrainLayeredMaterial>
+std::shared_ptr<const TexturesLoaderService::TerrainLayeredMaterial>
 TexturesLoaderService::load_terrain_layered_material(const std::vector<std::string>& entry_paths) {
     std::vector<std::string> candidates;
     candidates.reserve(entry_paths.size());
@@ -618,20 +611,17 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
         if (std::find(candidates.begin(), candidates.end(), normalized) == candidates.end())
             candidates.push_back(normalized);
     }
-    if (candidates.empty()) return std::nullopt;
+    if (candidates.empty()) return nullptr;
 
     const auto cache_key = join_cache_key(candidates);
-    if (cache_key.empty()) return std::nullopt;
+    if (cache_key.empty()) return nullptr;
 
     {
         std::lock_guard<std::mutex> lock(terrain_layered_cache_mutex_);
         auto it = terrain_layered_cache_.find(cache_key);
         if (it != terrain_layered_cache_.end()) {
-            terrain_layered_cache_last_used_[cache_key] = terrain_layered_cache_tick_++;
-            return it->second;
-        }
-        if (terrain_layered_cache_missing_.find(cache_key) != terrain_layered_cache_missing_.end()) {
-            return std::nullopt;
+            it->second.last_used = terrain_layered_cache_tick_++;
+            return it->second.value;
         }
     }
 
@@ -745,14 +735,14 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
 
     auto parse_layered_from_material =
         [&](const std::string& material_path, const std::vector<uint8_t>& bytes)
-        -> std::optional<TerrainLayeredMaterial> {
-        if (bytes.empty()) return std::nullopt;
+        -> std::shared_ptr<TerrainLayeredMaterial> {
+        if (bytes.empty()) return nullptr;
         armatools::rvmat::Material mat;
         try {
             std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
             mat = armatools::rvmat::parse_bytes(text);
         } catch (...) {
-            return std::nullopt;
+            return nullptr;
         }
 
         std::vector<armatools::rvmat::TextureStage> stages;
@@ -762,61 +752,20 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
             stages.push_back(st);
         }
 
-        TerrainLayeredMaterial out;
-        out.source_path = material_path;
-
-        if (stages.size() >= 5
-            && starts_with_ascii(filename_lower(stages[0].texture_path), "s_")
-            && starts_with_ascii(filename_lower(stages[1].texture_path), "m_")
-            && ((stages.size() - 2) % 3) == 0) {
-            const int grouped_surfaces = static_cast<int>((stages.size() - 2) / 3);
-            out.surface_count = std::clamp(grouped_surfaces, 0, 4);
-            out.layered = out.surface_count > 0;
-        }
-
-        if (out.layered) {
-            out.satellite = decode_texture_layer(material_path, stages[0]);
-            out.mask = decode_texture_layer(material_path, stages[1]);
-            for (int i = 0; i < out.surface_count; ++i) {
-                const int base = 2 + i * 3;
-                if ((base + 2) >= static_cast<int>(stages.size())) break;
-                const auto s0 = static_cast<size_t>(base + 0);
-                const auto s1 = static_cast<size_t>(base + 1);
-                const auto s2 = static_cast<size_t>(base + 2);
-                out.surfaces[static_cast<size_t>(i)].macro = decode_texture_layer(material_path, stages[s0]);
-                out.surfaces[static_cast<size_t>(i)].normal = decode_texture_layer(material_path, stages[s1]);
-                out.surfaces[static_cast<size_t>(i)].detail = decode_texture_layer(material_path, stages[s2]);
-            }
-            if (out.satellite.present || out.mask.present) {
-                return out;
-            }
-        }
-
-        auto score_stage = [](const armatools::rvmat::TextureStage& stage) {
-            auto s = armatools::armapath::to_slash_lower(stage.texture_path);
-            int v = 0;
-            if (s.find("_mco.") != std::string::npos) v += 40;
-            else if (s.find("_co.") != std::string::npos) v += 30;
-            else if (s.find("_ca.") != std::string::npos) v += 20;
-            if (s.find("_smdi.") != std::string::npos) v -= 30;
-            if (s.find("_nohq.") != std::string::npos) v -= 30;
-            return v;
-        };
+        auto out = std::make_shared<TerrainLayeredMaterial>();
+        out->source_path = material_path;
+        out->layered = false;
+        out->surface_count = 0;
 
         if (!stages.empty()) {
-            auto best_it = std::max_element(
-                stages.begin(), stages.end(),
-                [&](const auto& a, const auto& b) { return score_stage(a) < score_stage(b); });
-            out.layered = false;
-            out.surface_count = 0;
-            out.satellite = decode_texture_layer(material_path, *best_it);
-            if (out.satellite.present) return out;
+            out->satellite = decode_texture_layer(material_path, stages[0]);
+            if (out->satellite.present) return out;
         }
 
-        return std::nullopt;
+        return nullptr;
     };
 
-    std::optional<TerrainLayeredMaterial> resolved;
+    std::shared_ptr<TerrainLayeredMaterial> resolved;
     for (const auto& raw : candidates) {
         std::vector<std::string> mat_candidates{raw};
         if (std::filesystem::path(raw).extension().empty())
@@ -825,7 +774,7 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
             auto bytes = load_asset_bytes(mat_candidate);
             if (bytes.empty()) continue;
             if (auto layered = parse_layered_from_material(mat_candidate, bytes)) {
-                resolved = std::move(*layered);
+                resolved = layered;
                 break;
             }
         }
@@ -839,14 +788,13 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
         for (const auto& tex : tex_candidates) {
             auto bytes = load_asset_bytes(tex);
             if (auto img = decode_image_bytes(bytes)) {
-                TerrainLayeredMaterial fallback;
-                fallback.layered = false;
-                fallback.source_path = tex;
-                fallback.surface_count = 0;
-                fallback.satellite.present = true;
-                fallback.satellite.path = tex;
-                fallback.satellite.image = std::move(*img);
-                resolved = std::move(fallback);
+                resolved = std::make_shared<TerrainLayeredMaterial>();
+                resolved->layered = false;
+                resolved->source_path = tex;
+                resolved->surface_count = 0;
+                resolved->satellite.present = true;
+                resolved->satellite.path = tex;
+                resolved->satellite.image = std::move(*img);
                 break;
             }
         }
@@ -855,28 +803,22 @@ TexturesLoaderService::load_terrain_layered_material(const std::vector<std::stri
 
     {
         std::lock_guard<std::mutex> lock(terrain_layered_cache_mutex_);
-        if (resolved) {
-            terrain_layered_cache_[cache_key] = *resolved;
-            terrain_layered_cache_last_used_[cache_key] = terrain_layered_cache_tick_++;
-            terrain_layered_cache_missing_.erase(cache_key);
-        } else {
-            terrain_layered_cache_missing_.insert(cache_key);
-        }
+        TerrainLayeredCacheItem item;
+        item.value = resolved;
+        item.last_used = terrain_layered_cache_tick_++;
+        terrain_layered_cache_[cache_key] = std::move(item);
 
         while (terrain_layered_cache_.size() > terrain_layered_cache_capacity_) {
-            auto victim = terrain_layered_cache_last_used_.end();
+            auto victim = terrain_layered_cache_.end();
             uint64_t oldest = std::numeric_limits<uint64_t>::max();
-            for (auto it = terrain_layered_cache_last_used_.begin();
-                 it != terrain_layered_cache_last_used_.end(); ++it) {
-                if (it->second < oldest) {
-                    oldest = it->second;
+            for (auto it = terrain_layered_cache_.begin(); it != terrain_layered_cache_.end(); ++it) {
+                if (it->second.last_used < oldest) {
+                    oldest = it->second.last_used;
                     victim = it;
                 }
             }
-            if (victim == terrain_layered_cache_last_used_.end()) break;
-            terrain_layered_cache_.erase(victim->first);
-            terrain_layered_cache_missing_.erase(victim->first);
-            terrain_layered_cache_last_used_.erase(victim);
+            if (victim == terrain_layered_cache_.end()) break;
+            terrain_layered_cache_.erase(victim);
         }
     }
 

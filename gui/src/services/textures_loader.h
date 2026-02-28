@@ -68,7 +68,7 @@ public:
     std::vector<std::shared_ptr<const TextureData>> load_textures(armatools::p3d::LOD& lod, const std::string& model_path);
     std::shared_ptr<const TextureData> load_texture(const std::string& texture_path);
     std::shared_ptr<const TextureData> load_terrain_texture_entry(const std::string& entry_path);
-    std::optional<TerrainLayeredMaterial> load_terrain_layered_material(
+    std::shared_ptr<const TerrainLayeredMaterial> load_terrain_layered_material(
         const std::vector<std::string>& entry_paths);
 
     TexturesLoaderService(const std::string& db_path_in,
@@ -91,11 +91,14 @@ private:
     std::unordered_map<std::string, TextureCacheItem> texture_cache_;
     uint64_t texture_cache_tick_ = 1;
     size_t texture_cache_capacity_ = 1024;
+    struct TerrainLayeredCacheItem {
+        std::shared_ptr<const TerrainLayeredMaterial> value;
+        uint64_t last_used = 0;
+    };
+
     std::mutex terrain_layered_cache_mutex_;
-    std::unordered_map<std::string, TerrainLayeredMaterial> terrain_layered_cache_;
-    std::unordered_set<std::string> terrain_layered_cache_missing_;
+    std::unordered_map<std::string, TerrainLayeredCacheItem> terrain_layered_cache_;
     uint64_t terrain_layered_cache_tick_ = 1;
-    std::unordered_map<std::string, uint64_t> terrain_layered_cache_last_used_;
     size_t terrain_layered_cache_capacity_ = 1024;
 
     std::shared_ptr<const TextureData> load_single_texture(const std::string& tex_path,
