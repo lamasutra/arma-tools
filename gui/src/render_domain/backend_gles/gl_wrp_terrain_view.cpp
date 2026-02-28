@@ -3490,7 +3490,7 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
         }
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
+        glDepthMask(GL_TRUE); // Let alpha-tested batches (foliage) write depth!
         for (const auto& batch : batches) {
             if (!batch.has_alpha) continue;
             draw_batch(batch);
