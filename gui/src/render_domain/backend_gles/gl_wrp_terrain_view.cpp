@@ -36,6 +36,23 @@ static constexpr const char* kPointVertResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.vert";
 static constexpr const char* kPointFragResource =
     "/com/bigbangit/ArmaTools/data/shaders/gl_wrp_point.frag";
+static constexpr const char* kWaterVertSrc = R"(
+#version 330 core
+layout(location=0) in vec3 aPos;
+uniform mat4 uMVP;
+uniform vec3 uOffset;
+void main() {
+    gl_Position = uMVP * vec4(aPos + uOffset, 1.0);
+}
+)";
+static constexpr const char* kWaterFragSrc = R"(
+#version 330 core
+uniform vec3 uColor;
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(0.1, 0.4, 0.7, 0.45); 
+}
+)";
 static constexpr const char* kObjectsVertSrc = R"(
 #version 330 core
 layout(location=0) in vec3 aPos;
@@ -483,9 +500,11 @@ GLWrpTerrainView::GLWrpTerrainView() {
     add_controller(key_move_);
 
     start_texture_workers();
+    start_object_workers();
 }
 
 GLWrpTerrainView::~GLWrpTerrainView() {
+    stop_object_workers();
     stop_texture_workers();
 }
 
@@ -544,6 +563,212 @@ void GLWrpTerrainView::texture_worker_loop() {
     }
 }
 
+void GLWrpTerrainView::start_object_workers() {
+    stop_object_workers();
+    object_workers_stop_ = false;
+    const unsigned hc = std::thread::hardware_concurrency();
+    const unsigned desired = std::clamp(hc > 1 ? hc - 1 : 2u, 2u, 6u);
+    object_workers_.reserve(desired);
+    for (unsigned i = 0; i < desired; ++i) {
+        object_workers_.emplace_back([this]() { object_worker_loop(); });
+    }
+}
+
+void GLWrpTerrainView::stop_object_workers() {
+    {
+        std::lock_guard<std::mutex> lock(object_jobs_mutex_);
+        object_workers_stop_ = true;
+        object_jobs_queue_.clear();
+        object_ready_queue_.clear();
+        object_jobs_pending_.clear();
+    }
+    object_jobs_cv_.notify_all();
+    for (auto& worker : object_workers_) {
+        if (worker.joinable()) worker.join();
+    }
+    object_workers_.clear();
+}
+
+void GLWrpTerrainView::object_worker_loop() {
+    for (;;) {
+        ObjectLoadPriorityJob job;
+        {
+            std::unique_lock<std::mutex> lock(object_jobs_mutex_);
+            object_jobs_cv_.wait(lock, [this]() {
+                return object_workers_stop_ || !object_jobs_queue_.empty();
+            });
+            if (object_workers_stop_) return;
+            
+            // Extract the job with highest priority (lowest distance)
+            auto best_it = std::min_element(object_jobs_queue_.begin(), object_jobs_queue_.end());
+            job = *best_it;
+            object_jobs_queue_.erase(best_it);
+        }
+
+        auto result = prepare_object_model_asset_sync(job.model_id, job.generation);
+
+        {
+            std::lock_guard<std::mutex> lock(object_jobs_mutex_);
+            object_jobs_pending_.erase(job.model_id);
+            if (!object_workers_stop_) {
+                object_ready_queue_.push_back(std::move(result));
+            }
+        }
+    }
+}
+
+GLWrpTerrainView::ObjectLoadResult GLWrpTerrainView::prepare_object_model_asset_sync(uint32_t model_id, uint64_t generation) {
+    ObjectLoadResult result;
+    result.model_id = model_id;
+    result.generation = generation;
+    result.success = false;
+
+    if (!model_loader_ || model_id >= object_model_assets_.size()) return result;
+    std::string model_name;
+    {
+        // Don't modify asset state here, we only read model_name
+        const auto& asset = object_model_assets_[model_id];
+        model_name = asset.model_name;
+    }
+
+    std::shared_ptr<const armatools::p3d::P3DFile> model;
+    try {
+        model = model_loader_->load_p3d(model_name);
+    } catch (...) {
+        return result; // Error, handled in main thread when result returned with success=false
+    }
+
+    if (!model) return result;
+
+    std::vector<const armatools::p3d::LOD*> render_lods;
+    render_lods.reserve(model->lods.size());
+    for (const auto& lod : model->lods) {
+        if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
+    }
+    if (render_lods.empty()) return result;
+
+    std::sort(render_lods.begin(), render_lods.end(),
+              [](const armatools::p3d::LOD* a, const armatools::p3d::LOD* b) {
+                  return a->resolution < b->resolution;
+              });
+    if (render_lods.size() > 8) render_lods.resize(8);
+
+    for (const auto* lod : render_lods) {
+        std::unordered_map<std::string, std::vector<float>> grouped_verts;
+        grouped_verts.reserve(lod->face_data.size());
+
+        for (const auto& face : lod->face_data) {
+            if (face.vertices.size() < 3) continue;
+            std::string tex_key = armatools::armapath::to_slash_lower(face.texture);
+            if (tex_key.empty())
+                tex_key = armatools::armapath::to_slash_lower(face.material);
+            auto& verts = grouped_verts[tex_key];
+            verts.reserve(verts.size() + (face.vertices.size() - 2) * 24u);
+
+            for (size_t i = 1; i + 1 < face.vertices.size(); ++i) {
+                const size_t tri[3] = {0, i, i + 1};
+                float tri_pos[3][3] = {};
+                float tri_nrm[3][3] = {};
+                float tri_uv[3][2] = {};
+                bool has_vertex_normals = true;
+                for (int t = 0; t < 3; ++t) {
+                    const auto& fv = face.vertices[tri[t]];
+                    if (fv.point_index < lod->vertices.size()) {
+                        const auto& p = lod->vertices[fv.point_index];
+                        tri_pos[t][0] = p[0];
+                        tri_pos[t][1] = p[1];
+                        tri_pos[t][2] = p[2];
+                    }
+                    if (fv.normal_index >= 0
+                        && static_cast<size_t>(fv.normal_index) < lod->normals.size()) {
+                        const auto& n = lod->normals[static_cast<size_t>(fv.normal_index)];
+                        tri_nrm[t][0] = n[0];
+                        tri_nrm[t][1] = n[1];
+                        tri_nrm[t][2] = n[2];
+                        vec3_normalize(tri_nrm[t]);
+                    } else {
+                        has_vertex_normals = false;
+                    }
+                    tri_uv[t][0] = std::isfinite(fv.uv[0]) ? fv.uv[0] : 0.0f;
+                    tri_uv[t][1] = std::isfinite(fv.uv[1]) ? fv.uv[1] : 0.0f;
+                }
+                if (!has_vertex_normals) {
+                    float e1[3] = {
+                        tri_pos[1][0] - tri_pos[0][0],
+                        tri_pos[1][1] - tri_pos[0][1],
+                        tri_pos[1][2] - tri_pos[0][2]};
+                    float e2[3] = {
+                        tri_pos[2][0] - tri_pos[0][0],
+                        tri_pos[2][1] - tri_pos[0][1],
+                        tri_pos[2][2] - tri_pos[0][2]};
+                    float fn[3];
+                    vec3_cross(fn, e1, e2);
+                    vec3_normalize(fn);
+                    if (!std::isfinite(fn[0]) || !std::isfinite(fn[1]) || !std::isfinite(fn[2])) {
+                        fn[0] = 0.0f; fn[1] = 1.0f; fn[2] = 0.0f;
+                    }
+                    for (int t = 0; t < 3; ++t) {
+                        tri_nrm[t][0] = fn[0];
+                        tri_nrm[t][1] = fn[1];
+                        tri_nrm[t][2] = fn[2];
+                    }
+                }
+                for (int t = 0; t < 3; ++t) {
+                    verts.push_back(tri_pos[t][0]);
+                    verts.push_back(tri_pos[t][1]);
+                    verts.push_back(tri_pos[t][2]);
+                    verts.push_back(tri_nrm[t][0]);
+                    verts.push_back(tri_nrm[t][1]);
+                    verts.push_back(tri_nrm[t][2]);
+                    verts.push_back(tri_uv[t][0]);
+                    verts.push_back(tri_uv[t][1]);
+                }
+            }
+        }
+
+        PreparedLodMesh lod_out;
+        lod_out.resolution = lod->resolution;
+        lod_out.bounding_radius = lod->bounding_radius;
+        if (lod_out.bounding_radius <= 0.001f) {
+            const float dx = lod->bounding_box_max[0] - lod->bounding_box_min[0];
+            const float dy = lod->bounding_box_max[1] - lod->bounding_box_min[1];
+            const float dz = lod->bounding_box_max[2] - lod->bounding_box_min[2];
+            lod_out.bounding_radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        lod_out.bounding_radius = std::max(lod_out.bounding_radius, 0.1f);
+
+        if (texture_loader_) {
+            auto lod_copy = *lod;
+            auto resolved = texture_loader_->load_textures(lod_copy, model_name);
+            for (const auto& tex_ptr : resolved) {
+                if (!tex_ptr) continue;
+                const auto& tex = *tex_ptr;
+                std::string key = armatools::armapath::to_slash_lower(tex.path);
+                if (key.empty()) continue;
+                if (lod_out.loaded_textures.find(key) == lod_out.loaded_textures.end()) {
+                    lod_out.loaded_textures[key] = tex_ptr; 
+                }
+            }
+        }
+
+        for (auto& [tex_key, verts] : grouped_verts) {
+            if (verts.empty()) continue;
+            PreparedMeshGroup group;
+            group.verts = std::move(verts);
+            group.texture_key = tex_key;
+            lod_out.groups.push_back(std::move(group));
+        }
+
+        if (!lod_out.groups.empty()) {
+            result.model_bounding_radius = std::max(result.model_bounding_radius, lod_out.bounding_radius);
+            result.lods.push_back(std::move(lod_out));
+        }
+    }
+    
+    result.success = !result.lods.empty();
+    return result;
+}
+
 void GLWrpTerrainView::clear_world() {
     {
         std::lock_guard<std::mutex> lock(tile_jobs_mutex_);
@@ -586,6 +811,15 @@ void GLWrpTerrainView::clear_world() {
     object_draw_calls_ = 0;
     object_instanced_batches_ = 0;
 
+    {
+        std::lock_guard<std::mutex> lock(object_jobs_mutex_);
+        object_jobs_queue_.clear();
+        object_ready_queue_.clear();
+        object_jobs_pending_.clear();
+    }
+    object_generation_++;
+
+    terrain_patches_.clear();
     cleanup_texture_atlas_gl();
     cleanup_texture_lookup_gl();
     cleanup_texture_index_gl();
@@ -1173,6 +1407,11 @@ void GLWrpTerrainView::on_realize_gl() {
     prog_selected_object_ = link_program(ovs, ofs);
     glDeleteShader(ovs);
     glDeleteShader(ofs);
+    auto wvs = compile_shader(GL_VERTEX_SHADER, kWaterVertSrc);
+    auto wfs = compile_shader(GL_FRAGMENT_SHADER, kWaterFragSrc);
+    prog_water_ = link_program(wvs, wfs);
+    glDeleteShader(wvs);
+    glDeleteShader(wfs);
 
     loc_mvp_points_ = glGetUniformLocation(prog_points_, "uMVP");
     loc_mvp_objects_ = glGetUniformLocation(prog_objects_, "uMVP");
@@ -2728,243 +2967,135 @@ void GLWrpTerrainView::delete_object_model_asset_gl(ObjectModelAsset& asset) {
     }
 }
 
-bool GLWrpTerrainView::build_object_model_asset(
-    ObjectModelAsset& asset, const std::shared_ptr<const armatools::p3d::P3DFile>& model) {
-    delete_object_model_asset_gl(asset);
-    asset.lod_meshes.clear();
-    asset.bounding_radius = 1.0f;
-
-    std::vector<const armatools::p3d::LOD*> render_lods;
-    if (!model) return false;
-    render_lods.reserve(model->lods.size());
-    for (const auto& lod : model->lods) {
-        if (is_renderable_object_lod(lod)) render_lods.push_back(&lod);
+void GLWrpTerrainView::drain_ready_object_results() {
+    std::deque<ObjectLoadResult> ready_items;
+    {
+        std::lock_guard<std::mutex> lock(object_jobs_mutex_);
+        if (object_ready_queue_.empty()) return;
+        
+        while (!object_ready_queue_.empty()) {
+            ready_items.push_back(std::move(object_ready_queue_.front()));
+            object_ready_queue_.pop_front();
+        }
     }
-    if (render_lods.empty()) return false;
 
-    std::sort(render_lods.begin(), render_lods.end(),
-              [](const armatools::p3d::LOD* a, const armatools::p3d::LOD* b) {
-                  return a->resolution < b->resolution;
-              });
-    if (render_lods.size() > 8) render_lods.resize(8);
+    if (ready_items.empty() || !get_realized()) return;
+
+    make_current();
+    if (has_error()) return;
 
     std::unordered_map<std::string, std::pair<GLuint, bool>> texture_cache;
-    auto ensure_checkerboard_fallback = [&]() -> GLuint {
-        if (asset.fallback_texture != 0) return asset.fallback_texture;
-        const auto checker = make_missing_checkerboard_rgba();
-        asset.fallback_texture = upload_rgba_texture_2d(checker.data(), 4, 4);
-        return asset.fallback_texture;
-    };
-    auto load_texture_key = [&](const std::string& key)
-        -> std::optional<std::pair<GLuint, bool>> {
-        if (key.empty() || !texture_loader_) return std::nullopt;
-        const auto norm = armatools::armapath::to_slash_lower(key);
-        auto it = texture_cache.find(norm);
-        if (it != texture_cache.end()) return it->second;
-
-        std::shared_ptr<const TexturesLoaderService::TextureData> td = texture_loader_->load_texture(norm);
-        if (!td && std::filesystem::path(norm).extension().empty()) {
-            td = texture_loader_->load_texture(norm + ".paa");
-            if (!td) td = texture_loader_->load_texture(norm + ".pac");
-        }
-        if (!td || td->image.width <= 0 || td->image.height <= 0 || td->image.pixels.empty())
-            return std::nullopt;
-
-        const GLuint gl_tex = upload_rgba_texture_2d(
-            td->image.pixels.data(), td->image.width, td->image.height);
-        if (gl_tex == 0) return std::nullopt;
+    auto upload_texture = [&](const std::string& key, const std::shared_ptr<const TexturesLoaderService::TextureData>& td) -> std::pair<GLuint, bool> {
+        if (!td || td->image.width <= 0 || td->image.height <= 0 || td->image.pixels.empty()) return {0, false};
+        const GLuint gl_tex = upload_rgba_texture_2d(td->image.pixels.data(), td->image.width, td->image.height);
+        if (gl_tex == 0) return {0, false};
         const bool alpha = image_has_alpha_channel(td->image);
-        texture_cache[norm] = {gl_tex, alpha};
-        return texture_cache[norm];
+        return {gl_tex, alpha};
     };
 
-    for (const auto* lod : render_lods) {
-        std::unordered_map<std::string, std::vector<float>> grouped_verts;
-        grouped_verts.reserve(lod->face_data.size());
+    for (auto& item : ready_items) {
+        if (item.model_id >= object_model_assets_.size()) continue;
+        if (item.generation != object_generation_) continue;
 
-        for (const auto& face : lod->face_data) {
-            if (face.vertices.size() < 3) continue;
-            std::string tex_key = armatools::armapath::to_slash_lower(face.texture);
-            if (tex_key.empty())
-                tex_key = armatools::armapath::to_slash_lower(face.material);
-            auto& verts = grouped_verts[tex_key];
-            verts.reserve(verts.size() + (face.vertices.size() - 2) * 24u);
+        auto& asset = object_model_assets_[item.model_id];
+        // If it was cancelled or removed, or we already loaded it, skip it
+        if (asset.state != ObjectModelAsset::State::Loading) continue;
 
-            for (size_t i = 1; i + 1 < face.vertices.size(); ++i) {
-                const size_t tri[3] = {0, i, i + 1};
-                float tri_pos[3][3] = {};
-                float tri_nrm[3][3] = {};
-                float tri_uv[3][2] = {};
-                bool has_vertex_normals = true;
-                for (int t = 0; t < 3; ++t) {
-                    const auto& fv = face.vertices[tri[t]];
-                    if (fv.point_index < lod->vertices.size()) {
-                        const auto& p = lod->vertices[fv.point_index];
-                        tri_pos[t][0] = p[0];
-                        tri_pos[t][1] = p[1];
-                        tri_pos[t][2] = p[2];
-                    }
-                    if (fv.normal_index >= 0
-                        && static_cast<size_t>(fv.normal_index) < lod->normals.size()) {
-                        const auto& n = lod->normals[static_cast<size_t>(fv.normal_index)];
-                        tri_nrm[t][0] = n[0];
-                        tri_nrm[t][1] = n[1];
-                        tri_nrm[t][2] = n[2];
-                        vec3_normalize(tri_nrm[t]);
-                    } else {
-                        has_vertex_normals = false;
-                    }
-                    tri_uv[t][0] = std::isfinite(fv.uv[0]) ? fv.uv[0] : 0.0f;
-                    tri_uv[t][1] = std::isfinite(fv.uv[1]) ? fv.uv[1] : 0.0f;
-                }
-                if (!has_vertex_normals) {
-                    float e1[3] = {
-                        tri_pos[1][0] - tri_pos[0][0],
-                        tri_pos[1][1] - tri_pos[0][1],
-                        tri_pos[1][2] - tri_pos[0][2]};
-                    float e2[3] = {
-                        tri_pos[2][0] - tri_pos[0][0],
-                        tri_pos[2][1] - tri_pos[0][1],
-                        tri_pos[2][2] - tri_pos[0][2]};
-                    float fn[3];
-                    vec3_cross(fn, e1, e2);
-                    vec3_normalize(fn);
-                    if (!std::isfinite(fn[0]) || !std::isfinite(fn[1]) || !std::isfinite(fn[2])) {
-                        fn[0] = 0.0f; fn[1] = 1.0f; fn[2] = 0.0f;
-                    }
-                    for (int t = 0; t < 3; ++t) {
-                        tri_nrm[t][0] = fn[0];
-                        tri_nrm[t][1] = fn[1];
-                        tri_nrm[t][2] = fn[2];
-                    }
-                }
-                for (int t = 0; t < 3; ++t) {
-                    verts.push_back(tri_pos[t][0]);
-                    verts.push_back(tri_pos[t][1]);
-                    verts.push_back(tri_pos[t][2]);
-                    verts.push_back(tri_nrm[t][0]);
-                    verts.push_back(tri_nrm[t][1]);
-                    verts.push_back(tri_nrm[t][2]);
-                    verts.push_back(tri_uv[t][0]);
-                    verts.push_back(tri_uv[t][1]);
-                }
+        if (!item.success || item.lods.empty()) {
+            asset.state = ObjectModelAsset::State::Failed;
+            if (!asset.missing_logged) {
+                asset.missing_logged = true;
+                LOGW_ONCE(armatools::log::detail::fnv1a_hash(asset.model_name.c_str()), 
+                          "GLWrpTerrainView: object model load failed: " + asset.model_name);
             }
+            continue;
         }
 
-        ObjectLodMesh lod_out;
-        lod_out.resolution = lod->resolution;
-        lod_out.bounding_radius = lod->bounding_radius;
-        if (lod_out.bounding_radius <= 0.001f) {
-            const float dx = lod->bounding_box_max[0] - lod->bounding_box_min[0];
-            const float dy = lod->bounding_box_max[1] - lod->bounding_box_min[1];
-            const float dz = lod->bounding_box_max[2] - lod->bounding_box_min[2];
-            lod_out.bounding_radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
-        }
-        lod_out.bounding_radius = std::max(lod_out.bounding_radius, 0.1f);
+        auto ensure_checkerboard_fallback = [&]() -> GLuint {
+            if (asset.fallback_texture != 0) return asset.fallback_texture;
+            const auto checker = make_missing_checkerboard_rgba();
+            asset.fallback_texture = upload_rgba_texture_2d(checker.data(), 4, 4);
+            return asset.fallback_texture;
+        };
 
-        std::unordered_map<std::string, std::pair<GLuint, bool>> lod_loaded_textures;
-        if (texture_loader_) {
-            auto lod_copy = *lod;
-            auto resolved = texture_loader_->load_textures(lod_copy, asset.model_name);
-            for (const auto& tex_ptr : resolved) {
-                if (!tex_ptr) continue;
-                const auto& tex = *tex_ptr;
-                std::string key = armatools::armapath::to_slash_lower(tex.path);
-                if (key.empty()) continue;
+        asset.bounding_radius = item.model_bounding_radius;
+        asset.lod_meshes.clear();
+
+        for (auto& plod : item.lods) {
+            ObjectLodMesh lod_out;
+            lod_out.resolution = plod.resolution;
+            lod_out.bounding_radius = plod.bounding_radius;
+
+            std::unordered_map<std::string, std::pair<GLuint, bool>> lod_gl_textures;
+            for (const auto& [key, td] : plod.loaded_textures) {
+                if (!td) continue;
                 auto cached = texture_cache.find(key);
                 if (cached != texture_cache.end()) {
-                    lod_loaded_textures.emplace(key, cached->second);
-                    continue;
+                    lod_gl_textures[key] = cached->second;
+                } else {
+                    auto tex = upload_texture(key, td);
+                    if (tex.first != 0) {
+                        texture_cache[key] = tex;
+                        lod_gl_textures[key] = tex;
+                    }
                 }
-                if (tex.image.width <= 0 || tex.image.height <= 0 || tex.image.pixels.empty()) continue;
-                const GLuint gl_tex = upload_rgba_texture_2d(
-                    tex.image.pixels.data(), tex.image.width, tex.image.height);
-                if (gl_tex == 0) continue;
-                const bool alpha = image_has_alpha_channel(tex.image);
-                texture_cache.emplace(key, std::make_pair(gl_tex, alpha));
-                lod_loaded_textures.emplace(key, std::make_pair(gl_tex, alpha));
             }
-        }
 
-        for (auto& [tex_key, verts] : grouped_verts) {
-            if (verts.empty()) continue;
-            ObjectMeshGroup group;
-            group.vertex_count = static_cast<int>(verts.size() / 8u);
-            glGenVertexArrays(1, &group.vao);
-            glGenBuffers(1, &group.vbo);
-            glBindVertexArray(group.vao);
-            glBindBuffer(GL_ARRAY_BUFFER, group.vbo);
-            glBufferData(GL_ARRAY_BUFFER,
-                         static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
-                         verts.data(), GL_STATIC_DRAW);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
-                                  reinterpret_cast<void*>(0));
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
-                                  reinterpret_cast<void*>(3 * sizeof(float)));
-            glEnableVertexAttribArray(2);
-            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
-                                  reinterpret_cast<void*>(6 * sizeof(float)));
-            glBindVertexArray(0);
+            for (auto& pgroup : plod.groups) {
+                ObjectMeshGroup group;
+                group.vertex_count = static_cast<int>(pgroup.verts.size() / 8u);
+                glGenVertexArrays(1, &group.vao);
+                glGenBuffers(1, &group.vbo);
+                glBindVertexArray(group.vao);
+                glBindBuffer(GL_ARRAY_BUFFER, group.vbo);
+                glBufferData(GL_ARRAY_BUFFER,
+                             static_cast<GLsizeiptr>(pgroup.verts.size() * sizeof(float)),
+                             pgroup.verts.data(), GL_STATIC_DRAW);
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                      reinterpret_cast<void*>(0));
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                      reinterpret_cast<void*>(3 * sizeof(float)));
+                glEnableVertexAttribArray(2);
+                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                                      reinterpret_cast<void*>(6 * sizeof(float)));
+                glBindVertexArray(0);
 
-            const auto norm_key = armatools::armapath::to_slash_lower(tex_key);
-            if (!norm_key.empty()) {
-                auto it_lod = lod_loaded_textures.find(norm_key);
-                if (it_lod != lod_loaded_textures.end()) {
-                    group.texture = it_lod->second.first;
-                    group.has_alpha = it_lod->second.second;
-                } else if (auto loaded = load_texture_key(norm_key)) {
-                    group.texture = loaded->first;
-                    group.has_alpha = loaded->second;
+                const auto norm_key = armatools::armapath::to_slash_lower(pgroup.texture_key);
+                if (!norm_key.empty()) {
+                    auto it_lod = lod_gl_textures.find(norm_key);
+                    if (it_lod != lod_gl_textures.end()) {
+                        group.texture = it_lod->second.first;
+                        group.has_alpha = it_lod->second.second;
+                    } else {
+                        group.texture = ensure_checkerboard_fallback();
+                        group.has_alpha = false;
+                    }
                 } else {
                     group.texture = ensure_checkerboard_fallback();
                     group.has_alpha = false;
                 }
+                lod_out.groups.push_back(std::move(group));
             }
-            lod_out.groups.push_back(group);
-        }
-
-        if (!lod_out.groups.empty()) {
-            asset.bounding_radius = std::max(asset.bounding_radius, lod_out.bounding_radius);
             asset.lod_meshes.push_back(std::move(lod_out));
         }
-    }
 
-    return !asset.lod_meshes.empty();
+        asset.state = ObjectModelAsset::State::Ready;
+        asset.last_used_stamp = object_asset_stamp_++;
+        queue_render();
+    }
 }
 
 bool GLWrpTerrainView::ensure_object_model_asset(uint32_t model_id) {
+    // This is now purely used to check if ready, and returning false means "not ready".
+    // Scheduling is handled externally in render_visible_object_meshes
     if (model_id >= object_model_assets_.size()) return false;
     auto& asset = object_model_assets_[model_id];
     if (asset.state == ObjectModelAsset::State::Ready) {
         asset.last_used_stamp = object_asset_stamp_++;
         return true;
     }
-    if (asset.state == ObjectModelAsset::State::Failed) return false;
-    if (!model_loader_) return false;
-
-    try {
-        auto model = model_loader_->load_p3d(asset.model_name);
-        if (build_object_model_asset(asset, model)) {
-            asset.state = ObjectModelAsset::State::Ready;
-            asset.last_used_stamp = object_asset_stamp_++;
-            return true;
-        }
-    } catch (const std::exception& e) {
-        if (!asset.missing_logged) {
-            asset.missing_logged = true;
-            LOGW_ONCE(armatools::log::detail::fnv1a_hash(asset.model_name.c_str()), 
-                      "GLWrpTerrainView: object model load failed: " + asset.model_name + " | " + e.what());
-        }
-    } catch (...) {
-        if (!asset.missing_logged) {
-            asset.missing_logged = true;
-            LOGW_ONCE(armatools::log::detail::fnv1a_hash(asset.model_name.c_str()), 
-                      "GLWrpTerrainView: object model load failed: " + asset.model_name);
-        }
-    }
-    asset.state = ObjectModelAsset::State::Failed;
     return false;
 }
 
@@ -3072,6 +3203,8 @@ void GLWrpTerrainView::append_object_bounds_vertices(const ObjectInstance& insta
 }
 
 void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const float* eye) {
+    drain_ready_object_results();
+
     object_candidate_count_ = 0;
     object_visible_count_ = 0;
     object_rendered_instances_ = 0;
@@ -3131,13 +3264,6 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
                 }
 
                 auto& asset = object_model_assets_[inst.model_id];
-                if (asset.state == ObjectModelAsset::State::Unloaded && load_budget > 0) {
-                    if (ensure_object_model_asset(inst.model_id)) {
-                        --load_budget;
-                    } else if (asset.state == ObjectModelAsset::State::Failed) {
-                        --load_budget;
-                    }
-                }
 
                 const float dx = inst.position[0] - eye[0];
                 const float dy = inst.position[1] - eye[1];
@@ -3148,6 +3274,7 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
                     ? std::max(0.5f, asset.bounding_radius * inst.max_scale)
                     : std::max(0.5f, inst.bound_radius);
                 inst.bound_radius = radius;
+                
                 if (dist - radius > dist_limit) {
                     object_distance_culled_count_++;
                     continue;
@@ -3160,8 +3287,27 @@ void GLWrpTerrainView::render_visible_object_meshes(const float* mvp, const floa
                 object_visible_count_++;
 
                 if (asset.state != ObjectModelAsset::State::Ready || asset.lod_meshes.empty()) {
-                    if (asset.state == ObjectModelAsset::State::Unloaded)
+                    if (asset.state == ObjectModelAsset::State::Unloaded) {
                         has_visible_unloaded_assets = true;
+                        if (load_budget > 0) {
+                            std::lock_guard<std::mutex> lock(object_jobs_mutex_);
+                            if (object_jobs_pending_.find(inst.model_id) == object_jobs_pending_.end()) {
+                                ObjectLoadPriorityJob job;
+                                job.model_id = inst.model_id;
+                                job.distance = dist;
+                                job.generation = object_generation_;
+                                object_jobs_queue_.push_back(job);
+                                object_jobs_pending_.insert(inst.model_id);
+                                asset.state = ObjectModelAsset::State::Loading;
+                                --load_budget;
+                                std::push_heap(object_jobs_queue_.begin(), object_jobs_queue_.end());
+                                object_jobs_cv_.notify_one();
+                            }
+                        }
+                    } else if (asset.state == ObjectModelAsset::State::Loading) {
+                        has_visible_unloaded_assets = true;
+                    }
+
                     object_placeholder_count_++;
                     const auto color = object_category_color(inst.category);
                     placeholder_points.push_back(inst.position[0]);

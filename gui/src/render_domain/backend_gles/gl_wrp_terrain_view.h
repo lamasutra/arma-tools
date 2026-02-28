@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <algorithm>
 #include <deque>
 #include <thread>
 #include <string>
@@ -24,6 +25,7 @@
 
 class TexturesLoaderService;
 class P3dModelLoaderService;
+#include "textures_loader.h"
 
 class GLWrpTerrainView : public Gtk::GLArea {
 public:
@@ -258,8 +260,9 @@ private:
     struct ObjectModelAsset {
         enum class State : uint8_t {
             Unloaded = 0,
-            Ready = 1,
-            Failed = 2
+            Loading = 1,
+            Ready = 2,
+            Failed = 3
         };
         State state = State::Unloaded;
         std::string model_name;
@@ -384,6 +387,46 @@ private:
     std::vector<std::thread> tile_workers_;
     bool tile_workers_stop_ = false;
 
+    // Object background loading
+    struct ObjectLoadJob {
+        uint32_t model_id = 0;
+        uint64_t generation = 0;
+    };
+    struct ObjectLoadPriorityJob {
+        uint32_t model_id = 0;
+        float distance = 0.0f;
+        uint64_t generation = 0;
+        bool operator<(const ObjectLoadPriorityJob& other) const {
+            return distance > other.distance; // min-heap by distance (closer = higher priority)
+        }
+    };
+    struct PreparedMeshGroup {
+        std::vector<float> verts;
+        std::string texture_key;
+    };
+    struct PreparedLodMesh {
+        std::vector<PreparedMeshGroup> groups;
+        float resolution = 0.0f;
+        float bounding_radius = 1.0f;
+        std::unordered_map<std::string, std::shared_ptr<const TexturesLoaderService::TextureData>> loaded_textures;
+    };
+    struct ObjectLoadResult {
+        uint32_t model_id = 0;
+        uint64_t generation = 0;
+        bool success = false;
+        std::vector<PreparedLodMesh> lods;
+        float model_bounding_radius = 1.0f;
+    };
+
+    uint64_t object_generation_ = 1;
+    std::mutex object_jobs_mutex_;
+    std::condition_variable object_jobs_cv_;
+    std::vector<ObjectLoadPriorityJob> object_jobs_queue_;
+    std::deque<ObjectLoadResult> object_ready_queue_;
+    std::unordered_set<uint32_t> object_jobs_pending_;
+    std::vector<std::thread> object_workers_;
+    bool object_workers_stop_ = false;
+
     // Gesture controllers.
     Glib::RefPtr<Gtk::GestureDrag> drag_orbit_;
     Glib::RefPtr<Gtk::GestureDrag> drag_pan_;
@@ -472,6 +515,13 @@ private:
     void start_texture_workers();
     void stop_texture_workers();
     void texture_worker_loop();
+
+    void start_object_workers();
+    void stop_object_workers();
+    void object_worker_loop();
+    ObjectLoadResult prepare_object_model_asset_sync(uint32_t model_id, uint64_t generation);
+    void drain_ready_object_results();
+
     std::vector<int> collect_visible_tile_indices() const;
     void emit_terrain_stats();
     void pick_object_at(double x, double y);
