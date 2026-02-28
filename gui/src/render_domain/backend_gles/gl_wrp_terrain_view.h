@@ -45,6 +45,9 @@ public:
     void set_color_mode(int mode);
     void set_satellite_palette(const std::vector<std::array<float, 3>>& palette);
     void set_on_object_picked(std::function<void(size_t)> cb);
+    void set_hover_info_enabled(bool enabled);
+    void set_on_hover_info(
+        std::function<void(double, double, const std::string&, const std::string&)> cb);
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_on_terrain_stats(std::function<void(const std::string&)> cb);
     void set_on_compass_info(std::function<void(const std::string&)> cb);
@@ -450,6 +453,12 @@ private:
     std::function<void(const std::string&)> on_texture_debug_info_;
     std::function<void(const std::string&)> on_terrain_stats_;
     std::function<void(const std::string&)> on_compass_info_;
+
+    bool hover_info_enabled_ = false;
+    std::function<void(double, double, const std::string&, const std::string&)> on_hover_info_;
+    Glib::RefPtr<Gtk::EventControllerMotion> hover_motion_;
+    size_t last_hovered_idx_ = static_cast<size_t>(-1);
+
     std::string last_texture_debug_info_;
     std::string last_terrain_stats_;
     std::string last_compass_info_;

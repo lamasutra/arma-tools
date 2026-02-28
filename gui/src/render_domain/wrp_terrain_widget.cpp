@@ -133,6 +133,16 @@ void WrpTerrainWidget::set_on_compass_info(std::function<void(const std::string&
     if (has_gles()) impl_->gles.set_on_compass_info(on_compass_info_);
 }
 
+void WrpTerrainWidget::set_hover_info_enabled(bool enabled) {
+    if (has_gles()) impl_->gles.set_hover_info_enabled(enabled);
+}
+
+void WrpTerrainWidget::set_on_hover_info(
+    std::function<void(double, double, const std::string&, const std::string&)> cb) {
+    on_hover_info_ = std::move(cb);
+    if (has_gles()) impl_->gles.set_on_hover_info(on_hover_info_);
+}
+
 void WrpTerrainWidget::set_model_loader_service(
     const std::shared_ptr<P3dModelLoaderService>& service) {
     if (has_gles()) impl_->gles.set_model_loader_service(service);

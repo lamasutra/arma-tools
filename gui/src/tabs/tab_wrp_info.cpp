@@ -165,6 +165,7 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_camera_mode_btn_.set_active(true);
     make_icon_toggle(terrain3d_wireframe_btn_, "applications-engineering-symbolic", "Wireframe");
     make_icon_toggle(terrain3d_objects_btn_, "image-x-generic-symbolic", "Objects");
+    make_icon_toggle(terrain3d_obj_info_btn_, "help-about-symbolic", "Show object info under cursor");
     terrain3d_obj_bounds_btn_.set_label("BBox");
     terrain3d_obj_bounds_btn_.set_tooltip_text("Draw object bounds (debug)");
     make_icon_toggle(terrain3d_patch_bounds_btn_, "view-fullscreen-symbolic", "Patch bounds");
@@ -178,6 +179,7 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_water_level_spin_.set_size_request(80, -1);
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
+    terrain3d_obj_info_btn_.set_active(false);
     terrain3d_obj_bounds_btn_.set_active(false);
     terrain3d_patch_bounds_btn_.set_active(false);
     terrain3d_lod_tint_btn_.set_active(false);
@@ -209,6 +211,7 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_camera_mode_btn_);
     terrain3d_toolbar_.append(terrain3d_wireframe_btn_);
     terrain3d_toolbar_.append(terrain3d_objects_btn_);
+    terrain3d_toolbar_.append(terrain3d_obj_info_btn_);
     terrain3d_toolbar_.append(terrain3d_obj_bounds_btn_);
     terrain3d_toolbar_.append(terrain3d_patch_bounds_btn_);
     terrain3d_toolbar_.append(terrain3d_lod_tint_btn_);
@@ -251,6 +254,16 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_compass_overlay_.set_text("N: --");
     terrain3d_compass_overlay_.add_css_class("terrain3d-status");
     terrain3d_overlay_.add_overlay(terrain3d_compass_overlay_);
+
+    terrain3d_hover_overlay_.set_halign(Gtk::Align::START);
+    terrain3d_hover_overlay_.set_valign(Gtk::Align::START);
+    terrain3d_hover_overlay_.set_margin(8);
+    terrain3d_hover_overlay_.set_text("");
+    terrain3d_hover_overlay_.set_visible(false);
+    terrain3d_hover_overlay_.add_css_class("caption");
+    terrain3d_hover_overlay_.add_css_class("terrain3d-status");
+    terrain3d_overlay_.add_overlay(terrain3d_hover_overlay_);
+
     terrain3d_box_.append(terrain3d_overlay_);
     right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
     terrain3d_view_.set_on_texture_debug_info([this](const std::string& info) {
@@ -341,6 +354,23 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_objects_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_objects(terrain3d_objects_btn_.get_active());
         if (terrain3d_objects_btn_.get_active()) ensure_objects_loaded();
+    });
+    terrain3d_obj_info_btn_.signal_toggled().connect([this]() {
+        terrain3d_view_.set_hover_info_enabled(terrain3d_obj_info_btn_.get_active());
+        if (!terrain3d_obj_info_btn_.get_active()) {
+            terrain3d_hover_overlay_.set_visible(false);
+        }
+    });
+
+    terrain3d_view_.set_on_hover_info([this](double x, double y, const std::string& path, const std::string& type) {
+        if (path.empty()) {
+            terrain3d_hover_overlay_.set_visible(false);
+        } else {
+            terrain3d_hover_overlay_.set_text(path + (type != "Unknown" ? "\nType: " + type : ""));
+            terrain3d_hover_overlay_.set_margin_start(static_cast<int>(x) + 16);
+            terrain3d_hover_overlay_.set_margin_top(static_cast<int>(y) + 16);
+            terrain3d_hover_overlay_.set_visible(true);
+        }
     });
     terrain3d_obj_bounds_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_object_bounds(terrain3d_obj_bounds_btn_.get_active());
@@ -948,7 +978,10 @@ void TabWrpInfo::append_class_page() {
             header_row->set_selectable(false);
             class_list_.append(*header_row);
         } else {
-            auto* label = Gtk::make_managed<Gtk::Label>(item.text);
+            auto obj_type = armatools::objcat::get_object_type(item.entry.model_name);
+            auto type_str = std::string(armatools::objcat::to_string(obj_type));
+            auto text = item.text + (type_str != "Unknown" ? " (" + type_str + ")" : "");
+            auto* label = Gtk::make_managed<Gtk::Label>(text);
             label->set_halign(Gtk::Align::START);
             label->set_tooltip_text(item.entry.model_name);
             class_list_.append(*label);

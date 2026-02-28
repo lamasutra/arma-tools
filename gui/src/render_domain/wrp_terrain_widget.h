@@ -37,6 +37,8 @@ public:
     void set_on_texture_debug_info(std::function<void(const std::string&)> cb);
     void set_on_terrain_stats(std::function<void(const std::string&)> cb);
     void set_on_compass_info(std::function<void(const std::string&)> cb);
+    void set_hover_info_enabled(bool enabled);
+    void set_on_hover_info(std::function<void(double, double, const std::string&, const std::string&)> cb);
     void set_model_loader_service(const std::shared_ptr<P3dModelLoaderService>& service);
     void set_texture_loader_service(const std::shared_ptr<TexturesLoaderService>& service);
     void set_show_patch_boundaries(bool on);
@@ -61,6 +63,7 @@ private:
     std::function<void(const std::string&)> on_texture_debug_info_;
     std::function<void(const std::string&)> on_terrain_stats_;
     std::function<void(const std::string&)> on_compass_info_;
+    std::function<void(double, double, const std::string&, const std::string&)> on_hover_info_;
 
     bool has_gles() const;
     void emit_fallback_status();

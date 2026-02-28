@@ -394,6 +394,70 @@ GLWrpTerrainView::GLWrpTerrainView() {
     });
     add_controller(click_select_);
 
+    hover_motion_ = Gtk::EventControllerMotion::create();
+    hover_motion_->signal_motion().connect([this](double x, double y) {
+        if (!hover_info_enabled_ || !on_hover_info_) return;
+        
+        if (object_positions_.empty()) {
+            if (last_hovered_idx_ != static_cast<size_t>(-1)) {
+                last_hovered_idx_ = static_cast<size_t>(-1);
+                on_hover_info_(x, y, "", "");
+            }
+            return;
+        }
+
+        float mvp[16];
+        build_mvp(mvp);
+        const int w = get_width();
+        const int h = get_height();
+        if (w <= 0 || h <= 0) return;
+
+        size_t best_idx = static_cast<size_t>(-1);
+        double best_d2 = 1e30;
+        for (size_t i = 0; i + 2 < object_positions_.size(); i += 3) {
+            const float px = object_positions_[i + 0];
+            const float py = object_positions_[i + 1];
+            const float pz = object_positions_[i + 2];
+
+            const float cx = mvp[0] * px + mvp[4] * py + mvp[8] * pz + mvp[12];
+            const float cy = mvp[1] * px + mvp[5] * py + mvp[9] * pz + mvp[13];
+            const float cz = mvp[2] * px + mvp[6] * py + mvp[10] * pz + mvp[14];
+            const float cw = mvp[3] * px + mvp[7] * py + mvp[11] * pz + mvp[15];
+            if (cw <= 0.0001f) continue;
+
+            const float ndc_x = cx / cw;
+            const float ndc_y = cy / cw;
+            const float ndc_z = cz / cw;
+            if (ndc_z < -1.1f || ndc_z > 1.0f) continue;
+
+            const double sx = (static_cast<double>(ndc_x) * 0.5 + 0.5) * static_cast<double>(w);
+            const double sy = (1.0 - (static_cast<double>(ndc_y) * 0.5 + 0.5)) * static_cast<double>(h);
+            const double dx = sx - x;
+            const double dy = sy - y;
+            const double d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_idx = i / 3;
+            }
+        }
+
+        if (best_idx != static_cast<size_t>(-1) && best_d2 <= 256.0 && best_idx < objects_.size()) {
+            if (last_hovered_idx_ != best_idx) {
+                last_hovered_idx_ = best_idx;
+                const auto& obj = objects_[best_idx];
+                auto obj_type = armatools::objcat::get_object_type(obj.model_name);
+                std::string type_str = armatools::objcat::to_string(obj_type);
+                on_hover_info_(x, y, obj.model_name, type_str);
+            }
+        } else {
+            if (last_hovered_idx_ != static_cast<size_t>(-1)) {
+                last_hovered_idx_ = static_cast<size_t>(-1);
+                on_hover_info_(x, y, "", "");
+            }
+        }
+    });
+    add_controller(hover_motion_);
+
     key_move_ = Gtk::EventControllerKey::create();
     key_move_->signal_key_pressed().connect(
         [this](guint keyval, guint, Gdk::ModifierType state) -> bool {
@@ -1176,6 +1240,19 @@ void GLWrpTerrainView::set_satellite_palette(const std::vector<std::array<float,
 
 void GLWrpTerrainView::set_on_object_picked(std::function<void(size_t)> cb) {
     on_object_picked_ = std::move(cb);
+}
+
+void GLWrpTerrainView::set_hover_info_enabled(bool enabled) {
+    hover_info_enabled_ = enabled;
+    if (!enabled && on_hover_info_) {
+        last_hovered_idx_ = static_cast<size_t>(-1);
+        on_hover_info_(0, 0, "", "");
+    }
+}
+
+void GLWrpTerrainView::set_on_hover_info(
+    std::function<void(double, double, const std::string&, const std::string&)> cb) {
+    on_hover_info_ = std::move(cb);
 }
 
 void GLWrpTerrainView::set_on_texture_debug_info(std::function<void(const std::string&)> cb) {
@@ -2925,10 +3002,19 @@ void GLWrpTerrainView::build_object_instance_matrix(
         out_model[14] = static_cast<float>(obj.position[2]);
     }
 
-    // P3D local X is opposite to world/object transform X.
-    out_model[0] = -out_model[0];
-    out_model[1] = -out_model[1];
-    out_model[2] = -out_model[2];
+    bool is_road = armatools::objcat::category(obj.model_name) == "roads";
+
+    if (is_road) {
+        // Roads need local Z flipped instead of local X to prevent texture mirroring across the roadway
+        out_model[8] = -out_model[8];
+        out_model[9] = -out_model[9];
+        out_model[10] = -out_model[10];
+    } else {
+        // P3D local X is opposite to world/object transform X.
+        out_model[0] = -out_model[0];
+        out_model[1] = -out_model[1];
+        out_model[2] = -out_model[2];
+    }
 
     if (flip_terrain_z_) {
         const float src_tz = out_model[14];
@@ -2936,6 +3022,11 @@ void GLWrpTerrainView::build_object_instance_matrix(
         out_model[6] = -out_model[6];
         out_model[10] = -out_model[10];
         out_model[14] = terrain_max_z_ - src_tz;
+    }
+
+    if (is_road) {
+        // Project road height perfectly to terrain
+        out_model[13] = sample_height_at_world(out_model[12], out_model[14]);
     }
 }
 

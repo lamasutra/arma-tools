@@ -37,6 +37,9 @@ static constexpr PrefixRule prefix_rules[] = {
     // Walls/fences
     {"pletivo", "walls"}, {"newplot", "walls"}, {"barbedwire", "walls"},
     {"ohrada", "walls"}, {"plutek", "walls"}, {"plot", "walls"},
+    // Roads
+    {"camo", "roads"}, {"cest", "roads"},
+    {"pesina", "roads"}, {"pras", "roads"},
     // Signs
     {"malden_smer_", "signs"}, {"bozi_muka", "signs"},
     {"znacka", "signs"}, {"majak", "signs"},
@@ -96,6 +99,20 @@ std::string category(const std::string& model_path) {
             return std::string(rule.category);
     }
     return "unknown";
+}
+
+ObjectType get_object_type(const std::string& model_path) {
+    if (category(model_path) == "roads") {
+        return ObjectType::Road;
+    }
+    return ObjectType::Unknown;
+}
+
+const char* to_string(ObjectType type) {
+    switch (type) {
+    case ObjectType::Road: return "Road";
+    default: return "Unknown";
+    }
 }
 
 } // namespace armatools::objcat

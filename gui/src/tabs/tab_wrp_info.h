@@ -101,6 +101,7 @@ private:
     Gtk::ToggleButton terrain3d_gravity_btn_;
     Gtk::ToggleButton terrain3d_wireframe_btn_;
     Gtk::ToggleButton terrain3d_objects_btn_;
+    Gtk::ToggleButton terrain3d_obj_info_btn_;
     Gtk::ToggleButton terrain3d_obj_bounds_btn_;
     Gtk::ToggleButton terrain3d_patch_bounds_btn_;
     Gtk::ToggleButton terrain3d_lod_tint_btn_;
@@ -122,6 +123,7 @@ private:
     render_domain::WrpTerrainWidget terrain3d_view_;
     Gtk::Label terrain3d_debug_overlay_;
     Gtk::Label terrain3d_compass_overlay_;
+    Gtk::Label terrain3d_hover_overlay_;
     bool allow_texture_mode_ = true;
     bool allow_satellite_mode_ = true;
 
