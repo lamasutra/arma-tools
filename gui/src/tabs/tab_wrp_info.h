@@ -128,6 +128,12 @@ private:
     bool allow_texture_mode_ = true;
     bool allow_satellite_mode_ = true;
 
+    // Async UI updates from renderer
+    std::string pending_texture_debug_info_;
+    bool texture_debug_info_idle_queued_ = false;
+    std::string pending_compass_info_;
+    bool compass_info_idle_queued_ = false;
+
     // Cached WRP data
     std::unique_ptr<armatools::wrp::WorldData> world_data_;
     std::string loaded_wrp_path_;

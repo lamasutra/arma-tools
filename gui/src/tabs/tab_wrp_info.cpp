@@ -266,17 +266,35 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_box_.append(terrain3d_overlay_);
     right_notebook_.append_page(terrain3d_box_, "Terrain 3D");
     terrain3d_view_.set_on_texture_debug_info([this](const std::string& info) {
-        const bool texture_mode = std::string(terrain3d_mode_combo_.get_active_id()) == "texture";
-        if (texture_mode && !info.empty()) {
-            terrain3d_debug_overlay_.set_text(info);
-            terrain3d_debug_overlay_.set_visible(true);
-        } else {
-            terrain3d_debug_overlay_.set_text("");
-            terrain3d_debug_overlay_.set_visible(false);
+        if (pending_texture_debug_info_ == info) return;
+        pending_texture_debug_info_ = info;
+        if (!texture_debug_info_idle_queued_) {
+            texture_debug_info_idle_queued_ = true;
+            Glib::signal_idle().connect_once([this]() {
+                texture_debug_info_idle_queued_ = false;
+                const bool texture_mode = std::string(terrain3d_mode_combo_.get_active_id()) == "texture";
+                if (texture_mode && !pending_texture_debug_info_.empty()) {
+                    terrain3d_debug_overlay_.set_text(pending_texture_debug_info_);
+                    terrain3d_debug_overlay_.set_visible(true);
+                } else {
+                    terrain3d_debug_overlay_.set_text("");
+                    terrain3d_debug_overlay_.set_visible(false);
+                }
+            });
         }
     });
     terrain3d_view_.set_on_compass_info([this](const std::string& info) {
-        if (!info.empty()) terrain3d_compass_overlay_.set_text(info);
+        if (pending_compass_info_ == info) return;
+        pending_compass_info_ = info;
+        if (!compass_info_idle_queued_) {
+            compass_info_idle_queued_ = true;
+            Glib::signal_idle().connect_once([this]() {
+                compass_info_idle_queued_ = false;
+                if (!pending_compass_info_.empty()) {
+                    terrain3d_compass_overlay_.set_text(pending_compass_info_);
+                }
+            });
+        }
     });
 
     set_end_child(right_notebook_);
