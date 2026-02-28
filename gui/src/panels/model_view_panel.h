@@ -26,6 +26,20 @@ class Index;
 class DB;
 }
 
+// ModelViewPanel is the core 3D viewer widget for Arma 3 P3D models.
+//
+// Architecture:
+//   It is a GTK::Box containing a toolbar and a Gtk::Overlay.
+//   The overlay stacks two things on top of each other:
+//     1. A render_domain::ModelViewWidget (which connects to the OpenGL/GLES backend)
+//     2. A loading spinner/label overlay (shown while models are parsed async)
+//
+// Key features:
+//   - Asynchronous loading: Large P3D files are loaded on a background thread
+//     so the UI doesn't freeze. The `show_lod()` method handles this.
+//   - Deferred rendering: If `show_lod()` is called before the GL widget is fully
+//     realized on screen, the LOD is saved in `pending_lod_` and shown later.
+//   - Texture streaming: Textures are loaded asynchronously by TexturesLoaderService.
 class ModelViewPanel : public Gtk::Box {
 public:
     ModelViewPanel();

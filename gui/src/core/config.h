@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 
+// Default settings for the WRP-to-Project export feature.
+// WRP is the Arma 3 world/terrain file format. These values are used as
+// starting values when the user opens the WRP Project tab.
 struct Wrp2ProjectDefaults {
     std::string offset_x = "200000";
     std::string offset_z = "0";
@@ -18,18 +21,25 @@ struct Wrp2ProjectDefaults {
     std::string heightpipe_seed = "1";
 };
 
+// Default settings for the Asset Browser tab which lets the user
+// browse PBO archives and their contained assets (models, textures, configs).
 struct AssetBrowserDefaults {
     bool auto_derap = true;
     bool on_demand_metadata = false;
     bool auto_extract_textures = false;
 };
 
+// Default settings for the OBJ Replace tab.
+// This tab replaces object references inside a WRP world file using a CSV mapping.
 struct ObjReplaceDefaults {
     std::string last_replacement_file;
     std::string last_wrp_file;
     bool auto_extract_textures = false;
 };
 
+// The main application configuration, loaded from and saved to config.json.
+// Every field has a sensible default so the app works out-of-the-box
+// even if the user has not set up a config file yet.
 struct Config {
     std::string worlds_dir;
     std::string project_debug_dir;
@@ -41,8 +51,11 @@ struct Config {
     std::string arma1_dir;
     std::string arma2_dir;
     std::string ffmpeg_path;
+    // Controls how verbose the external CLI tool output is (0 = normal, higher = more verbose).
     int tool_verbosity_level = 0;
 
+    // Map from tool name (e.g. "cfgconvert") to its resolved binary path.
+    // The user can override specific tool paths through the Config tab.
     std::map<std::string, std::string> binaries;
     std::vector<std::string> recent_wrps;
     std::string last_browse_dir;
@@ -53,6 +66,8 @@ struct Config {
     ObjReplaceDefaults obj_replace_defaults;
 };
 
+// Stores the saved panel layout so it can be restored on next launch.
+// The panels field is a serialized GVariant string produced by libpanel's PanelSession API.
 struct LayoutConfig {
     std::string panels;  // Serialized PanelSession GVariant string
 };

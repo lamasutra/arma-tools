@@ -14,6 +14,17 @@
 
 namespace render_domain {
 
+// ModelViewWidget is the GTK wrapper for the 3D renderer backend.
+//
+// It serves as a bridge between the frontend UI (ModelViewPanel) and the
+// raw C-ABI renderer (`rd_scene_blob_v1`).
+//
+// How it works:
+//   - When `set_lods` or `set_scene_blob` is called, it takes the Arma 3 model data and
+//     translates it into the abstract `rd_scene_blob_v1` format.
+//   - It then passes this blob across the ABI to the active renderer (e.g. GLES).
+//   - If no renderer backend is available, it gracefully handles the failure
+//     by showing a "No Renderer Available" label instead of crashing.
 class ModelViewWidget : public Gtk::Box {
 public:
     struct MaterialParams {

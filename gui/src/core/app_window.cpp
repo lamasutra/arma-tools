@@ -28,6 +28,9 @@
 // Forward declarations
 static void hook_tab_views_for_tearoff(GtkWidget* dock_or_grid, AppWindow* self);
 
+// Returns the current time as a 64-bit nanosecond count from a monotonic clock.
+// Used to timestamp UI input events (mouse, keyboard, scroll) before dispatching
+// them to the UI backend (e.g. ImGui), which needs precise event timing.
 static std::uint64_t now_ns() {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     return static_cast<std::uint64_t>(
@@ -48,6 +51,9 @@ static void find_tab_views(GtkWidget* widget, std::vector<AdwTabView*>& out) {
 static bool g_allow_close_all = false;
 
 // Shared create-frame callback for all workspaces (constructor + tear-off).
+// Shared create-frame callback used for both the main workspace and every
+// new tear-off window. Creates a PanelFrame with a tab bar and hooks the
+// AdwTabView inside it for tear-off as soon as the frame is realized.
 static PanelFrame* create_frame_with_hooks(gpointer, PanelPosition*, gpointer ud) {
     auto* f = PANEL_FRAME(panel_frame_new());
     auto* tb = PANEL_FRAME_TAB_BAR(panel_frame_tab_bar_new());
@@ -64,6 +70,12 @@ static PanelFrame* create_frame_with_hooks(gpointer, PanelPosition*, gpointer ud
 // Creates a new PanelDocumentWorkspace, seeds it with a dummy widget so a
 // PanelFrame (and its internal AdwTabView) is created, then returns that
 // AdwTabView so Adwaita transfers the correct dragged page natively.
+// AdwTabView::create-window handler.
+// Called by Adwaita when the user drags a tab outside the window.
+// Creates a fresh PanelDocumentWorkspace (a new top-level window), seeds it
+// with a temporary PanelWidget so libpanel creates a PanelFrame inside it,
+// then removes the temporary widget and returns the AdwTabView — Adwaita will
+// transfer the dragged page into it natively.
 static AdwTabView* on_tab_create_window(AdwTabView* source, gpointer user_data) {
     auto* self = static_cast<AppWindow*>(user_data);
 
@@ -127,6 +139,9 @@ static AdwTabView* on_tab_create_window(AdwTabView* source, gpointer user_data) 
 }
 
 // AdwTabView::close-page handler — reject close for non-closeable panels (About).
+// AdwTabView::close-page handler.
+// Prevents the user from closing non-closeable panels ("about").
+// When g_allow_close_all is set during on_reset_layout(), all panels can be closed.
 static gboolean on_tab_close_page(AdwTabView* tv, AdwTabPage* page, gpointer) {
     if (!g_allow_close_all) {
         auto* child = adw_tab_page_get_child(page);
@@ -143,6 +158,9 @@ static gboolean on_tab_close_page(AdwTabView* tv, AdwTabPage* page, gpointer) {
 }
 
 // Walk a workspace's dock and connect create-window + close-page on every AdwTabView.
+// Find every AdwTabView under dock_or_grid and connect the create-window and
+// close-page signals if they have not already been connected.
+// Uses a GObject data key ("tearoff-connected") as a guard against double-connection.
 static void hook_tab_views_for_tearoff(GtkWidget* dock_or_grid, AppWindow* self) {
     std::vector<AdwTabView*> views;
     find_tab_views(dock_or_grid, views);
@@ -162,6 +180,11 @@ static void hook_tab_views_for_tearoff(GtkWidget* dock_or_grid, AppWindow* self)
 // ---------------------------------------------------------------------------
 // Helper: add a panel to the workspace
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Converts the application-level DockArea enum to libpanel's PanelArea enum.
+// The conversion exists so the rest of the app doesn't need to depend on
+// the libpanel C header directly.
+// ---------------------------------------------------------------------------
 static PanelArea to_panel_area(DockArea area) {
     switch (area) {
         case DockArea::Center: return PANEL_AREA_CENTER;
@@ -173,6 +196,10 @@ static PanelArea to_panel_area(DockArea area) {
     return PANEL_AREA_CENTER;
 }
 
+// Adds a panel to the main workspace at the given PanelArea.
+// Creates either a dockable panel (with tab bar, draggable) or a simple panel
+// depending on the simple_panel flag, then registers it in the internal panels_ map
+// so it can be looked up later by ID for layout save/restore.
 void AppWindow::add_panel(Gtk::Widget& content, const char* id,
                           const char* title, const char* icon_name,
                           PanelArea area,
@@ -186,6 +213,8 @@ void AppWindow::add_panel(Gtk::Widget& content, const char* id,
     panel_document_workspace_add_widget(workspace_, pw, pos.get());
 }
 
+// Maps a panel ID string to its corresponding Gtk::Widget pointer.
+// Used during layout restore to match saved panel IDs to live tab widgets.
 Gtk::Widget* AppWindow::panel_content_by_id(std::string_view panel_id) {
     if (panel_id == "asset-browser") return &tab_asset_browser_;
     if (panel_id == "pbo-browser") return &tab_pbo_;
@@ -224,6 +253,10 @@ void AppWindow::update_status(const std::string& text) {
     status_label_.set_text(text);
 }
 
+// Ensures that an ImGui overlay backend instance exists at runtime.
+// This is needed when the user toggles the overlay (F1) while using the GTK
+// backend, since the overlay instance is not created during startup in that case.
+// Returns true if an overlay instance is now available, false on failure.
 bool AppWindow::ensure_imgui_overlay_instance() {
     auto& ui_state = ui_domain::runtime_state_mut();
     if (ui_state.overlay_backend_instance && ui_state.overlay_backend_instance->valid()) {
@@ -270,6 +303,11 @@ bool AppWindow::ensure_imgui_overlay_instance() {
     return true;
 }
 
+// Toggles the ImGui debug overlay on or off.
+// The overlay is a thin ImGui layer drawn on top of the main GTK window.
+// It can be used to show 3D model information, render diagnostics, etc.
+// The overlay can run as either the primary backend (imgui mode) or as a
+// companion on top of the GTK backend (overlay mode).
 void AppWindow::toggle_ui_overlay() {
     auto& state = ui_domain::runtime_state_mut();
     std::shared_ptr<ui_domain::BackendInstance> overlay_target;
@@ -304,6 +342,10 @@ void AppWindow::toggle_ui_overlay() {
                 " for backend '" + overlay_target->backend_id() + "'");
 }
 
+// Dispatches a UI input event (mouse, keyboard, scroll, DPI) to the active
+// UI backend(s). If both a primary and an overlay backend are running, the
+// overlay gets first chance to consume pointer/keyboard events.
+// Returns true if the event was consumed (caller should stop propagation).
 bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
     const auto& state = ui_domain::runtime_state();
     const bool primary_is_imgui = state.backend_instance &&
@@ -334,6 +376,11 @@ bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
     return primary_status == UI_STATUS_EVENT_CONSUMED;
 }
 
+// Called on a ~60 Hz timer tick (see ui_tick_connection_ setup in constructor).
+// Checks if the display scale factor has changed and sends a DPI event to
+// the UI backend if so. Then drives the UI backend's frame cycle:
+//   begin_frame → draw → end_frame
+// The frame cycle lets ImGui (or other overlay backends) render their UI each frame.
 bool AppWindow::on_ui_tick() {
     const auto& state = ui_domain::runtime_state();
     const bool has_primary = state.backend_instance && state.backend_instance->valid();
@@ -374,6 +421,10 @@ bool AppWindow::on_ui_tick() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Reloads config.json from disk and re-applies it to all initialized tabs.
+// Called when the user clicks "Save" in the Config tab.
+// ---------------------------------------------------------------------------
 void AppWindow::reload_config() {
     cfg_ = load_config();
     layout_cfg_ = load_layout_config();
@@ -398,6 +449,14 @@ void AppWindow::register_tab_config_presenter() {
     tab_config_presenter_.register_tab("config-viewer", [this](Config* cfg) { tab_config_viewer_.set_config(cfg); });
 }
 
+// Initializes tabs lazily: a tab's set_config() is only called the first time
+// it becomes visible on screen. This avoids expensive startup work for tabs
+// that the user never opens in a session.
+//
+// Each tab is registered with the TabConfigPresenter. When its GTK widget is
+// mapped (shown on screen), ensure_initialized() is called once to pass it
+// the current Config. A timer fallback handles cases where GtkWidget::map
+// does not fire (e.g. the panel is in an invisible area).
 void AppWindow::init_tabs_lazy() {
     auto hook_lazy = [this](Gtk::Widget& widget, const char* tab_id) {
         const std::string id(tab_id);
@@ -437,6 +496,14 @@ void AppWindow::init_tabs_lazy() {
 // ---------------------------------------------------------------------------
 
 // Callback to collect panels from a single dock into a PanelSession
+// ---------------------------------------------------------------------------
+// Session save / restore — persists and restores which panels are open and
+// where they are docked, including across tear-off windows.
+// ---------------------------------------------------------------------------
+
+// Helper used by save_layout().
+// Iterates every PanelFrame in a PanelDock and records each PanelWidget's id
+// and position into a PanelSession (libpanel's save format).
 static void collect_panels_from_dock(PanelDock* dock, PanelSession* session) {
     panel_dock_foreach_frame(dock, [](PanelFrame* frame, gpointer user_data) {
         auto* sess = static_cast<PanelSession*>(user_data);
@@ -488,6 +555,10 @@ void AppWindow::save_layout() {
     g_object_unref(session);
 }
 
+// Restores the panel layout from the saved PanelSession string in layout_cfg_.
+// If no saved layout exists or parsing fails, falls back to apply_default_layout().
+// Panels that are not in the saved session are still added to the dock (in the
+// center area) to avoid orphaned PanelWidgets that would cause double-free crashes.
 void AppWindow::restore_layout() {
     if (layout_cfg_.panels.empty()) {
         apply_default_layout();
@@ -550,6 +621,8 @@ void AppWindow::restore_layout() {
     pin_panel("about");
 }
 
+// Applies the hard-coded default panel layout from default_panel_catalog().
+// Called when no saved layout is found or the user resets the layout.
 void AppWindow::apply_default_layout() {
     for (const auto& descriptor : default_panel_catalog()) {
         auto* content = panel_content_by_id(descriptor.id);
@@ -564,6 +637,9 @@ void AppWindow::apply_default_layout() {
     }
 }
 
+// Resets the layout to the default configuration.
+// Closes all currently open panels (including those in torn-off windows),
+// clears the saved layout, then re-applies the default catalog layout.
 void AppWindow::on_reset_layout() {
     // Collect live PanelWidgets from ALL workspaces and torn-off windows to close
     struct ResetData {
@@ -626,6 +702,10 @@ static void detach_panels_from_dock(PanelDock* dock) {
     }, nullptr);
 }
 
+// Disconnects all gtkmm widgets from their PanelWidget containers without
+// destroying them. Called during the close-request handler so gtkmm objects
+// (tab_p3d_info_, tab_audio_, etc.) remain valid after GTK destroys the widget tree.
+// Without this, GTK would double-free the gtkmm children when tearing down.
 void AppWindow::detach_all_panels() {
     // Unparent gtkmm widgets from all workspaces (main + torn-off)
     panel_workbench_foreach_workspace(workbench_,

@@ -16,6 +16,16 @@ namespace armatools::p3d {
 struct LOD;
 }
 
+// TabP3dInfo is the "P3D Info" panel.
+//
+// While the Asset Browser can preview models, this tab provides a dedicated,
+// deeper inspection tool for Arma 3 .p3d models (both from disk and from PBOs).
+//
+// Features:
+//   - LOD Inspector: Lists all Level of Detail (LOD) models (e.g. Memory, Geometry,
+//     FireGeometry) and allows rendering them individually in the `ModelViewPanel`.
+//   - Texture list: Shows all textures used by the currently selected LOD.
+//   - Detail view: Shows raw parsed properties, named selections, and mass.
 class TabP3dInfo : public Gtk::Paned {
 public:
     TabP3dInfo();

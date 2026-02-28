@@ -34,10 +34,17 @@
 #include "cli_logger.h"
 #include "armatools/version.h"
 
+// Declared in a generated file (arma-tools-resources.c), this function returns
+// the compiled GResource bundle that contains CSS, icons, and other embedded assets.
 extern "C" GResource* arma_tools_get_resource(void);
 
 #ifdef _WIN32
+// Windows-only helpers: GTK on Windows needs environment variables set to find
+// its compiled GSettings schemas. Without GSETTINGS_SCHEMA_DIR pointing to the
+// right place, GTK widgets that use settings (e.g. Adwaita) will not work correctly.
 namespace {
+// Returns the directory that contains the currently running executable.
+// Used to locate the GLib schema directory relative to the install prefix.
 std::filesystem::path get_executable_dir() {
     wchar_t module_path[MAX_PATH];
     const DWORD len = GetModuleFileNameW(nullptr, module_path, MAX_PATH);
@@ -45,6 +52,8 @@ std::filesystem::path get_executable_dir() {
     return std::filesystem::path(module_path).parent_path();
 }
 
+// Sets up Windows-specific GTK environment variables before GTK initializes.
+// Checks two common install layouts (prefix/share and exe-dir/share).
 void setup_gtk_runtime_env() {
     const auto exe_dir = get_executable_dir();
     const auto schema_dir1 = exe_dir / ".." / "share" / "glib-2.0" / "schemas";
@@ -56,9 +65,13 @@ void setup_gtk_runtime_env() {
         SetEnvironmentVariableW(L"GSETTINGS_SCHEMA_DIR",
                                 schema_dir2.lexically_normal().c_str());
     }
+    // Force the local VFS implementation: avoids GVfs/D-Bus issues on Windows.
     SetEnvironmentVariableW(L"GIO_USE_VFS", L"local");
 }
 
+// Redirects stderr to a log file in %LOCALAPPDATA%\ArmaTools\arma-tools-stderr.log.
+// On Windows, stderr output is invisible in GUI mode, so this file is the only
+// way to capture error output from the application and linked libraries.
 void setup_stderr_log() {
     const char* local_appdata = std::getenv("LOCALAPPDATA");
     std::filesystem::path log_dir =
@@ -68,6 +81,8 @@ void setup_stderr_log() {
     std::filesystem::create_directories(log_dir, ec);
     const auto log_path = log_dir / "arma-tools-stderr.log";
     std::fflush(stderr);
+    // Reopen stderr in append mode and disable buffering so every line
+    // appears in the file immediately (even if the app crashes).
     if (std::freopen(log_path.string().c_str(), "a", stderr) != nullptr) {
         std::setvbuf(stderr, nullptr, _IONBF, 0);
     }
@@ -77,6 +92,8 @@ void setup_stderr_log() {
 
 namespace {
 
+// Prints a usage summary and a list of all known renderer/UI backends to stdout.
+// Called when the user passes -h / --help on the command line.
 void print_help(const char* prog_name) {
     std::cout << "Arma Tools v" << armatools::version_string() << "\n\n"
               << "Usage: " << prog_name << " [options]\n\n"
@@ -109,6 +126,9 @@ void print_help(const char* prog_name) {
     std::cout << std::endl;
 }
 
+// Converts a backend name to lowercase and replaces an empty string with "auto".
+// This ensures that backend IDs are always compared case-insensitively,
+// and that an unset environment variable is treated the same as "auto".
 std::string normalize_backend_name(std::string backend) {
     for (char& ch : backend) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -117,12 +137,17 @@ std::string normalize_backend_name(std::string backend) {
     return backend;
 }
 
+// Shared state used by the UI host bridge callbacks below.
+// The UI backend (e.g. ImGui) calls these to request window creation/destruction
+// without needing direct access to AppWindow or GTK types.
 struct UiHostWindowState {
-    bool request_main_window = false;
-    bool request_present = false;
-    std::unique_ptr<AppWindow>* window_slot = nullptr;
+    bool request_main_window = false;     // True if a main window should be created.
+    bool request_present = false;         // True if the window should be raised/shown.
+    std::unique_ptr<AppWindow>* window_slot = nullptr; // Pointer to the owning window slot.
 };
 
+// Called by the UI backend to signal that a main GTK window must exist.
+// Sets a flag; the Gtk::Application activate handler reads it and creates AppWindow.
 int host_ensure_main_window(void* userdata) {
     auto* state = static_cast<UiHostWindowState*>(userdata);
     if (!state) return UI_STATUS_INVALID_ARGUMENT;
@@ -130,6 +155,7 @@ int host_ensure_main_window(void* userdata) {
     return UI_STATUS_OK;
 }
 
+// Like host_ensure_main_window, but also requests that the window is shown/raised.
 int host_present_main_window(void* userdata) {
     auto* state = static_cast<UiHostWindowState*>(userdata);
     if (!state) return UI_STATUS_INVALID_ARGUMENT;
@@ -138,6 +164,8 @@ int host_present_main_window(void* userdata) {
     return UI_STATUS_OK;
 }
 
+// Called by the UI backend to destroy the main window (e.g. when the backend exits).
+// Destroys the underlying GtkWindow and resets the AppWindow unique_ptr.
 int host_shutdown_main_window(void* userdata) {
     auto* state = static_cast<UiHostWindowState*>(userdata);
     if (!state) return UI_STATUS_INVALID_ARGUMENT;
@@ -235,6 +263,20 @@ void log_renderer_events(const render_domain::RuntimeState& state) {
     }
 }
 
+// Initializes the rendering backend system.
+//
+// The renderer is responsible for drawing 3D content (models, terrain) inside
+// GL widget areas. It is separate from the UI system (GTK or ImGui).
+//
+// This function:
+//   1. Parses CLI flags like --renderer=opengl and strips them from argv.
+//   2. Loads the saved renderer preference from the runtime config file.
+//   3. Discovers built-in + plugin renderer backends.
+//   4. Selects the best available backend (or falls back to "auto" if explicit request fails).
+//   5. Creates a render bridge so the UI backend can integrate its rendering surface.
+//
+// Returns a RuntimeState struct that records what happened (selected backend,
+// load events, etc.) so it can be logged and accessed later via runtime_state().
 render_domain::RuntimeState initialize_render_domain(int* argc, char** argv) {
     render_domain::RuntimeState state;
     state.config_path = render_domain::runtime_config_path();
@@ -281,6 +323,25 @@ render_domain::RuntimeState initialize_render_domain(int* argc, char** argv) {
     return state;
 }
 
+// Initializes the UI backend system.
+//
+// The UI backend is the widget toolkit used to draw the application's interface.
+// Supported backends include:
+//   - "gtk": The native GTK4 + Adwaita UI (default on Linux/Windows).
+//   - "imgui": An ImGui overlay drawn inside the renderer (for 3D debug panels).
+//   - "null": Headless mode — no UI at all (useful for automated testing).
+//
+// This function:
+//   1. Parses --ui= CLI flag and strips it from argv.
+//   2. Checks for a UI_BACKEND env variable override.
+//   3. Discovers built-in + plugin UI backends.
+//   4. Selects the best backend, handling the case where imgui is unavailable
+//      because no renderer UI bridge exists.
+//   5. Optionally creates a secondary "overlay" imgui backend alongside GTK.
+//
+// The render_bridge connects the renderer to the UI backend so ImGui can be
+// drawn inside a GL surface managed by GTK.
+// The host_bridge lets the UI backend ask GTK to create/destroy the main window.
 ui_domain::RuntimeState initialize_ui_domain(
     int* argc,
     char** argv,
@@ -469,12 +530,31 @@ ui_domain::RuntimeState initialize_ui_domain(
 
 }  // namespace
 
+// ============================================================
+// Application entry point
+// ============================================================
+//
+// Startup sequence:
+//   1. (Windows only) Set up GTK environment & redirect stderr to a log file.
+//   2. Handle --help / --version early, before any GTK initialization.
+//   3. Initialize the renderer backend (OpenGL / GLES / null).
+//   4. Fill in the UI host bridge (callbacks that let the UI backend
+//      request window creation/destruction from the GTK side).
+//   5. Initialize the UI backend (GTK / ImGui / null).
+//   6. Create a Gtk::Application and connect the activate signal.
+//   7. In the activate callback: register CSS, create AppWindow, show it.
+//   8. Run the GTK main loop (app->run blocks until the user closes the app).
+//   9. Tear down runtime singletons and return the exit code.
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
+    // Must be called before any GTK function so that GTK can find its schemas.
     setup_gtk_runtime_env();
+    // Redirect stderr to a file because Windows GUI apps have no console output.
     setup_stderr_log();
 #endif
 
+    // Check for --help / --version before initializing GTK so these flags
+    // work even on systems without a display.
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {

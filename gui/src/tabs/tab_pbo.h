@@ -11,6 +11,18 @@
 #include <thread>
 #include <vector>
 
+// TabPbo is the "PBO Browser" panel.
+//
+// Unlike the Asset Browser (which uses the global PBO database to look at the
+// virtual filesystem), the PBO Browser looks at single physical .pbo files
+// on the actual disk.
+//
+// Features:
+//   - Dual-mode list: Can browse the contents of a single PBO file (file mode),
+//     or search the global Index for files matching a pattern (search mode).
+//   - Async loading: Parsing a PBO happens on a background worker thread so the
+//     UI doesn't freeze.
+//   - Extraction: Can extract single files or the entire PBO contents to disk.
 class TabPbo : public Gtk::Paned {
 public:
     TabPbo();

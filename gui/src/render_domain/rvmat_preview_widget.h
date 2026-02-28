@@ -8,6 +8,14 @@
 
 namespace render_domain {
 
+// RvmatPreviewWidget is the GTK wrapper for rendering Arma 3 surface materials.
+//
+// Unlike the ModelViewWidget (which renders complex P3D geometry), this widget
+// is specialized for rendering single materials (.rvmat files) either onto a
+// 3D Sphere or a flat 2D Tile.
+//
+// It supports multiple viewing modes (Final, Albedo, Normal, Specular, AO)
+// which are extremely useful for debugging PBR (Physically Based Rendering) assets.
 class RvmatPreviewWidget : public Gtk::Box {
 public:
     struct MaterialParams {

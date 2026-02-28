@@ -20,6 +20,24 @@
 #include <thread>
 #include <vector>
 
+// TabAssetBrowser is the main "Asset Browser" panel.
+//
+// This is arguably the most complex UI tab. It allows the user to browse the
+// combined "virtual filesystem" created by Arma 3's PBO archives.
+//
+// Key features & architecture:
+//   - Virtual Filesystem: Uses the PboIndexService. When the user navigates to
+//     "a3\characters_f", the browser asks the index what files/folders exist there,
+//     even though they are actually packed inside various physical .pbo files.
+//   - Pagination: The `dir_list_` shows 500 items at a time. `try_load_next_page()`
+//     fetches more rows as the user scrolls to the bottom to keep memory usage low.
+//   - Multi-format previews (Right Panel):
+//       * Config (.bin, .cpp): De-RAPs bin files and shows syntax-highlighted text.
+//       * Audio (.ogg, .wss): Shows an embedded audio player with real-time
+//         waveform and spectrogram rendering (computed asynchronously).
+//       * Models (.p3d): Embeds a `ModelViewPanel` to render the 3D model.
+//       * Materials (.rvmat): Embeds an `RvmatPreviewWidget` showing sphere/tile shaders.
+//       * Textures (.paa, .jpg): Decodes and renders 2D images.
 class TabAssetBrowser : public Gtk::Paned {
 public:
     TabAssetBrowser();

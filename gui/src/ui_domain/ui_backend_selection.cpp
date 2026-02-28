@@ -43,12 +43,16 @@ std::string join_backend_ids(const std::vector<BackendRecord>& backends) {
     return joined;
 }
 
+// Helper: Returns a short label indicating where the backend preference came from.
+// Used for logging and error messages.
 std::string source_label(const SelectionRequest& request) {
     if (request.has_cli_override) return "cli";
     if (request.has_env_override) return "env";
     return "config";
 }
 
+// Helper: Retrieves the requested UI backend name based on priority:
+// CLI > Env Var > Config file.
 std::string requested_backend_name(const SelectionRequest& request) {
     if (request.has_cli_override) return request.cli_backend;
     if (request.has_env_override) return request.env_backend;
@@ -57,8 +61,7 @@ std::string requested_backend_name(const SelectionRequest& request) {
 
 }  // namespace
 
-SelectionResult select_backend(const BackendRegistry& registry,
-                               const SelectionRequest& request) {
+// Core selection logic used during UI domain initialization.
     SelectionResult result;
     const auto& backends = registry.backends();
 
@@ -72,6 +75,9 @@ SelectionResult select_backend(const BackendRegistry& registry,
     const bool explicit_selection = requested != "auto";
     result.used_explicit_request = explicit_selection;
 
+    // If the user explicitly requested a specific UI backend via CLI, Env, or Config,
+    // honor it exactly. If it fails or is unavailable, we don't fall back to "auto"—
+    // we return an error so the user knows their explicit request failed.
     if (explicit_selection) {
         const BackendRecord* backend = find_backend(backends, requested);
         if (!backend) {

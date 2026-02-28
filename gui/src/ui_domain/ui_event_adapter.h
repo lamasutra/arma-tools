@@ -7,6 +7,17 @@
 namespace ui_domain {
 namespace event_adapter {
 
+// ui_event_adapter provides helper functions to create `ui_event_v1` structs.
+//
+// Problem it solves:
+//   The UI backends (like ImGui) communicate across a C-ABI boundary using raw
+//   C structs (`ui_event_v1`). Creating these structs manually is error-prone
+//   because you must always set the `struct_size` field correctly for ABI safety.
+//
+// These helpers let the GTK frontend (AppWindow) easily translate raw GTK
+// input events (mouse, keyboard, scroll) into safe `ui_event_v1` structs
+// ready to be dispatched to the active backend.
+
 ui_event_v1 make_mouse_move_event(uint64_t timestamp_ns,
                                   uint32_t modifiers,
                                   float x,

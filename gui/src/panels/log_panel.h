@@ -7,11 +7,21 @@
 #include <functional>
 #include <string>
 
-// Global log function — set by AppWindow, callable from any tab.
+// Global log function — set by AppWindow during startup.
+// This allows any tab or service to log a message without needing a reference
+// to the LogPanel. Under the hood, this posts the message to GTK's main loop thread.
 using LogFunc = std::function<void(LogLevel, const std::string&)>;
 void set_global_log(LogFunc func);
+
+// Helper to easily write to the global log from anywhere.
 void app_log(LogLevel level, const std::string& text);
 
+// LogPanel provides a scrolling text view of application events, errors, and warnings.
+//
+// Features:
+//   - Filters: Show/hide specific severity levels (Debug, Info, Warning, Error).
+//   - Search: Highlight matching text across the entire log.
+//   - Controls: Clear, Save to file, Copy to clipboard.
 class LogPanel : public Gtk::Box {
 public:
     LogPanel();

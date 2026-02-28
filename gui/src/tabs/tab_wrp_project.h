@@ -9,6 +9,18 @@
 #include <thread>
 #include <atomic>
 
+// TabWrpProject is the "WRP Terrain" panel.
+//
+// This tool is used by terrain makers to convert a packed Arma 3 map (.wrp)
+// back into a source project (pew/heightmap/mask/objects).
+//
+// Key features:
+//   - Directory scanning (async): Scans a folder or PBO for .wrp files without
+//     blocking the UI.
+//   - Heightmap extraction (async): Converts WRP elevation data into a visual
+//     heightmap image preview and exports it.
+//   - Heightpipe integration: Applies advanced terrain corrections (like scale
+//     and offset fixing) using the `armatools::heightpipe` library.
 class TabWrpProject : public Gtk::Paned {
 public:
     TabWrpProject();

@@ -7,8 +7,26 @@
 #include <atomic>
 #include <cstddef>
 
-enum class PlayState { Stopped, Playing, Paused };
+// Playback states for the audio engine.
+enum class PlayState {
+    Stopped, // No audio is loaded or has reached the end.
+    Playing, // Audio is actively streaming to the audio device.
+    Paused,  // Audio is loaded and can be resumed with play().
+};
 
+// AudioEngine drives real-time audio playback using the miniaudio library.
+//
+// Usage:
+//   1. Call load() with a NormalizedAudio (decoded by audio_decode.h).
+//   2. Call play() to start streaming to the system audio device.
+//   3. Use progress() to update a playback position UI element.
+//   4. Call seek() / pause() / stop() as needed.
+//
+// Threading:
+//   miniaudio calls data_callback() on a dedicated audio thread to fill the
+//   hardware buffer.  play_pos_ and state_ use std::atomic so they can be
+//   written from the GTK main thread and read from the audio thread safely.
+//   Do NOT call any method from inside data_callback().
 class AudioEngine {
 public:
     AudioEngine();
