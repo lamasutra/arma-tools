@@ -1,18 +1,31 @@
 #include "tab_paa_preview.h"
+#include "cli_logger.h"
 #include "config.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/paa.h>
+#include "cli_logger.h"
 #include <armatools/pboindex.h>
+#include "cli_logger.h"
 
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <iomanip>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <algorithm>
+#include "cli_logger.h"
 #include <cmath>
+#include "cli_logger.h"
 #include <thread>
+#include "cli_logger.h"
 
 TabPaaPreview::TabPaaPreview() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     auto make_icon_button = [](Gtk::Button& b, const char* icon, const char* tip) {
@@ -491,10 +504,10 @@ void TabPaaPreview::on_save_png() {
                     auto copy = pixbuf->copy();
                     copy->save(path, "png");
 
-                    app_log(LogLevel::Info, "Saved PNG: " + path);
+                    LOGI("Saved PNG: " + path);
                 }
             } catch (const std::exception& e) {
-                app_log(LogLevel::Error, std::string("Save PNG failed: ") + e.what());
+                LOGE(std::string("Save PNG failed: ") + e.what());
             } catch (...) {}
         });
 }
@@ -567,7 +580,7 @@ void TabPaaPreview::load_from_pbo(const armatools::pboindex::FindResult& r) {
                     hdr.width, hdr.height, img.width, img.height);
         store_decoded(img.pixels, img.width, img.height);
 
-        app_log(LogLevel::Info, "Loaded PAA from PBO: " + r.prefix + "/" + r.file_path);
+        LOGI("Loaded PAA from PBO: " + r.prefix + "/" + r.file_path);
 
     } catch (const std::exception& e) {
         info_label_.set_text(std::string("Error: ") + e.what());

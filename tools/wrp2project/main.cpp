@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
         input_display = terrain_name + ".wrp";
     }
 
-    armatools::cli::log_verbose(std::format("Creating project for {} ({})", terrain_name, input_display));
+    LOGI(std::format("Creating project for {} ({})", terrain_name, input_display));
 
     std::string layer_prefix = prefix_flag;
     if (layer_prefix.empty()) {
@@ -203,7 +203,7 @@ int main(int argc, char* argv[]) {
     replace_file = expand_user_path(replace_file);
 
     // Load road map
-    armatools::cli::log_verbose("Loading road map", roads_file.empty() ? "(default)" : roads_file);
+    LOGI("Loading road map", roads_file.empty() ? "(default)" : roads_file);
     armatools::roadobj::RoadMap roads = roads_file.empty()
         ? armatools::roadobj::default_map()
         : armatools::roadobj::load_map(roads_file);
@@ -211,23 +211,23 @@ int main(int argc, char* argv[]) {
     // Parse WRP
     std::ifstream f(input_path, std::ios::binary);
     if (!f) {
-        armatools::cli::log_error("cannot open", input_path);
+        LOGE("cannot open", input_path);
         return 1;
     }
 
     armatools::wrp::WorldData world;
     try {
-        armatools::cli::log_verbose("Reading WRP", input_path);
+        LOGI("Reading WRP", input_path);
         world = armatools::wrp::read(f, {});
     } catch (const std::exception& e) {
-        armatools::cli::log_error("parsing", input_path, e.what());
+        LOGE("parsing", input_path, e.what());
         return 1;
     }
-    armatools::cli::log_debug("WRP format", world.format.signature, "v", world.format.version,
+    LOGD("WRP format", world.format.signature, "v", world.format.version,
                               "objects", world.stats.object_count, "models", world.stats.model_count);
 
     // Create directory structure
-    armatools::cli::log_verbose("Preparing output directories in", output_dir);
+    LOGI("Preparing output directories in", output_dir);
     std::string lower_name = terrain_name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -261,11 +261,11 @@ int main(int argc, char* argv[]) {
     MapMetadata* meta = nullptr;
     std::unique_ptr<MapMetadata> meta_ptr;
     if (!config_file.empty()) {
-        armatools::cli::log_verbose("Importing config metadata from", config_file);
+        LOGI("Importing config metadata from", config_file);
         meta = read_map_metadata(config_file);
         if (meta) {
             meta_ptr.reset(meta);
-            armatools::cli::log_debug("Config metadata world", meta->world_name,
+            LOGD("Config metadata world", meta->world_name,
                                       "mapSize", meta->map_size,
                                       "lon", meta->longitude, "lat", meta->latitude,
                                       "elev", meta->elevation_offset);
@@ -277,7 +277,7 @@ int main(int argc, char* argv[]) {
     if (resolved_roads_shp.empty() && meta && !meta->new_roads_shape.empty() && !drive.empty()) {
         resolved_roads_shp = resolve_new_roads_shape(drive, meta->new_roads_shape);
         if (!resolved_roads_shp.empty()) {
-            armatools::cli::log_verbose("Roads SHP auto-discovered", resolved_roads_shp);
+            LOGI("Roads SHP auto-discovered", resolved_roads_shp);
         }
     }
 
@@ -287,10 +287,10 @@ int main(int argc, char* argv[]) {
         double detected = detect_offset_from_shp(resolved_roads_shp, world.bounds.world_size_x);
         if (detected != final_offset_x && detected != 0) {
             if (offset_x_explicit) {
-                armatools::cli::log_verbose("SHP offset suggestion", detected,
+                LOGI("SHP offset suggestion", detected,
                                             "but using explicit", final_offset_x);
             } else {
-                armatools::cli::log_verbose("Offset X", detected, "(detected from roads SHP)");
+                LOGI("Offset X", detected, "(detected from roads SHP)");
                 final_offset_x = detected;
             }
         }
@@ -300,11 +300,11 @@ int main(int argc, char* argv[]) {
     ReplacementMap rmap;
     if (!replace_file.empty()) {
         try {
-            armatools::cli::log_verbose("Loading replacement map", replace_file);
+            LOGI("Loading replacement map", replace_file);
             rmap = load_replacements(replace_file);
-            armatools::cli::log_debug("Replacement rules count", rmap.len());
+            LOGD("Replacement rules count", rmap.len());
         } catch (const std::exception& e) {
-            armatools::cli::log_error("replacement map", e.what());
+            LOGE("replacement map", e.what());
             return 1;
         }
     }
@@ -362,8 +362,8 @@ int main(int argc, char* argv[]) {
         try {
             steps[i].fn(proj);
         } catch (const std::exception& e) {
-            armatools::cli::log_debug("Error writing", steps[i].desc, ":", e.what());
-            armatools::cli::log_error("Error writing", steps[i].desc, e.what());
+            LOGD("Error writing", steps[i].desc, ":", e.what());
+            LOGE("Error writing", steps[i].desc, e.what());
             return 1;
         }
     }

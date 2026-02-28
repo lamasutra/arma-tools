@@ -28,7 +28,7 @@ armatools::p3d::P3DFile P3dModelLoaderService::load_p3d(const std::string& model
     if (index) {
         armatools::pboindex::ResolveResult rr;
         if (index->resolve(model_path, rr)) {
-            armatools::cli::log_debug("P3dModelLoaderService: resolved from index" + model_path
+            LOGD("P3dModelLoaderService: resolved from index" + model_path
                     + " -> " + rr.pbo_path + " : " + rr.entry_name);
             auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
             if (!data.empty())
@@ -45,7 +45,7 @@ armatools::p3d::P3DFile P3dModelLoaderService::load_p3d(const std::string& model
         for (const auto& r : results) {
             auto full = armatools::armapath::to_slash_lower(r.prefix + "/" + r.file_path);
             if (full == normalized || full.ends_with("/" + normalized)) {
-                armatools::cli::log_debug("P3dModelLoaderService: resolved from db" + model_path
+                LOGD("P3dModelLoaderService: resolved from db" + model_path
                         + " -> " + r.pbo_path + " : " + r.file_path);
 
                 auto data = extract_from_pbo(r.pbo_path, r.file_path);
@@ -63,7 +63,7 @@ armatools::p3d::P3DFile P3dModelLoaderService::load_p3d(const std::string& model
             if (f.is_open()) {
                 std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)),
                                             std::istreambuf_iterator<char>());
-                armatools::cli::log_debug("P3dModelLoaderService: resolved from disk" + model_path
+                LOGD("P3dModelLoaderService: resolved from disk" + model_path
                         + " -> " + resolved->string());                                            
                 return try_load_p3d_from_data(data);
             }

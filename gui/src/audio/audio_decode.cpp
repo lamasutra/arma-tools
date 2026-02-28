@@ -1,17 +1,29 @@
 #include "audio_decode.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 
 #include <armatools/wss.h>
+#include "cli_logger.h"
 #include <miniaudio.h>
+#include "cli_logger.h"
 #include <vorbis/vorbisfile.h>
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <cmath>
+#include "cli_logger.h"
 #include <cstring>
+#include "cli_logger.h"
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <stdexcept>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -29,7 +41,7 @@ static NormalizedAudio decode_ogg_file(const std::string& path) {
     if (err != 0) {
         std::string msg = "vorbisfile: failed to open '" + path +
                           "' (error " + std::to_string(err) + ")";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -37,7 +49,7 @@ static NormalizedAudio decode_ogg_file(const std::string& path) {
     if (!vi) {
         ov_clear(&vf);
         std::string msg = "vorbisfile: failed to get info for '" + path + "'";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -63,7 +75,7 @@ static NormalizedAudio decode_ogg_file(const std::string& path) {
 
     if (raw.empty()) {
         std::string msg = "vorbisfile: decoded 0 samples from '" + path + "'";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -171,7 +183,7 @@ static NormalizedAudio decode_ogg_memory(const uint8_t* data, size_t size) {
     if (err != 0) {
         std::string msg = "vorbisfile: failed to open memory buffer (error " +
                           std::to_string(err) + ")";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -179,7 +191,7 @@ static NormalizedAudio decode_ogg_memory(const uint8_t* data, size_t size) {
     if (!vi) {
         ov_clear(&vf);
         std::string msg = "vorbisfile: failed to get info from memory buffer";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -203,7 +215,7 @@ static NormalizedAudio decode_ogg_memory(const uint8_t* data, size_t size) {
 
     if (raw.empty()) {
         std::string msg = "vorbisfile: decoded 0 samples from memory";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -299,7 +311,7 @@ static NormalizedAudio decode_wav_file(const std::string& path) {
     if (result != MA_SUCCESS) {
         std::string msg = "miniaudio: failed to decode WAV '" + path +
                           "' (" + ma_result_description(result) + ")";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -319,7 +331,7 @@ static NormalizedAudio decode_wss(std::istream& stream) {
         std::string msg = "WSS: unsupported format or empty PCM (bits=" +
                           std::to_string(wss.bits_per_sample) + ", pcm_size=" +
                           std::to_string(wss.pcm.size()) + ")";
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 
@@ -403,7 +415,7 @@ NormalizedAudio decode_file(const std::string& path) {
     if (ext == ".wss") {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) {
-            app_log(LogLevel::Error, "Cannot open file: " + path);
+            LOGE("Cannot open file: " + path);
             throw std::runtime_error("Cannot open file: " + path);
         }
         return decode_wss(f);
@@ -415,12 +427,12 @@ NormalizedAudio decode_file(const std::string& path) {
         try {
             std::ifstream f(path, std::ios::binary);
             if (!f.is_open()) {
-                app_log(LogLevel::Error, "Cannot open file: " + path);
+                LOGE("Cannot open file: " + path);
                 throw std::runtime_error("Cannot open file: " + path);
             }
             return decode_wss(f);
         } catch (...) {
-            app_log(LogLevel::Debug, "armatools::wss failed for WAV, trying miniaudio");
+            LOGD("armatools::wss failed for WAV, trying miniaudio");
             return decode_wav_file(path);
         }
     }
@@ -451,7 +463,7 @@ NormalizedAudio decode_memory(const uint8_t* data, size_t size,
         return decode_ogg_memory(data, size);
     } catch (...) {
         std::string msg = "Unsupported audio format: " + ext;
-        app_log(LogLevel::Error, msg);
+        LOGE(msg);
         throw std::runtime_error(msg);
     }
 }

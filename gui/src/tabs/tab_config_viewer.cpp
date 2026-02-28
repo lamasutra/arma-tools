@@ -1,15 +1,25 @@
 #include "tab_config_viewer.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/config.h>
+#include "cli_logger.h"
 #include <armatools/pboindex.h>
+#include "cli_logger.h"
 
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <regex>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <thread>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -329,7 +339,7 @@ void TabConfigViewer::load_from_pbo(const armatools::pboindex::FindResult& r) {
         auto display_name = r.prefix + "/" + r.file_path;
         load_config_data(stream, ext, display_name);
 
-        app_log(LogLevel::Info, "Loaded config from PBO: " + display_name);
+        LOGI("Loaded config from PBO: " + display_name);
 
     } catch (const std::exception& e) {
         info_label_.set_text(std::string("Error: ") + e.what());

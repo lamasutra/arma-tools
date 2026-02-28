@@ -59,8 +59,7 @@ TexturesLoaderService::TexturesLoaderService(const std::string& db_path_in,
 std::vector<TexturesLoaderService::TextureData> 
 TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string& model_path) {
     std::vector<TextureData> result;
-    app_log(LogLevel::Debug,
-            "LodTextures: load_textures model=" + model_path
+    LOGD(            "LodTextures: load_textures model=" + model_path
             + " lod_textures=" + std::to_string(lod.textures.size())
             + " lod_materials=" + std::to_string(lod.materials.size()));
 
@@ -92,8 +91,7 @@ TexturesLoaderService::load_textures(armatools::p3d::LOD& lod, const std::string
         add_if_loaded(load_single_material(mat_path, model_path));
     }
 
-    app_log(LogLevel::Debug,
-            "LodTextures: loaded textures total=" + std::to_string(result.size())
+    LOGD(            "LodTextures: loaded textures total=" + std::to_string(result.size())
             + " for model=" + model_path);
 
     return result;
@@ -177,8 +175,7 @@ TexturesLoaderService::load_single_texture(const std::string& tex_path,
 std::optional<TexturesLoaderService::TextureData>
 TexturesLoaderService::load_single_material(const std::string& material_path,
                                                const std::string& model_path) {
-    app_log(LogLevel::Debug,
-            "LodTextures: material begin raw='" + material_path
+    LOGD(            "LodTextures: material begin raw='" + material_path
             + "' model='" + model_path + "'");
     auto shader_mode_from_ids = [](const std::string& ps, const std::string& vs) {
         auto sps = armatools::armapath::to_slash_lower(ps);
@@ -250,8 +247,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
             if (index->resolve(normalized, rr)) {
                 auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
                 if (!data.empty()) {
-                    app_log(LogLevel::Debug,
-                            "LodTextures: material asset resolved via index '" + normalized
+                    LOGD(                            "LodTextures: material asset resolved via index '" + normalized
                             + "' -> '" + rr.pbo_path + ":" + rr.entry_name + "'");
                     return data;
                 }
@@ -265,8 +261,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                 if (full == normalized || full.ends_with("/" + normalized)) {
                     auto data = extract_from_pbo(r.pbo_path, r.file_path);
                     if (!data.empty()) {
-                        app_log(LogLevel::Debug,
-                                "LodTextures: material asset resolved via db '" + normalized
+                        LOGD(                                "LodTextures: material asset resolved via db '" + normalized
                                 + "' -> '" + r.pbo_path + ":" + r.file_path + "'");
                         return data;
                     }
@@ -279,8 +274,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
             if (resolved) {
                 std::ifstream f(resolved->string(), std::ios::binary);
                 if (f.is_open()) {
-                    app_log(LogLevel::Debug,
-                            "LodTextures: material asset resolved on disk '" + normalized
+                    LOGD(                            "LodTextures: material asset resolved on disk '" + normalized
                             + "' -> '" + resolved->string() + "'");
                     return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)),
                                                 std::istreambuf_iterator<char>());
@@ -318,7 +312,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
 
     auto mat_norm = normalize(material_path);
     if (mat_norm.empty()) return std::nullopt;
-    app_log(LogLevel::Debug, "LodTextures: material normalized='" + mat_norm + "'");
+    LOGD("LodTextures: material normalized='" + mat_norm + "'");
 
     std::vector<std::string> mat_candidates{mat_norm};
     if (std::filesystem::path(mat_norm).extension().empty())
@@ -329,7 +323,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
             if (i) joined += ", ";
             joined += mat_candidates[i];
         }
-        app_log(LogLevel::Debug, "LodTextures: material candidates=[" + joined + "]");
+        LOGD("LodTextures: material candidates=[" + joined + "]");
     }
 
     // Common fallback for paths like "\buildings\data\..." from CA models.
@@ -343,8 +337,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
             mat_candidates.push_back(prefixed);
             if (std::filesystem::path(prefixed).extension().empty())
                 mat_candidates.push_back(prefixed + ".rvmat");
-            app_log(LogLevel::Debug,
-                    "LodTextures: added model-root material fallback '" + prefixed + "'");
+            LOGD(                    "LodTextures: added model-root material fallback '" + prefixed + "'");
         }
     }
 
@@ -358,24 +351,21 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
         }
     }
     if (mat_bytes.empty()) {
-        app_log(LogLevel::Warning,
-                "LodTextures: material not found raw='" + material_path
+        LOGW(                "LodTextures: material not found raw='" + material_path
                 + "' normalized='" + mat_norm + "'");
         return std::nullopt;
     }
-    app_log(LogLevel::Debug, "LodTextures: material loaded as '" + mat_used + "'");
+    LOGD("LodTextures: material loaded as '" + mat_used + "'");
 
     TextureData material_result;
     material_result.path = mat_norm;
     std::vector<std::string> stage_textures;
     parse_material(mat_bytes, material_result, stage_textures);
     if (!stage_textures.empty()) {
-        app_log(LogLevel::Debug,
-                "LodTextures: rvmat parsed stages=" + std::to_string(stage_textures.size())
+        LOGD(                "LodTextures: rvmat parsed stages=" + std::to_string(stage_textures.size())
                 + " material='" + mat_used + "'");
     } else {
-        app_log(LogLevel::Warning,
-                "LodTextures: rvmat parser produced no stage textures '" + mat_used + "'");
+        LOGW(                "LodTextures: rvmat parser produced no stage textures '" + mat_used + "'");
     }
 
     std::vector<std::string> candidates = stage_textures;
@@ -389,12 +379,10 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
         }
     }
     if (candidates.empty()) {
-        app_log(LogLevel::Warning,
-                "LodTextures: rvmat has no stage textures '" + mat_used + "'");
+        LOGW(                "LodTextures: rvmat has no stage textures '" + mat_used + "'");
         return std::nullopt;
     }
-    app_log(LogLevel::Debug,
-            "LodTextures: rvmat stage texture candidates count="
+    LOGD(            "LodTextures: rvmat stage texture candidates count="
             + std::to_string(candidates.size()) + " material='" + mat_used + "'");
 
     auto stage_kind = [](const std::string& p) {
@@ -474,8 +462,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
     for (const auto& c : diffuse_order) {
         auto tex = armatools::armapath::is_procedural_texture(c) ? c : resolve_relative(mat_used, c);
         if (tex.empty()) continue;
-        app_log(LogLevel::Debug,
-                "LodTextures: try rvmat texture stage='" + c + "' resolved='" + tex + "'");
+        LOGD(                "LodTextures: try rvmat texture stage='" + c + "' resolved='" + tex + "'");
         if (auto out = decode_texture_bytes(load_bytes(tex), mat_norm)) {
             out->has_material = material_result.has_material;
             out->resolved_from_material = true;
@@ -485,8 +472,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                 if (auto img = load_image(nrm)) {
                     out->has_normal_map = true;
                     out->normal_map = std::move(*img);
-                    app_log(LogLevel::Debug,
-                            "LodTextures: rvmat normal map loaded '" + nrm + "' for material '" + mat_used + "'");
+                    LOGD(                            "LodTextures: rvmat normal map loaded '" + nrm + "' for material '" + mat_used + "'");
                 }
             }
             if (!best_spec.empty()) {
@@ -494,12 +480,10 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                 if (auto img = load_image(sm)) {
                     out->has_specular_map = true;
                     out->specular_map = std::move(*img);
-                    app_log(LogLevel::Debug,
-                            "LodTextures: rvmat spec map loaded '" + sm + "' for material '" + mat_used + "'");
+                    LOGD(                            "LodTextures: rvmat spec map loaded '" + sm + "' for material '" + mat_used + "'");
                 }
             }
-            app_log(LogLevel::Debug,
-                    "LodTextures: rvmat texture loaded '" + tex + "' for material '" + mat_used + "'");
+            LOGD(                    "LodTextures: rvmat texture loaded '" + tex + "' for material '" + mat_used + "'");
             return out;
         }
         if (std::filesystem::path(tex).extension().empty()) {
@@ -521,8 +505,7 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                         out->specular_map = std::move(*img);
                     }
                 }
-                app_log(LogLevel::Debug,
-                        "LodTextures: rvmat texture loaded '" + tex + ".paa' for material '" + mat_used + "'");
+                LOGD(                        "LodTextures: rvmat texture loaded '" + tex + ".paa' for material '" + mat_used + "'");
                 return out;
             }
             if (auto out = decode_texture_bytes(load_bytes(tex + ".pac"), mat_norm)) {
@@ -543,14 +526,12 @@ TexturesLoaderService::load_single_material(const std::string& material_path,
                         out->specular_map = std::move(*img);
                     }
                 }
-                app_log(LogLevel::Debug,
-                        "LodTextures: rvmat texture loaded '" + tex + ".pac' for material '" + mat_used + "'");
+                LOGD(                        "LodTextures: rvmat texture loaded '" + tex + ".pac' for material '" + mat_used + "'");
                 return out;
             }
         }
     }
-    app_log(LogLevel::Warning,
-            "LodTextures: failed to load any rvmat texture for material '" + mat_used + "'");
+    LOGW(            "LodTextures: failed to load any rvmat texture for material '" + mat_used + "'");
     return std::nullopt;
 }
 

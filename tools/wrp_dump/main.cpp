@@ -280,18 +280,18 @@ int main(int argc, char* argv[]) {
 
     if (output_dir == "-") json_stdout = true;
 
-    armatools::cli::log_verbose("Reading", input_path);
+    LOGI("Reading", input_path);
     if (armatools::cli::debug_enabled()) {
         try {
-            armatools::cli::log_debug("Input size (bytes):", fs::file_size(input_path));
+            LOGD("Input size (bytes):", fs::file_size(input_path));
         } catch (const std::exception&) {
-            armatools::cli::log_debug("Input size unavailable for", input_path);
+            LOGD("Input size unavailable for", input_path);
         }
     }
 
     std::ifstream f(input_path, std::ios::binary);
     if (!f) {
-        armatools::cli::log_error("cannot open", input_path);
+        LOGE("cannot open", input_path);
         return 1;
     }
 
@@ -301,12 +301,12 @@ int main(int argc, char* argv[]) {
     try {
         world = armatools::wrp::read(f, opts);
     } catch (const std::exception& e) {
-        armatools::cli::log_error("parsing", input_path, e.what());
+        LOGE("parsing", input_path, e.what());
         return 1;
     }
 
     if (json_stdout) {
-        armatools::cli::log_verbose("Writing JSON summary to stdout");
+        LOGI("Writing JSON summary to stdout");
         auto doc = build_world_json(world);
         if (pretty) std::cout << std::setw(2) << doc << '\n';
         else std::cout << doc << '\n';
@@ -314,46 +314,46 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        armatools::cli::log_verbose("Writing outputs to", output_dir);
+        LOGI("Writing outputs to", output_dir);
         write_outputs(world, output_dir, {pretty, no_cells, no_objects, no_elevations});
     } catch (const std::exception& e) {
-        armatools::cli::log_error("writing output:", e.what());
+        LOGE("writing output:", e.what());
         return 1;
     }
 
     if (armatools::cli::verbose_enabled()) {
-        armatools::cli::log_verbose("Textures:", world.stats.texture_count,
+        LOGI("Textures:", world.stats.texture_count,
                                      "Models:", world.stats.model_count,
                                      "Objects:", world.stats.object_count);
     }
     if (armatools::cli::debug_enabled()) {
-        armatools::cli::log_debug("Road nets:", world.stats.road_net_count,
+        LOGD("Road nets:", world.stats.road_net_count,
                                   "Elevations:", world.elevations.size());
         for (const auto& warning : world.warnings) {
-            armatools::cli::log_debug("Warning", warning.code, warning.message);
+            LOGD("Warning", warning.code, warning.message);
         }
     }
 
     // Summary
-    armatools::cli::log_plain(std::format("Dumped: {} ({} v{})",
+    LOGI(std::format("Dumped: {} ({} v{})",
                                        input_path, world.format.signature, world.format.version));
-    armatools::cli::log_plain(std::format("Grid: {}x{} cells ({:.0f}m cell size)",
+    LOGI(std::format("Grid: {}x{} cells ({:.0f}m cell size)",
                                        world.grid.cells_x, world.grid.cells_y, world.grid.cell_size));
-    armatools::cli::log_plain(std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m",
+    LOGI(std::format("World: {:.0f}x{:.0f}m, elevation {:.1f}..{:.1f}m",
                                        world.bounds.world_size_x, world.bounds.world_size_y,
                                        world.bounds.min_elevation, world.bounds.max_elevation));
-    armatools::cli::log_plain("Textures:", world.stats.texture_count,
+    LOGI("Textures:", world.stats.texture_count,
                               "Models:", world.stats.model_count,
                               "Objects:", world.stats.object_count);
     if (world.stats.road_net_count > 0) {
-        armatools::cli::log_plain("Road nets:", world.stats.road_net_count);
+        LOGI("Road nets:", world.stats.road_net_count);
     }
     if (!world.warnings.empty()) {
-        armatools::cli::log_plain("Warnings:", world.warnings.size());
+        LOGI("Warnings:", world.warnings.size());
         for (const auto& w : world.warnings) {
-            armatools::cli::log_plain("  [", w.code, "]", w.message);
+            LOGI("  [", w.code, "]", w.message);
         }
     }
-    armatools::cli::log_plain("Output:", output_dir);
+    LOGI("Output:", output_dir);
     return 0;
 }

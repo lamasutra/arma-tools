@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "render_domain/rd_runtime_state.h"
 
 #include <epoxy/gl.h>
@@ -250,7 +251,7 @@ void GLRvmatPreview::on_realize_gl() {
         glDeleteShader(vs);
         glDeleteShader(fs);
     } catch (const std::exception& e) {
-        app_log(LogLevel::Error, std::string("GLRvmatPreview: ") + e.what());
+        LOGE(std::string("GLRvmatPreview: ") + e.what());
         set_error(Glib::Error(GDK_GL_ERROR, 0, e.what()));
         return;
     }
@@ -425,7 +426,7 @@ uint32_t GLRvmatPreview::compile_shader(uint32_t type, const char* src) {
         GLsizei len = 0;
         glGetShaderInfoLog(s, sizeof(log), &len, log);
         glDeleteShader(s);
-        app_log(LogLevel::Error, std::string("GLRvmatPreview shader compile failed: ") + log);
+        LOGE(std::string("GLRvmatPreview shader compile failed: ") + log);
         throw std::runtime_error(std::string("RVMat preview shader compile failed: ") + log);
     }
     return s;
@@ -443,7 +444,7 @@ uint32_t GLRvmatPreview::link_program(uint32_t vs, uint32_t fs) {
         GLsizei len = 0;
         glGetProgramInfoLog(p, sizeof(log), &len, log);
         glDeleteProgram(p);
-        app_log(LogLevel::Error, std::string("GLRvmatPreview program link failed: ") + log);
+        LOGE(std::string("GLRvmatPreview program link failed: ") + log);
         throw std::runtime_error(std::string("RVMat preview program link failed: ") + log);
     }
     return p;

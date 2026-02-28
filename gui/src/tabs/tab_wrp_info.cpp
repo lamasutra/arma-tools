@@ -1,27 +1,49 @@
 #include "tab_wrp_info.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/objcat.h>
+#include "cli_logger.h"
 #include <armatools/paa.h>
+#include "cli_logger.h"
 #include <armatools/p3d.h>
+#include "cli_logger.h"
 #include <armatools/pboindex.h>
+#include "cli_logger.h"
 #include <armatools/wrp.h>
+#include "cli_logger.h"
 #include <armatools/armapath.h>
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <array>
+#include "cli_logger.h"
 #include <cctype>
+#include "cli_logger.h"
 #include <cmath>
+#include "cli_logger.h"
 #include <filesystem>
+#include "cli_logger.h"
 #include <format>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <map>
+#include "cli_logger.h"
 #include <optional>
+#include "cli_logger.h"
 #include <regex>
+#include "cli_logger.h"
 #include <set>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <unordered_map>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -449,9 +471,9 @@ void TabWrpInfo::set_config(Config* cfg) {
         model_panel_.set_pboindex(db_.get(), index_.get());
         refresh_source_combo();
         if (!snap.error.empty()) {
-            app_log(LogLevel::Warning, "WrpInfo: Failed to open PBO index: " + snap.error);
+            LOGW("WrpInfo: Failed to open PBO index: " + snap.error);
         } else if (db_ && index_) {
-            app_log(LogLevel::Info, "WrpInfo: PBO index loaded ("
+            LOGI("WrpInfo: PBO index loaded ("
                     + std::to_string(snap.prefix_count) + " prefixes)");
         }
     });
@@ -470,9 +492,9 @@ void TabWrpInfo::on_folder_browse() {
                     on_scan();
                 }
             } catch (const std::exception& e) {
-                app_log(LogLevel::Warning, "WrpInfo: folder dialog failed: " + std::string(e.what()));
+                LOGW("WrpInfo: folder dialog failed: " + std::string(e.what()));
             } catch (...) {
-                app_log(LogLevel::Warning, "WrpInfo: folder dialog failed");
+                LOGW("WrpInfo: folder dialog failed");
             }
         });
 }
@@ -535,7 +557,7 @@ void TabWrpInfo::on_scan() {
             if (gen != scan_generation_.load()) return;
             if (!err.empty()) {
                 class_status_label_.set_text("Scan failed: " + err);
-                app_log(LogLevel::Warning, "WrpInfo scan failed: " + err);
+                LOGW("WrpInfo scan failed: " + err);
                 return;
             }
             wrp_files_ = std::move(files);
@@ -1220,7 +1242,7 @@ void TabWrpInfo::ensure_satellite_palette_loaded() {
                 terrain3d_status_label_.set_text(
                     terrain3d_status_label_.get_text()
                     + " | satellite palette failed (" + err + ")");
-                app_log(LogLevel::Warning, "WrpInfo: satellite palette build error: " + err);
+                LOGW("WrpInfo: satellite palette build error: " + err);
                 return;
             }
             satellite_loaded_ = true;
@@ -1229,8 +1251,7 @@ void TabWrpInfo::ensure_satellite_palette_loaded() {
             auto status = terrain3d_status_label_.get_text();
             terrain3d_status_label_.set_text(
                 status + " | satellite palette loaded (" + std::to_string(decoded_count) + ")");
-            app_log(LogLevel::Debug,
-                    "WrpInfo: satellite palette decoded " + std::to_string(decoded_count)
+            LOGD(                    "WrpInfo: satellite palette decoded " + std::to_string(decoded_count)
                     + "/" + std::to_string(satellite_palette_.size()));
         });
     });
@@ -1275,7 +1296,7 @@ void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
     if (index_) {
         armatools::pboindex::ResolveResult rr;
         if (index_->resolve(model_path, rr)) {
-            app_log(LogLevel::Debug, "WrpInfo: resolved " + model_path
+            LOGD("WrpInfo: resolved " + model_path
                     + " -> " + rr.pbo_path + " : " + rr.entry_name);
             auto data = extract_from_pbo(rr.pbo_path, rr.entry_name);
             if (!data.empty()) {
@@ -1288,7 +1309,7 @@ void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
                         return;
                     }
                 } catch (const std::exception& e) {
-                    app_log(LogLevel::Warning, "WrpInfo: P3D parse error (PBO): "
+                    LOGW("WrpInfo: P3D parse error (PBO): "
                             + std::string(e.what()));
                 }
             }
@@ -1314,7 +1335,7 @@ void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
                             return;
                         }
                     } catch (const std::exception& e) {
-                        app_log(LogLevel::Warning, "WrpInfo: P3D parse error (find_files): "
+                        LOGW("WrpInfo: P3D parse error (find_files): "
                                 + std::string(e.what()));
                     }
                 }
@@ -1337,19 +1358,19 @@ void TabWrpInfo::load_p3d_preview(const std::string& model_path) {
                     }
                 }
             } catch (const std::exception& e) {
-                app_log(LogLevel::Warning, "WrpInfo: P3D parse error (disk): "
+                LOGW("WrpInfo: P3D parse error (disk): "
                         + std::string(e.what()));
             }
         }
     }
 
-    app_log(LogLevel::Debug, "WrpInfo: model not found: " + model_path);
+    LOGD("WrpInfo: model not found: " + model_path);
     */
 }
 
 void TabWrpInfo::on_hm_export() {
     if (!world_data_ || world_data_->elevations.empty()) {
-        app_log(LogLevel::Warning, "WrpInfo: No heightmap data to export");
+        LOGW("WrpInfo: No heightmap data to export");
         return;
     }
 
@@ -1404,26 +1425,25 @@ void TabWrpInfo::on_hm_export() {
                     // Export TIFF using wrp_heightmap tool (native resolution only)
                     auto wrp_path = loaded_wrp_path_;
                     if (wrp_path.empty()) {
-                        app_log(LogLevel::Warning,
-                                "WrpInfo: TIFF export requires a filesystem WRP path");
+                        LOGW(                                "WrpInfo: TIFF export requires a filesystem WRP path");
                         return;
                     }
                     if (!cfg_) {
-                        app_log(LogLevel::Error, "WrpInfo: Configuration not available for wrp_heightmap");
+                        LOGE("WrpInfo: Configuration not available for wrp_heightmap");
                         return;
                     }
                     auto tool = resolve_tool_path(*cfg_, "wrp_heightmap");
                     if (tool.empty()) {
-                        app_log(LogLevel::Error, "WrpInfo: wrp_heightmap binary not found");
+                        LOGE("WrpInfo: wrp_heightmap binary not found");
                         return;
                     }
                     auto args = apply_tool_verbosity(cfg_,
                         {"-offset-x", "200000", "-offset-z", "0", wrp_path, output_path}, false);
                     auto res = run_subprocess(tool, args);
                     if (res.status == 0) {
-                        app_log(LogLevel::Info, "WrpInfo: Exported GeoTIFF to " + output_path);
+                        LOGI("WrpInfo: Exported GeoTIFF to " + output_path);
                     } else {
-                        app_log(LogLevel::Error, "WrpInfo: wrp_heightmap failed: " + res.output);
+                        LOGE("WrpInfo: wrp_heightmap failed: " + res.output);
                     }
                 } else {
                     // Export ASC (with optional rescale)
@@ -1470,7 +1490,7 @@ void TabWrpInfo::on_hm_export() {
                     // Write ASC file
                     std::ofstream f(output_path);
                     if (!f) {
-                        app_log(LogLevel::Error, "WrpInfo: Cannot create " + output_path);
+                        LOGE("WrpInfo: Cannot create " + output_path);
                         return;
                     }
 
@@ -1497,7 +1517,7 @@ void TabWrpInfo::on_hm_export() {
                     std::string scale_note = scale > 1
                         ? " (scale " + std::to_string(scale) + "x, " + std::to_string(out_w) + "x" + std::to_string(out_h) + ")"
                         : "";
-                    app_log(LogLevel::Info, "WrpInfo: Exported ASC to " + output_path + scale_note);
+                    LOGI("WrpInfo: Exported ASC to " + output_path + scale_note);
                 }
             } catch (...) {}
         });

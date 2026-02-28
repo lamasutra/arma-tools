@@ -89,7 +89,7 @@ static double find_float(const armatools::config::ConfigClass& cls, const std::s
 MapMetadata* read_map_metadata(const std::string& path) {
     std::ifstream f(path);
     if (!f) {
-        armatools::cli::log_warning("cannot open config", path);
+        LOGW("cannot open config", path);
         return nullptr;
     }
 
@@ -97,7 +97,7 @@ MapMetadata* read_map_metadata(const std::string& path) {
     try {
         cfg = armatools::config::parse_text(f);
     } catch (const std::exception& e) {
-        armatools::cli::log_warning("parsing config:", e.what());
+        LOGW("parsing config:", e.what());
         return nullptr;
     }
 
@@ -115,7 +115,7 @@ MapMetadata* read_map_metadata(const std::string& path) {
         }
     }
     if (!worlds) {
-        armatools::cli::log_warning("CfgWorlds not found in config");
+        LOGW("CfgWorlds not found in config");
         return nullptr;
     }
 
@@ -142,7 +142,7 @@ MapMetadata* read_map_metadata(const std::string& path) {
         return meta;
     }
 
-    armatools::cli::log_warning("no concrete world class found in CfgWorlds");
+    LOGW("no concrete world class found in CfgWorlds");
     return nullptr;
 }
 
@@ -228,7 +228,7 @@ void init_heightmap(ProjectInfo& p, int scale) {
 
     int dst_w = src_w * scale;
     int dst_h = src_h * scale;
-    armatools::cli::log_plain(std::format("Heightmap: upscaling {}x{} -> {}x{} ({}x)", src_w, src_h, dst_w, dst_h, scale));
+    LOGI(std::format("Heightmap: upscaling {}x{} -> {}x{} ({}x)", src_w, src_h, dst_w, dst_h, scale));
 
     p.hm_width = dst_w;
     p.hm_height = dst_h;
@@ -665,7 +665,7 @@ void write_roads_lib(ProjectInfo& p) {
         std::ostringstream os;
         os << "Road objects: " << total << " total";
         for (const auto& t : types) os << ", " << t << "=" << used_types[t];
-        armatools::cli::log_plain(os.str());
+        LOGI(os.str());
     }
 }
 
@@ -818,11 +818,11 @@ static void build_model_meta(const ProjectInfo& p, const std::vector<std::string
                 meta[model] = m;
             }
         } catch (const std::exception& e) {
-            armatools::cli::log_warning("querying model bboxes:", e.what());
+            LOGW("querying model bboxes:", e.what());
         }
     }
     if (meta.size() > 0) {
-        armatools::cli::log_plain(std::format("Model metadata: resolved bounding boxes for {}/{} models",
+        LOGI(std::format("Model metadata: resolved bounding boxes for {}/{} models",
                                                meta.size(), models.size()));
     }
 }
@@ -852,7 +852,7 @@ void write_objects(ProjectInfo& p) {
             }
         }
         if (replaced > 0)
-            armatools::cli::log_plain(std::format("Replacements: applied {} substitutions ({} rules)",
+            LOGI(std::format("Replacements: applied {} substitutions ({} rules)",
                                               replaced, p.replace_map->len()));
     }
 
@@ -907,10 +907,10 @@ void write_objects(ProjectInfo& p) {
                     case_map[lower_name] = original_name;
             }
             if (!case_map.empty())
-                armatools::cli::log_plain(std::format("Template names: resolved original case for {} model basenames",
+                LOGI(std::format("Template names: resolved original case for {} model basenames",
                                                       case_map.size()));
         } catch (const std::exception& e) {
-            armatools::cli::log_warning("querying model paths for case correction:", e.what());
+            LOGW("querying model paths for case correction:", e.what());
         }
     }
 
@@ -932,7 +932,7 @@ void write_objects(ProjectInfo& p) {
         cat_dedup_names[cat] = std::move(dedup);
     }
     if (total_dupes > 0)
-        armatools::cli::log_plain(std::format("Template names: {} duplicate basenames resolved with suffixes",
+        LOGI(std::format("Template names: {} duplicate basenames resolved with suffixes",
                                                total_dupes));
 
     auto styles = load_styles(p.style_path);
@@ -1007,7 +1007,7 @@ void write_objects(ProjectInfo& p) {
     }
 
     for (const auto& cat : cats) {
-        armatools::cli::log_plain(std::format("  {}: {} objects, {} models",
+        LOGI(std::format("  {}: {} objects, {} models",
                                               cat, cat_objects[cat].size(), cat_model_set[cat].size()));
     }
 
@@ -1105,7 +1105,7 @@ void write_road_shapes(ProjectInfo& p) {
             }
         }
         w->close();
-        armatools::cli::log_plain(std::format("Roads: imported {} records from {}",
+        LOGI(std::format("Roads: imported {} records from {}",
                                               src.records.size(), fs::path(p.roads_shp).filename().string()));
         return;
     }
@@ -1147,7 +1147,7 @@ void write_road_shapes(ProjectInfo& p) {
     }
     w->close();
 
-    armatools::cli::log_plain(std::format("Roads: {} polylines, {:.0f}m total",
+    LOGI(std::format("Roads: {} polylines, {:.0f}m total",
                                           polylines.size(), total_length));
 }
 
@@ -1185,7 +1185,7 @@ void write_forest_shapes(ProjectInfo& p) {
         total_area += poly.area;
     }
     w->close();
-    armatools::cli::log_plain(std::format("Forest: {} polygons, {:.2f} km^2",
+    LOGI(std::format("Forest: {} polygons, {:.2f} km^2",
                                           polygons.size(), total_area / 1e6));
 }
 
@@ -1228,11 +1228,11 @@ static std::string normalize_virtual_rel_path(const std::string& p) {
 void extract_models(ProjectInfo& p) {
     if (!p.extract_models) return;
     if (p.drive_root.empty()) {
-        armatools::cli::log_warning("--extract-models requires --drive, skipping");
+        LOGW("--extract-models requires --drive, skipping");
         return;
     }
     if (p.db_path.empty()) {
-        armatools::cli::log_warning("--extract-models requires --db, skipping");
+        LOGW("--extract-models requires --db, skipping");
         return;
     }
 
@@ -1284,7 +1284,7 @@ void extract_models(ProjectInfo& p) {
 
         armatools::pboindex::ResolveResult rr;
         if (!idx.resolve(model_path, rr)) {
-            armatools::cli::log_warning("cannot find PBO for", model_path);
+            LOGW("cannot find PBO for", model_path);
             models_failed++;
             continue;
         }
@@ -1292,7 +1292,7 @@ void extract_models(ProjectInfo& p) {
         if (extract_pbo_entry(rr.pbo_path, rr.entry_name, dest)) {
             models_extracted++;
         } else {
-            armatools::cli::log_warning("failed to extract", model_path);
+            LOGW("failed to extract", model_path);
             models_failed++;
         }
 
@@ -1304,7 +1304,7 @@ void extract_models(ProjectInfo& p) {
         }
     }
     if (!models.empty())
-        armatools::cli::log_plain(std::format("\rExtracting models: {}/{} (skipped {} existing, {} failed)",
+        LOGI(std::format("\rExtracting models: {}/{} (skipped {} existing, {} failed)",
                                           models_extracted + models_skipped, models.size(),
                                           models_skipped, models_failed));
 
@@ -1344,7 +1344,7 @@ void extract_models(ProjectInfo& p) {
         }
     }
     if (!textures.empty())
-        armatools::cli::log_plain(std::format("\rExtracting textures: {}/{} (skipped {} existing, {} failed)",
+        LOGI(std::format("\rExtracting textures: {}/{} (skipped {} existing, {} failed)",
                                           textures_extracted + textures_skipped, textures.size(),
                                           textures_skipped, textures_failed));
 }

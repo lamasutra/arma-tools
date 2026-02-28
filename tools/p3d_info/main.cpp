@@ -171,7 +171,7 @@ static json build_json(const armatools::p3d::P3DFile& model, const std::string& 
 
     auto result = armatools::p3d::calculate_size(model);
     if (!result.warning.empty()) {
-        armatools::cli::log_warning(result.warning);
+        LOGW(result.warning);
     }
     if (result.info) {
         const auto& si = *result.info;
@@ -419,7 +419,7 @@ int main(int argc, char* argv[]) {
         else if ((std::strcmp(argv[i], "--rvmat") == 0 || std::strcmp(argv[i], "--materials") == 0 ||
                   std::strcmp(argv[i], "--db") == 0 || std::strcmp(argv[i], "--drive-root") == 0) &&
                  i + 1 >= argc) {
-            armatools::cli::log_error("missing value for", argv[i]);
+            LOGE("missing value for", argv[i]);
             return 1;
         } else if (std::strcmp(argv[i], "--rvmat") == 0) {
             rvmat_input = argv[++i];
@@ -444,7 +444,7 @@ int main(int argc, char* argv[]) {
     armatools::cli::set_verbosity(verbosity);
 
     if (!rvmat_input.empty() && !materials_model.empty()) {
-        armatools::cli::log_error("--rvmat and --materials cannot be used together");
+        LOGE("--rvmat and --materials cannot be used together");
         return 1;
     }
 
@@ -455,7 +455,7 @@ int main(int argc, char* argv[]) {
             db = std::make_shared<armatools::pboindex::DB>(armatools::pboindex::DB::open(db_path));
             index = std::make_shared<armatools::pboindex::Index>(db->index());
         } catch (const std::exception& e) {
-            armatools::cli::log_error("opening --db", db_path, e.what());
+            LOGE("opening --db", db_path, e.what());
             return 1;
         }
     }
@@ -467,13 +467,13 @@ int main(int argc, char* argv[]) {
             auto path = fs::path(rvmat_input);
             if (fs::exists(path)) {
                 if (!try_parse_rvmat_file(path, mat)) {
-                    armatools::cli::log_error("parsing", rvmat_input, mat.error);
+                    LOGE("parsing", rvmat_input, mat.error);
                     return 1;
                 }
             } else {
                 mat = resolve_rvmat(rvmat_input, "", index, db, drive_root);
                 if (!mat.loaded) {
-                    armatools::cli::log_error("resolving", rvmat_input, mat.error);
+                    LOGE("resolving", rvmat_input, mat.error);
                     return 1;
                 }
             }
@@ -489,7 +489,7 @@ int main(int argc, char* argv[]) {
             write_json(std::cout, doc, pretty);
             return 0;
         } catch (const std::exception& e) {
-            armatools::cli::log_error("rvmat parse failed:", e.what());
+            LOGE("rvmat parse failed:", e.what());
             return 1;
         }
     }
@@ -540,7 +540,7 @@ int main(int argc, char* argv[]) {
             write_json(std::cout, doc, pretty);
             return 0;
         } catch (const std::exception& e) {
-            armatools::cli::log_error("materials failed:", e.what());
+            LOGE("materials failed:", e.what());
             return 1;
         }
     }
@@ -557,19 +557,19 @@ int main(int argc, char* argv[]) {
         stdin_stream = std::istringstream(buf.str());
         input = &stdin_stream;
         filename = "stdin";
-        armatools::cli::log_verbose("Reading from stdin");
+        LOGI("Reading from stdin");
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
-            armatools::cli::log_error("cannot open", positional[0]);
+            LOGE("cannot open", positional[0]);
             return 1;
         }
         input = &file_stream;
         filename = fs::path(positional[0]).filename().string();
-        armatools::cli::log_verbose("Reading", positional[0]);
+        LOGI("Reading", positional[0]);
         if (armatools::cli::debug_enabled()) {
             try {
-                armatools::cli::log_debug("Size (bytes):", fs::file_size(positional[0]));
+                LOGD("Size (bytes):", fs::file_size(positional[0]));
             } catch (const std::exception&) {
                 // ignore missing file size
             }
@@ -580,7 +580,7 @@ int main(int argc, char* argv[]) {
     try {
         model = armatools::p3d::read(*input);
     } catch (const std::exception& e) {
-        armatools::cli::log_error("parsing", filename, e.what());
+        LOGE("parsing", filename, e.what());
         return 1;
     }
 
@@ -592,47 +592,46 @@ int main(int argc, char* argv[]) {
         } else {
             std::string base = fs::path(positional[0]).stem().string();
             fs::path output_dir = fs::path(positional[0]).parent_path() / (base + "_p3d_info");
-            armatools::cli::log_verbose("Writing to", output_dir.string());
+            LOGI("Writing to", output_dir.string());
             fs::create_directories(output_dir);
             std::ofstream jf(output_dir / "p3d.json");
             if (!jf) throw std::runtime_error("failed to create p3d.json");
             write_json(jf, doc, pretty);
-            armatools::cli::log_plain("Output:", output_dir.string());
+            LOGI("Output:", output_dir.string());
         }
     } catch (const std::exception& e) {
-        armatools::cli::log_error("writing output:", e.what());
+        LOGE("writing output:", e.what());
         return 1;
     }
 
     if (armatools::cli::verbose_enabled()) {
-        armatools::cli::log_verbose("LOD count:", model.lods.size(), "Textures:", doc["textures"].size());
+        LOGI("LOD count:", model.lods.size(), "Textures:", doc["textures"].size());
     }
     if (armatools::cli::debug_enabled()) {
         size_t limit = std::min<size_t>(model.lods.size(), 3);
         for (size_t i = 0; i < limit; ++i) {
-            const auto& lod = model.lods[i];
-            armatools::cli::log_debug("LOD", lod.index, "resolution", lod.resolution,
-                                      "verts", lod.vertex_count, "faces", lod.face_count);
+            LOGD("LOD", model.lods[i].index, "resolution", model.lods[i].resolution,
+                 "verts", model.lods[i].vertex_count, "faces", model.lods[i].face_count);
         }
-        armatools::cli::log_debug("Total textures tracked", doc["textures"].size());
+        LOGD("Total textures tracked", doc["textures"].size());
     }
 
     std::string version = version_string(model.format, model.version);
-    armatools::cli::log_plain("P3D:", filename, "(", version, ")");
+    LOGI("P3D:", filename, "(", version, ")");
 
     std::string lod_names;
     for (size_t i = 0; i < model.lods.size(); i++) {
         if (i > 0) lod_names += ", ";
         lod_names += model.lods[i].resolution_name;
     }
-    armatools::cli::log_plain("LODs:", model.lods.size(), "(", lod_names, ")");
-    armatools::cli::log_plain("Textures:", doc["textures"].size(), "unique");
+    LOGI("LODs:", model.lods.size(), "(", lod_names, ")");
+    LOGI("Textures:", doc["textures"].size(), "unique");
     if (!model.lods.empty()) {
-        armatools::cli::log_plain("Vertices:", model.lods[0].vertex_count, "(LOD 0)");
+        LOGI("Vertices:", model.lods[0].vertex_count, "(LOD 0)");
     }
     if (doc.contains("size")) {
         auto& d = doc["size"]["dimensions"];
-        armatools::cli::log_plain("Size:", d[0].get<float>(), "x", d[1].get<float>(), "x", d[2].get<float>(),
+        LOGI("Size:", d[0].get<float>(), "x", d[1].get<float>(), "x", d[2].get<float>(),
                                   "m (from", doc["size"]["source"].get<std::string>() + ")");
     }
 

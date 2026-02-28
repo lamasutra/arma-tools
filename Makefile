@@ -55,17 +55,17 @@ run: gui
 package:
 	cmake --preset linux-package
 	cmake --build $(BUILD_PACKAGE) -j$$(nproc)
-	cd $(BUILD_PACKAGE) && cpack
+	cd $(BUILD_PACKAGE) && CPACK_THREADS=0 cpack
 
 package-regular:
 	cmake -S . -B $(BUILD_PACKAGE_REGULAR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_GUI=ON -DWRP2PROJECT_WITH_TV4L=OFF
 	cmake --build $(BUILD_PACKAGE_REGULAR) -j$$(nproc)
-	cd $(BUILD_PACKAGE_REGULAR) && cpack
+	cd $(BUILD_PACKAGE_REGULAR) && CPACK_THREADS=0 cpack
 
 package-creator:
 	cmake -S . -B $(BUILD_PACKAGE_CREATOR) -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_GUI=ON -DWRP2PROJECT_WITH_TV4L=ON
 	cmake --build $(BUILD_PACKAGE_CREATOR) -j$$(nproc)
-	cd $(BUILD_PACKAGE_CREATOR) && cpack
+	cd $(BUILD_PACKAGE_CREATOR) && CPACK_THREADS=0 cpack
 
 package-windows-preflight:
 	@if [ "$(WINDOWS_USE_DOCKER)" = "ON" ]; then \
@@ -246,7 +246,7 @@ package-windows-installer: package-windows-configure
 							exit 1; \
 						fi; \
 						cmake --build $(BUILD_PACKAGE_WINDOWS_DOCKER) -j\$$(nproc); \
-						cd $(BUILD_PACKAGE_WINDOWS_DOCKER) && cpack -G NSIS"; \
+						cd $(BUILD_PACKAGE_WINDOWS_DOCKER) && CPACK_THREADS=0 cpack -G NSIS"; \
 		exit $$?; \
 	fi
 	@if [ "$(WINDOWS_USE_DOCKER)" != "ON" ]; then \
@@ -255,7 +255,7 @@ package-windows-installer: package-windows-configure
 			exit 1; \
 		fi; \
 		cmake --build $(BUILD_PACKAGE_WINDOWS) -j$$(nproc); \
-		cd $(BUILD_PACKAGE_WINDOWS) && cpack -G NSIS; \
+		cd $(BUILD_PACKAGE_WINDOWS) && CPACK_THREADS=0 cpack -G NSIS; \
 	fi
 
 package-windows-zip: package-windows-configure
@@ -292,12 +292,12 @@ package-windows-zip: package-windows-configure
 							exit 1; \
 						fi; \
 						cmake --build $(BUILD_PACKAGE_WINDOWS_DOCKER) -j\$$(nproc); \
-						cd $(BUILD_PACKAGE_WINDOWS_DOCKER) && cpack -G ZIP"; \
+						cd $(BUILD_PACKAGE_WINDOWS_DOCKER) && CPACK_THREADS=0 cpack -G ZIP"; \
 			exit $$?; \
 	fi
 	@if [ "$(WINDOWS_USE_DOCKER)" != "ON" ]; then \
 		cmake --build $(BUILD_PACKAGE_WINDOWS) -j$$(nproc); \
-		cd $(BUILD_PACKAGE_WINDOWS) && cpack -G ZIP; \
+		cd $(BUILD_PACKAGE_WINDOWS) && CPACK_THREADS=0 cpack -G ZIP; \
 	fi
 # --- Clean ---
 

@@ -818,7 +818,7 @@ int main(int argc, char* argv[]) {
             if (mode == "strict") cfg.mode = Mode::Strict;
             else if (mode == "visual-upgrade") cfg.mode = Mode::VisualUpgrade;
             else {
-                armatools::cli::log_error("invalid --mode", mode);
+                LOGE("invalid --mode", mode);
                 return 1;
             }
         } else if (std::strcmp(argv[i], "--recompute-normals") == 0 && i + 1 < argc) {
@@ -827,7 +827,7 @@ int main(int argc, char* argv[]) {
             else if (mode == "if_missing") cfg.recompute_normals = RecomputeNormals::IfMissing;
             else if (mode == "always") cfg.recompute_normals = RecomputeNormals::Always;
             else {
-                armatools::cli::log_error("invalid --recompute-normals", mode);
+                LOGE("invalid --recompute-normals", mode);
                 return 1;
             }
         } else if (std::strcmp(argv[i], "--deterministic") == 0) {
@@ -855,12 +855,12 @@ int main(int argc, char* argv[]) {
     armatools::cli::set_verbosity(verbosity);
 
     if (positional.size() != 1) {
-        armatools::cli::log_error("expected one input IR path");
+        LOGE("expected one input IR path");
         print_usage();
         return 1;
     }
     if (!cfg.output_path.has_value()) {
-        armatools::cli::log_error("missing required -o/--output");
+        LOGE("missing required -o/--output");
         return 1;
     }
 
@@ -873,7 +873,7 @@ int main(int argc, char* argv[]) {
     auto model = load_ir_model(input_path, cfg, report, ec);
     if (!model || !ec.ok()) {
         for (const auto& err : ec.errors) {
-            armatools::cli::log_error(err);
+            LOGE(err);
         }
         return 1;
     }
@@ -883,7 +883,7 @@ int main(int argc, char* argv[]) {
             std::error_code out_ec;
             fs::create_directories(output_path.parent_path(), out_ec);
             if (out_ec) {
-                armatools::cli::log_error("cannot create output directory", out_ec.message());
+                LOGE("cannot create output directory", out_ec.message());
                 return 1;
             }
         }
@@ -898,7 +898,7 @@ int main(int argc, char* argv[]) {
         }
 
         for (const auto& warn : report.warnings) {
-            armatools::cli::log_warning(warn);
+            LOGW(warn);
         }
 
         if (cfg.report_path.has_value()) {
@@ -906,7 +906,7 @@ int main(int argc, char* argv[]) {
                 std::error_code rep_ec;
                 fs::create_directories(cfg.report_path->parent_path(), rep_ec);
                 if (rep_ec) {
-                    armatools::cli::log_error("cannot create report directory", rep_ec.message());
+                    LOGE("cannot create report directory", rep_ec.message());
                     return 1;
                 }
             }
@@ -914,14 +914,14 @@ int main(int argc, char* argv[]) {
             auto rep_json = build_report_json(report, cfg, input_path, output_path);
             std::ofstream rep_out(*cfg.report_path);
             if (!rep_out.is_open()) {
-                armatools::cli::log_error("cannot write report", cfg.report_path->string());
+                LOGE("cannot write report", cfg.report_path->string());
                 return 1;
             }
             rep_out << std::setw(2) << rep_json << '\n';
             armatools::cli::log_stdout("report", cfg.report_path->string());
         }
     } catch (const std::exception& e) {
-        armatools::cli::log_error("export failed:", e.what());
+        LOGE("export failed:", e.what());
         return 1;
     }
 

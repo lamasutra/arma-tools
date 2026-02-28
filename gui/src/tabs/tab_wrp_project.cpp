@@ -1,5 +1,6 @@
 #include "tab_wrp_project.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
 
 #include <armatools/armapath.h>
@@ -308,9 +309,9 @@ void TabWrpProject::on_folder_browse() {
                     on_scan();
                 }
             } catch (const std::exception& e) {
-                app_log(LogLevel::Warning, "WrpProject: folder dialog failed: " + std::string(e.what()));
+                LOGW("WrpProject: folder dialog failed: " + std::string(e.what()));
             } catch (...) {
-                app_log(LogLevel::Warning, "WrpProject: folder dialog failed");
+                LOGW("WrpProject: folder dialog failed");
             }
         });
 }
@@ -375,7 +376,7 @@ void TabWrpProject::on_scan() {
             if (gen != scan_generation_.load()) return;
             if (!err.empty()) {
                 status_label_.set_text("Scan failed: " + err);
-                app_log(LogLevel::Warning, "WrpProject scan failed: " + err);
+                LOGW("WrpProject scan failed: " + err);
                 return;
             }
             wrp_files_ = std::move(files);

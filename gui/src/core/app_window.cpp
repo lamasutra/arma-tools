@@ -269,7 +269,7 @@ bool AppWindow::ensure_imgui_overlay_instance() {
         return false;
     }
     if (!ui_state.registry_owner) {
-        app_log(LogLevel::Warning, "Cannot create imgui overlay instance: UI registry unavailable");
+        LOGW("Cannot create imgui overlay instance: UI registry unavailable");
         return false;
     }
 
@@ -277,8 +277,7 @@ bool AppWindow::ensure_imgui_overlay_instance() {
     if (!renderer_state.ui_render_bridge ||
         !renderer_state.ui_render_bridge->info().available ||
         !renderer_state.ui_render_bridge->bridge_abi()) {
-        app_log(LogLevel::Warning,
-                "Cannot create imgui overlay instance: renderer UI bridge unavailable");
+        LOGW(                "Cannot create imgui overlay instance: renderer UI bridge unavailable");
         return false;
     }
 
@@ -292,14 +291,13 @@ bool AppWindow::ensure_imgui_overlay_instance() {
     std::string create_error;
     if (!ui_state.registry_owner->create_instance("imgui", create_desc,
                                                   *overlay_instance, create_error)) {
-        app_log(LogLevel::Warning,
-                "Cannot create imgui overlay instance: " + create_error);
+        LOGW(                "Cannot create imgui overlay instance: " + create_error);
         return false;
     }
 
     ui_state.overlay_backend_instance = std::move(overlay_instance);
     ui_state.overlay_backend_id = "imgui";
-    app_log(LogLevel::Info, "Created imgui overlay instance at runtime");
+    LOGI("Created imgui overlay instance at runtime");
     return true;
 }
 
@@ -321,15 +319,14 @@ void AppWindow::toggle_ui_overlay() {
     }
 
     if (!overlay_target) {
-        app_log(LogLevel::Warning, "UI overlay toggle ignored: no active UI backend instance");
+        LOGW("UI overlay toggle ignored: no active UI backend instance");
         return;
     }
 
     const bool enabled = overlay_target->overlay_enabled();
     const int status = overlay_target->set_overlay_enabled(!enabled);
     if (status < 0) {
-        app_log(LogLevel::Warning,
-                "UI overlay toggle failed for backend '" +
+        LOGW(                "UI overlay toggle failed for backend '" +
                     overlay_target->backend_id() + "' (status " +
                     std::to_string(status) + ")");
         return;
@@ -337,8 +334,7 @@ void AppWindow::toggle_ui_overlay() {
 
     const bool now_enabled = overlay_target->overlay_enabled();
     update_status(std::string("UI overlay ") + (now_enabled ? "enabled" : "disabled"));
-    app_log(LogLevel::Info,
-            "UI overlay " + std::string(now_enabled ? "enabled" : "disabled") +
+    LOGI(            "UI overlay " + std::string(now_enabled ? "enabled" : "disabled") +
                 " for backend '" + overlay_target->backend_id() + "'");
 }
 
@@ -356,8 +352,7 @@ bool AppWindow::dispatch_ui_event(const ui_event_v1& event) {
         if (!instance || !instance->valid()) return UI_STATUS_OK;
         const int status = instance->handle_event(&event);
         if (status < 0) {
-            app_log(LogLevel::Warning,
-                    "UI event dispatch failed for backend '" +
+            LOGW(                    "UI event dispatch failed for backend '" +
                         instance->backend_id() +
                         "' (status " + std::to_string(status) + ")");
         }
@@ -407,8 +402,7 @@ bool AppWindow::on_ui_tick() {
         const int draw_status = instance->draw();
         const int end_status = instance->end_frame();
         if (begin_status < 0 || draw_status < 0 || end_status < 0) {
-            app_log(LogLevel::Warning,
-                    "UI backend frame error (" + instance->backend_id() +
+            LOGW(                    "UI backend frame error (" + instance->backend_id() +
                         "): begin=" + std::to_string(begin_status) +
                         " draw=" + std::to_string(draw_status) +
                         " end=" + std::to_string(end_status));
@@ -428,7 +422,7 @@ bool AppWindow::on_ui_tick() {
 void AppWindow::reload_config() {
     cfg_ = load_config();
     layout_cfg_ = load_layout_config();
-    armatools::cli::log_verbose("Configuration reloaded from {}", config_path());
+    LOGI("Configuration reloaded from {}", config_path());
     tab_config_presenter_.apply_to_initialized(&cfg_);
     update_status("Configuration reloaded");
 }
@@ -570,7 +564,7 @@ void AppWindow::restore_layout() {
     GVariant* variant = g_variant_parse(nullptr, layout_cfg_.panels.c_str(),
                                          nullptr, nullptr, &error);
     if (!variant) {
-        app_log(LogLevel::Warning, std::string("Failed to parse saved layout: ") +
+        LOGW(std::string("Failed to parse saved layout: ") +
                 (error ? error->message : "unknown error"));
         if (error) g_error_free(error);
         apply_default_layout();
@@ -580,7 +574,7 @@ void AppWindow::restore_layout() {
     auto* session = panel_session_new_from_variant(variant, &error);
     g_variant_unref(variant);
     if (!session) {
-        app_log(LogLevel::Warning, std::string("Failed to restore session: ") +
+        LOGW(std::string("Failed to restore session: ") +
                 (error ? error->message : "unknown error"));
         if (error) g_error_free(error);
         apply_default_layout();
@@ -690,7 +684,7 @@ void AppWindow::on_reset_layout() {
     // Reveal the bottom area for the log panel
     panel_dock_set_reveal_bottom(dock_, TRUE);
 
-    app_log(LogLevel::Info, "Layout reset to default");
+    LOGI("Layout reset to default");
 }
 
 static void detach_panels_from_dock(PanelDock* dock) {
@@ -1000,15 +994,13 @@ AppWindow::AppWindow(GtkApplication* app) {
                                        });
                 if (it == state.backends.end()) {
                     self->update_status("Cannot select UI backend '" + requested + "': unknown id");
-                    app_log(LogLevel::Warning,
-                            "Cannot select UI backend '" + requested + "': unknown id");
+                    LOGW(                            "Cannot select UI backend '" + requested + "': unknown id");
                     return;
                 }
                 if (!it->probe.available) {
                     self->update_status(
                         "Cannot select UI backend '" + requested + "': unavailable");
-                    app_log(LogLevel::Warning,
-                            "Cannot select UI backend '" + requested + "': unavailable (" +
+                    LOGW(                            "Cannot select UI backend '" + requested + "': unavailable (" +
                                 (it->probe.reason.empty() ? std::string("-") : it->probe.reason) + ")");
                     return;
                 }
@@ -1017,16 +1009,14 @@ AppWindow::AppWindow(GtkApplication* app) {
             auto cfg = ui_domain::load_runtime_config();
             cfg.preferred = requested;
             if (!ui_domain::save_runtime_config(cfg)) {
-                app_log(LogLevel::Warning,
-                        "Failed to persist UI backend preference to " +
+                LOGW(                        "Failed to persist UI backend preference to " +
                             ui_domain::runtime_config_path().string());
                 return;
             }
 
             g_simple_action_set_state(action, g_variant_new_string(requested.c_str()));
             self->update_status("UI backend preference saved: " + requested);
-            app_log(LogLevel::Info,
-                    "UI backend preference set to '" + requested +
+            LOGI(                    "UI backend preference set to '" + requested +
                         "' (restart required)");
         }),
         this, nullptr, GConnectFlags(0));
@@ -1063,8 +1053,7 @@ AppWindow::AppWindow(GtkApplication* app) {
             auto cfg = ui_domain::load_runtime_config();
             cfg.imgui_overlay_enabled = enabled;
             if (!ui_domain::save_runtime_config(cfg)) {
-                app_log(LogLevel::Warning,
-                        "Failed to persist ImGui overlay preference to " +
+                LOGW(                        "Failed to persist ImGui overlay preference to " +
                             ui_domain::runtime_config_path().string());
                 return;
             }
@@ -1085,19 +1074,16 @@ AppWindow::AppWindow(GtkApplication* app) {
             if (target) {
                 const int status = target->set_overlay_enabled(enabled);
                 if (status < 0) {
-                    app_log(LogLevel::Warning,
-                            "Failed to apply runtime ImGui overlay state for backend '" +
+                    LOGW(                            "Failed to apply runtime ImGui overlay state for backend '" +
                                 target->backend_id() + "' (status " + std::to_string(status) + ")");
                 }
             } else if (enabled) {
-                app_log(LogLevel::Info,
-                        "ImGui overlay preference enabled, but no active imgui overlay instance");
+                LOGI(                        "ImGui overlay preference enabled, but no active imgui overlay instance");
             }
 
             self->update_status(
                 std::string("ImGui overlay default ") + (enabled ? "enabled" : "disabled"));
-            app_log(LogLevel::Info,
-                    "ImGui overlay preference set to " +
+            LOGI(                    "ImGui overlay preference set to " +
                         std::string(enabled ? "enabled" : "disabled"));
         }),
         this, nullptr, GConnectFlags(0));
@@ -1120,7 +1106,7 @@ AppWindow::AppWindow(GtkApplication* app) {
             const double requested_raw = g_variant_get_double(parameter);
             if (!std::isfinite(requested_raw) || requested_raw <= 0.0) {
                 self->update_status("UI scale change ignored: invalid value");
-                app_log(LogLevel::Warning, "Ignoring invalid UI scale request");
+                LOGW("Ignoring invalid UI scale request");
                 return;
             }
             const float requested = static_cast<float>(requested_raw);
@@ -1129,8 +1115,7 @@ AppWindow::AppWindow(GtkApplication* app) {
             cfg.scale = requested;
             if (!ui_domain::save_runtime_config(cfg)) {
                 self->update_status("Failed to persist UI scale preference");
-                app_log(LogLevel::Warning,
-                        "Failed to persist UI scale preference to " +
+                LOGW(                        "Failed to persist UI scale preference to " +
                             ui_domain::runtime_config_path().string());
                 return;
             }
@@ -1141,8 +1126,7 @@ AppWindow::AppWindow(GtkApplication* app) {
 
             const int pct = static_cast<int>(std::lround(requested_raw * 100.0));
             self->update_status("UI scale set to " + std::to_string(pct) + "%");
-            app_log(LogLevel::Info,
-                    "UI scale preference set to " + std::to_string(pct) + "%");
+            LOGI(                    "UI scale preference set to " + std::to_string(pct) + "%");
         }),
         this, nullptr, GConnectFlags(0));
     g_action_map_add_action(G_ACTION_MAP(action_group), G_ACTION(ui_scale_action));
@@ -1197,20 +1181,17 @@ AppWindow::AppWindow(GtkApplication* app) {
         }
     });
 
-    app_log(LogLevel::Info, "Application started");
-    app_log(LogLevel::Info, "Configuration loaded from " + config_path());
+    LOGI("Application started");
+    LOGI("Configuration loaded from " + config_path());
     const auto& renderer_state = render_domain::runtime_state();
     if (renderer_state.selection.success) {
-        app_log(LogLevel::Info,
-                "Renderer selected: " + renderer_state.selection.selected_backend +
+        LOGI(                "Renderer selected: " + renderer_state.selection.selected_backend +
                 " (" + renderer_state.selection.message + ")");
     } else if (!renderer_state.selection.message.empty()) {
-        app_log(LogLevel::Warning,
-                "Renderer selection failed: " + renderer_state.selection.message);
+        LOGW(                "Renderer selection failed: " + renderer_state.selection.message);
     }
     for (const auto& backend : renderer_state.backends) {
-        app_log(LogLevel::Info,
-                "Renderer backend " + backend.id +
+        LOGI(                "Renderer backend " + backend.id +
                 " | available=" + (backend.probe.available ? "yes" : "no") +
                 " | score=" + std::to_string(backend.probe.score) +
                 " | source=" + backend.source +
@@ -1219,16 +1200,13 @@ AppWindow::AppWindow(GtkApplication* app) {
                                     : backend.probe.reason));
     }
     if (ui_state.selection.success) {
-        app_log(LogLevel::Info,
-                "UI backend selected: " + ui_state.selection.selected_backend +
+        LOGI(                "UI backend selected: " + ui_state.selection.selected_backend +
                 " (" + ui_state.selection.message + ")");
     } else if (!ui_state.selection.message.empty()) {
-        app_log(LogLevel::Warning,
-                "UI backend selection failed: " + ui_state.selection.message);
+        LOGW(                "UI backend selection failed: " + ui_state.selection.message);
     }
     for (const auto& backend : ui_state.backends) {
-        app_log(LogLevel::Info,
-                "UI backend " + backend.id +
+        LOGI(                "UI backend " + backend.id +
                 " | available=" + (backend.probe.available ? "yes" : "no") +
                 " | score=" + std::to_string(backend.probe.score) +
                 " | source=" + backend.source +

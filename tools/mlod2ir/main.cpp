@@ -531,13 +531,13 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--object-type") == 0) {
             if (i + 1 >= argc) {
-                armatools::cli::log_error("missing value for --object-type");
+                LOGE("missing value for --object-type");
                 return 1;
             }
             object_type = to_upper_ascii(argv[++i]);
         } else if (std::strcmp(argv[i], "--output") == 0) {
             if (i + 1 >= argc) {
-                armatools::cli::log_error("missing value for --output");
+                LOGE("missing value for --output");
                 return 1;
             }
             output_path = argv[++i];
@@ -594,8 +594,8 @@ int main(int argc, char* argv[]) {
 
     const auto spec_it = specs.find(object_type);
     if (spec_it == specs.end()) {
-        armatools::cli::log_error("unknown --object-type", object_type);
-        armatools::cli::log_error("use --list-object-types to inspect valid IDs");
+        LOGE("unknown --object-type", object_type);
+        LOGE("use --list-object-types to inspect valid IDs");
         return 1;
     }
     const auto& spec = spec_it->second;
@@ -617,13 +617,13 @@ int main(int argc, char* argv[]) {
         } else {
             std::ifstream f(input, std::ios::binary);
             if (!f.is_open()) {
-                armatools::cli::log_error("cannot open input", input);
+                LOGE("cannot open input", input);
                 return 1;
             }
             model = armatools::p3d::read(f);
         }
     } catch (const std::exception& e) {
-        armatools::cli::log_error("parse failed:", e.what());
+        LOGE("parse failed:", e.what());
         return 1;
     }
 
@@ -969,7 +969,7 @@ int main(int argc, char* argv[]) {
             out_path = fs::path(output_path);
         } else {
             if (input == "-") {
-                armatools::cli::log_error("stdin input requires --json or --output");
+                LOGE("stdin input requires --json or --output");
                 return 1;
             }
             fs::path in_path(input);
@@ -981,13 +981,13 @@ int main(int argc, char* argv[]) {
         std::error_code ec;
         fs::create_directories(out_path.parent_path(), ec);
         if (ec) {
-            armatools::cli::log_error("cannot create output directory", out_path.parent_path().string(), ec.message());
+            LOGE("cannot create output directory", out_path.parent_path().string(), ec.message());
             return 1;
         }
 
         std::ofstream f(out_path);
         if (!f.is_open()) {
-            armatools::cli::log_error("cannot write output", out_path.string());
+            LOGE("cannot write output", out_path.string());
             return 1;
         }
 

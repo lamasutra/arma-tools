@@ -237,7 +237,7 @@ void ModelViewPanel::load_p3d(const std::string& model_path) {
     clear();
     if (model_path.empty()) return;
     if (!model_loader_shared_) {
-        armatools::cli::log_warning("Model loader service not configured");
+        LOGW("Model loader service not configured");
         return;
     }
 
@@ -347,7 +347,7 @@ bool ModelViewPanel::on_load_poll() {
         }
         if (!result.error.empty()) {
             set_info_line("Error: " + result.error);
-            armatools::cli::log_error("Error loading P3D `" + result.model_path + "`: " + result.error);
+            LOGE("Error loading P3D `" + result.model_path + "`: " + result.error);
             set_loading_state(false);
             continue;
         }
@@ -398,9 +398,9 @@ void ModelViewPanel::setup_bg_color_popover() {
 }
 
 void ModelViewPanel::setup_lods_menu() {
-    armatools::cli::log_debug("Setting up LODs menu");
+    LOGD("Setting up LODs menu");
     if (!p3d_file_) {
-        armatools::cli::log_warning("No p3d file yet");
+        LOGW("No p3d file yet");
         return;
     }
 
@@ -423,7 +423,7 @@ void ModelViewPanel::setup_lods_menu() {
         });
         lods_box_.append(*check);
     }
-    armatools::cli::log_debug("Setting up LODs done");
+    LOGD("Setting up LODs done");
 }
 
 void ModelViewPanel::load_textures_for_lod(const armatools::p3d::LOD& lod,
@@ -542,11 +542,10 @@ void ModelViewPanel::on_screenshot() {
                 if (file) {
                     auto path = file->get_path();
                     pixbuf->save(path, "png");
-                    app_log(LogLevel::Info, "Saved screenshot: " + path);
+                    LOGI("Saved screenshot: " + path);
                 }
             } catch (const std::exception& e) {
-                app_log(LogLevel::Error,
-                        std::string("Screenshot save error: ") + e.what());
+                LOGE(                        std::string("Screenshot save error: ") + e.what());
             } catch (...) {}
         });
 }
@@ -580,7 +579,7 @@ void ModelViewPanel::setup_named_selections_menu() {
 
 void ModelViewPanel::update_named_selection_highlight() {
     const auto highlight = presenter_.build_highlight_geometry();
-    armatools::cli::log_debug(highlight.debug_message);
+    LOGD(highlight.debug_message);
     gl_view_.set_highlight_geometry(
         highlight.positions,
         to_gl_highlight_mode(highlight.mode));

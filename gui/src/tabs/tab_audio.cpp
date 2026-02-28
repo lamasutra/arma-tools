@@ -1,18 +1,31 @@
 #include "tab_audio.h"
+#include "cli_logger.h"
 #include "audio_draw_util.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/ogg.h>
+#include "cli_logger.h"
 #include <armatools/wss.h>
+#include "cli_logger.h"
 #include <armatools/pboindex.h>
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <cmath>
+#include "cli_logger.h"
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <iomanip>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -249,7 +262,7 @@ void TabAudio::load_audio(const std::string& path) {
         on_loaded(info);
     } catch (const std::exception& e) {
         info_label_.set_text(std::string("Error: ") + e.what());
-        app_log(LogLevel::Error, std::string("Audio decode failed: ") + e.what());
+        LOGE(std::string("Audio decode failed: ") + e.what());
         play_button_.set_sensitive(false);
     }
 }
@@ -288,7 +301,7 @@ void TabAudio::load_audio_from_memory(const uint8_t* data, size_t size,
         on_loaded(info);
     } catch (const std::exception& e) {
         info_label_.set_text(std::string("Error: ") + e.what());
-        app_log(LogLevel::Error, std::string("Audio decode failed: ") + e.what());
+        LOGE(std::string("Audio decode failed: ") + e.what());
         play_button_.set_sensitive(false);
     }
 }
@@ -647,11 +660,11 @@ void TabAudio::on_save_wav() {
                 }
 
                 out.close();
-                app_log(LogLevel::Info, "Saved WAV: " + out_path);
+                LOGI("Saved WAV: " + out_path);
 
             } catch (const std::exception& e) {
                 info_label_.set_text(std::string("Save error: ") + e.what());
-                app_log(LogLevel::Error, std::string("WAV save failed: ") + e.what());
+                LOGE(std::string("WAV save failed: ") + e.what());
             } catch (...) {}
         });
 }
@@ -878,7 +891,7 @@ void TabAudio::load_from_pbo(const armatools::pboindex::FindResult& r) {
     // Keep the PBO path for save dialog suggestions.
     current_file_path_ = r.file_path;
 
-    app_log(LogLevel::Info, "Loaded audio from PBO: " + r.prefix + "/" + r.file_path);
+    LOGI("Loaded audio from PBO: " + r.prefix + "/" + r.file_path);
 }
 
 void TabAudio::cleanup_temp_file() {

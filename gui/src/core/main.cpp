@@ -184,13 +184,13 @@ void log_ui_events(const ui_domain::RuntimeState& state) {
         const bool non_fatal_info = !event.ok &&
             event.message == "plugin directory does not exist";
         if (event.ok || non_fatal_info) {
-            armatools::cli::log_plain(
+            LOGI(
                 "[ui] source=", event.source_path,
                 " backend=", event.backend_id.empty() ? "-" : event.backend_id,
                 " status=", event.ok ? "ok" : "info",
                 " message=", event.message);
         } else {
-            armatools::cli::log_warning(
+            LOGW(
                 "[ui] source=", event.source_path,
                 " backend=", event.backend_id.empty() ? "-" : event.backend_id,
                 " status=error message=", event.message);
@@ -198,7 +198,7 @@ void log_ui_events(const ui_domain::RuntimeState& state) {
     }
 
     for (const auto& backend : state.backends) {
-        armatools::cli::log_plain(
+        LOGI(
             "[ui] detected id=", backend.id,
             " name=", backend.name,
             " available=", backend.probe.available ? "yes" : "no",
@@ -208,21 +208,21 @@ void log_ui_events(const ui_domain::RuntimeState& state) {
     }
 
     if (state.selection.success) {
-        armatools::cli::log_plain(
+        LOGI(
             "[ui] selected=", state.selection.selected_backend,
             " detail=", state.selection.message);
         if (state.backend_instance && state.backend_instance->valid()) {
-            armatools::cli::log_plain(
+            LOGI(
                 "[ui] instance=", state.backend_instance->backend_id(),
                 " overlay=", state.backend_instance->overlay_enabled() ? "on" : "off");
         }
         if (state.overlay_backend_instance && state.overlay_backend_instance->valid()) {
-            armatools::cli::log_plain(
+            LOGI(
                 "[ui] overlay-instance=", state.overlay_backend_instance->backend_id(),
                 " overlay=", state.overlay_backend_instance->overlay_enabled() ? "on" : "off");
         }
     } else {
-        armatools::cli::log_error("[ui] selection failed:", state.selection.message);
+        LOGE("[ui] selection failed:", state.selection.message);
     }
 }
 
@@ -231,13 +231,13 @@ void log_renderer_events(const render_domain::RuntimeState& state) {
         const bool non_fatal_info = !event.ok &&
             event.message == "plugin directory does not exist";
         if (event.ok || non_fatal_info) {
-            armatools::cli::log_plain(
+            LOGI(
                 "[renderer] source=", event.source_path,
                 " backend=", event.backend_id.empty() ? "-" : event.backend_id,
                 " status=", event.ok ? "ok" : "info",
                 " message=", event.message);
         } else {
-            armatools::cli::log_warning(
+            LOGW(
                 "[renderer] source=", event.source_path,
                 " backend=", event.backend_id.empty() ? "-" : event.backend_id,
                 " status=error message=", event.message);
@@ -245,7 +245,7 @@ void log_renderer_events(const render_domain::RuntimeState& state) {
     }
 
     for (const auto& backend : state.backends) {
-        armatools::cli::log_plain(
+        LOGI(
             "[renderer] detected id=", backend.id,
             " name=", backend.name,
             " available=", backend.probe.available ? "yes" : "no",
@@ -255,11 +255,11 @@ void log_renderer_events(const render_domain::RuntimeState& state) {
     }
 
     if (state.selection.success) {
-        armatools::cli::log_plain(
+        LOGI(
             "[renderer] selected=", state.selection.selected_backend,
             " detail=", state.selection.message);
     } else {
-        armatools::cli::log_error("[renderer] selection failed:", state.selection.message);
+        LOGE("[renderer] selection failed:", state.selection.message);
     }
 }
 
@@ -284,7 +284,7 @@ render_domain::RuntimeState initialize_render_domain(int* argc, char** argv) {
 
     const auto cli = render_domain::parse_renderer_override_and_strip_args(argc, argv);
     for (const auto& warning : cli.warnings) {
-        armatools::cli::log_warning("[renderer]", warning);
+        LOGW("[renderer]", warning);
     }
 
     const auto cfg = render_domain::load_runtime_config();
@@ -353,7 +353,7 @@ ui_domain::RuntimeState initialize_ui_domain(
 
     const auto cli = ui_domain::parse_ui_override_and_strip_args(argc, argv);
     for (const auto& warning : cli.warnings) {
-        armatools::cli::log_warning("[ui]", warning);
+        LOGW("[ui]", warning);
     }
 
     const auto cfg = ui_domain::load_runtime_config();
@@ -572,7 +572,7 @@ int main(int argc, char* argv[]) {
     log_renderer_events(renderer_state);
     if (renderer_state.ui_render_bridge) {
         const auto info = renderer_state.ui_render_bridge->info();
-        armatools::cli::log_plain(
+        LOGI(
             "[ui-bridge] renderer=", info.renderer_backend,
             " bridge=", info.bridge_name,
             " available=", info.available ? "yes" : "no",
@@ -602,12 +602,12 @@ int main(int argc, char* argv[]) {
         return cleanup_runtime_and_return(1);
     }
     if (ui_state.selection.selected_backend == "null") {
-        armatools::cli::log_plain("[ui] null backend selected; running headless mode");
+        LOGI("[ui] null backend selected; running headless mode");
         return cleanup_runtime_and_return(0);
     }
     if (ui_state.selection.selected_backend == "imgui" &&
         (!renderer_state.ui_render_bridge || !renderer_state.ui_render_bridge->info().available)) {
-        armatools::cli::log_warning(
+        LOGW(
             "[ui] imgui backend selected, but active renderer bridge is unavailable");
     }
 
@@ -619,7 +619,7 @@ int main(int argc, char* argv[]) {
     }
     if (!host_window_state.request_main_window &&
         ui_state.selection.selected_backend == "gtk") {
-        armatools::cli::log_warning(
+        LOGW(
             "[ui] gtk backend did not request main window startup; using compatibility fallback");
         host_window_state.request_main_window = true;
         host_window_state.request_present = true;
@@ -629,12 +629,12 @@ int main(int argc, char* argv[]) {
     if (!gtk_init_check()) {
         const bool explicit_ui = ui_state.selection.used_explicit_request;
         if (explicit_ui) {
-            armatools::cli::log_error(
+            LOGE(
                 "[ui] Failed to initialize GTK display for explicit UI backend '" +
                 ui_state.selection.selected_backend + "'");
             return cleanup_runtime_and_return(1);
         }
-        armatools::cli::log_warning(
+        LOGW(
             "[ui] Failed to initialize GTK display; falling back to headless null behavior");
         return cleanup_runtime_and_return(0);
     }
@@ -643,9 +643,9 @@ int main(int argc, char* argv[]) {
         try {
             throw;
         } catch (const std::exception& e) {
-            armatools::cli::log_error("[gui] Unhandled exception in GTK callback: " + std::string(e.what()));
+            LOGE("[gui] Unhandled exception in GTK callback: " + std::string(e.what()));
         } catch (...) {
-            armatools::cli::log_error("[gui] Unhandled non-std exception in GTK callback");
+            LOGE("[gui] Unhandled non-std exception in GTK callback");
         }
     });
     adw_init();
@@ -671,17 +671,17 @@ int main(int argc, char* argv[]) {
                     Gtk::StyleContext::add_provider_for_display(
                         display, css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
                 } else {
-                    armatools::cli::log_error("[gui] Warning: No default display found, cannot apply CSS");
+                    LOGE("[gui] Warning: No default display found, cannot apply CSS");
                 }
             } catch (const std::exception& e) {
-                armatools::cli::log_error("[gui] Failed to load style resource: " + std::string(e.what()));
+                LOGE("[gui] Failed to load style resource: " + std::string(e.what()));
             }
             try {
-                armatools::cli::log_debug("[gui] Creating AppWindow...");
+                LOGD("[gui] Creating AppWindow...");
                 window = std::make_unique<AppWindow>(app->gobj());
-                armatools::cli::log_debug("[gui] AppWindow created successfully");
+                LOGD("[gui] AppWindow created successfully");
             } catch (const std::exception& e) {
-                armatools::cli::log_error("[gui] Exception in AppWindow: " + std::string(e.what()));
+                LOGE("[gui] Exception in AppWindow: " + std::string(e.what()));
             }
         }
         if (window && host_window_state.request_present) {
@@ -693,9 +693,9 @@ int main(int argc, char* argv[]) {
     try {
         exit_code = app->run(argc, argv);
     } catch (const std::exception& e) {
-        armatools::cli::log_error("[gui] Fatal exception in main loop: " + std::string(e.what()));
+        LOGE("[gui] Fatal exception in main loop: " + std::string(e.what()));
     } catch (...) {
-        armatools::cli::log_error("[gui] Fatal non-std exception in main loop");
+        LOGE("[gui] Fatal non-std exception in main loop");
     }
 
     // Explicitly tear down runtime singletons while host callbacks/userdata are still alive.

@@ -1,18 +1,28 @@
 #include "pbo_util.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 
 #include <armatools/pbo.h>
+#include "cli_logger.h"
 #include <armatools/lzss.h>
+#include "cli_logger.h"
 #include <armatools/armapath.h>
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 
 #ifdef _WIN32
 #include <windows.h>
+#include "cli_logger.h"
 #else
 #include <sys/wait.h>
+#include "cli_logger.h"
 #include <unistd.h>
+#include "cli_logger.h"
 #endif
 
 std::vector<uint8_t> extract_from_pbo(const std::string& pbo_path,
@@ -57,7 +67,7 @@ SubprocessResult run_subprocess(const std::string& program,
     {
         std::string cmdline = program;
         for (const auto& a : args) cmdline += " " + a;
-        app_log(LogLevel::Debug, "exec: " + cmdline);
+        LOGD("exec: " + cmdline);
     }
 
 #ifdef _WIN32

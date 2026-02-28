@@ -1,6 +1,7 @@
 #include "gl_error_log.h"
 
 #include "log_panel.h"
+#include "cli_logger.h"
 
 #include <epoxy/gl.h>
 
@@ -37,8 +38,7 @@ void log_throttled_error(const std::string& scope, GLenum err) {
     if (count <= 3 || (count % 100) == 0) {
         std::ostringstream hs;
         hs << "0x" << std::hex << static_cast<unsigned>(err);
-        app_log(LogLevel::Error,
-                "OpenGL error in " + scope + ": " + gl_error_name(err)
+        LOGE(                "OpenGL error in " + scope + ": " + gl_error_name(err)
                 + " (" + hs.str() + ")"
                 + " count=" + std::to_string(count));
     }

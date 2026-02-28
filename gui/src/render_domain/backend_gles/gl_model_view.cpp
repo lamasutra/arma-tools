@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "render_domain/rd_scene_blob.h"
 #include "render_domain/rd_runtime_state.h"
 
@@ -266,13 +267,13 @@ GLModelView::~GLModelView() = default;
 void GLModelView::on_realize_gl() {
     make_current();
     if (has_error()) {
-        app_log(LogLevel::Error, "GLModelView: GL context creation failed");
+        LOGE("GLModelView: GL context creation failed");
         return;
     }
 
     is_desktop_gl_ = epoxy_is_desktop_gl();
     int ver = epoxy_gl_version();
-    app_log(LogLevel::Info, "GLModelView: using " +
+    LOGI("GLModelView: using " +
         std::string(is_desktop_gl_ ? "OpenGL" : "OpenGL ES") +
         " " + std::to_string(ver / 10) + "." + std::to_string(ver % 10));
 
@@ -389,7 +390,7 @@ uint32_t GLModelView::compile_shader(uint32_t type, const char* source) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        app_log(LogLevel::Error, std::string("GLModelView shader compile error: ") + log);
+        LOGE(std::string("GLModelView shader compile error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Shader compile error: ") + log));
     }
     return shader;
@@ -405,7 +406,7 @@ uint32_t GLModelView::link_program(uint32_t vert, uint32_t frag) {
     if (!ok) {
         char log[512];
         glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-        app_log(LogLevel::Error, std::string("GLModelView program link error: ") + log);
+        LOGE(std::string("GLModelView program link error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Program link error: ") + log));
     }
     return prog;
@@ -509,7 +510,7 @@ void GLModelView::set_scene_blob(const rd_scene_blob_v1& blob,
 
     std::string validation_error;
     if (!render_domain::validate_scene_blob_v1(blob, &validation_error)) {
-        app_log(LogLevel::Error, "GLModelView: scene blob validation failed: " + validation_error);
+        LOGE("GLModelView: scene blob validation failed: " + validation_error);
         clear_mesh_groups();
         has_geometry_ = false;
         queue_render();
@@ -714,8 +715,7 @@ void GLModelView::set_scene_blob(const rd_scene_blob_v1& blob,
 
     has_geometry_ = !groups_.empty();
     debug_group_report_pending_ = true;
-    app_log(LogLevel::Debug,
-            "GLModelView: scene blob applied | " +
+    LOGD(            "GLModelView: scene blob applied | " +
                 render_domain::summarize_scene_blob_v1(blob) +
                 " groups=" + std::to_string(groups_.size()) +
                 " textures_loaded=" + std::to_string(textures_.size()) +
@@ -982,13 +982,13 @@ void GLModelView::rebuild_highlight_vertex_buffer() {
     highlight_vertex_count_ = 0;
 
     if (highlight_geometry_.empty()) {
-        app_log(LogLevel::Debug, "Highlight buffer: empty geometry");
+        LOGD("Highlight buffer: empty geometry");
         return;
     }
 
     highlight_vertex_count_ = static_cast<int>(highlight_geometry_.size() / 3);
     if (highlight_vertex_count_ == 0) {
-        app_log(LogLevel::Debug, "Highlight buffer: geometry data has no vertices");
+        LOGD("Highlight buffer: geometry data has no vertices");
         return;
     }
 
@@ -1003,8 +1003,7 @@ void GLModelView::rebuild_highlight_vertex_buffer() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
                           reinterpret_cast<void*>(0));
     glBindVertexArray(0);
-    app_log(LogLevel::Debug,
-            "Highlight buffer rebuilt: mode=" +
+    LOGD(            "Highlight buffer rebuilt: mode=" +
             std::string(highlight_mode_ == HighlightMode::Lines ? "lines" : "points") +
             " vertices=" + std::to_string(highlight_vertex_count_));
 }
@@ -1038,7 +1037,7 @@ void GLModelView::build_matrices(float* mvp, float* normal_mat) {
     const rd_camera_blob_v1 camera = render_domain::make_camera_blob_v1(view, proj, eye);
     std::string camera_error;
     if (!render_domain::validate_camera_blob_v1(camera, &camera_error)) {
-        app_log(LogLevel::Error, "GLModelView: invalid camera blob: " + camera_error);
+        LOGE("GLModelView: invalid camera blob: " + camera_error);
         mat4_identity(mvp);
         float identity4[16];
         mat4_identity(identity4);
@@ -1076,18 +1075,14 @@ bool GLModelView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
                 if (!textures_.contains(g.texture_key)) ++missing_texture;
                 if (!material_params_.contains(g.texture_key)) ++missing_material;
                 if (logged < 8) {
-                    const bool has_tex = textures_.contains(g.texture_key);
-                    const bool has_mat = material_params_.contains(g.texture_key);
-                    app_log(LogLevel::Debug,
-                            "GLModelView: group key='" + g.texture_key
+                    LOGD("GLModelView: group key='" + g.texture_key
                             + "' verts=" + std::to_string(g.vertex_count)
-                            + " has_tex=" + std::string(has_tex ? "yes" : "no")
-                            + " has_mat=" + std::string(has_mat ? "yes" : "no"));
+                            + " has_tex=" + std::string(textures_.contains(g.texture_key) ? "yes" : "no")
+                            + " has_mat=" + std::string(material_params_.contains(g.texture_key) ? "yes" : "no"));
                     ++logged;
                 }
             }
-            app_log(LogLevel::Debug,
-                    "GLModelView: group_bind_summary groups=" + std::to_string(groups_.size())
+            LOGD(                    "GLModelView: group_bind_summary groups=" + std::to_string(groups_.size())
                     + " missing_tex=" + std::to_string(missing_texture)
                     + " missing_mat=" + std::to_string(missing_material)
                     + " empty_keys=" + std::to_string(empty_key)

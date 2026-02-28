@@ -1,20 +1,35 @@
 #include "tab_p3d_info.h"
+#include "cli_logger.h"
 #include "config.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/p3d.h>
+#include "cli_logger.h"
 #include <armatools/paa.h>
+#include "cli_logger.h"
 #include <armatools/pbo.h>
+#include "cli_logger.h"
 #include <armatools/pboindex.h>
+#include "cli_logger.h"
 #include <armatools/armapath.h>
+#include "cli_logger.h"
 
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <algorithm>
+#include "cli_logger.h"
 #include <unordered_map>
+#include "cli_logger.h"
 #include <unordered_set>
+#include "cli_logger.h"
 
 struct TabP3dInfo::ModelData {
     std::shared_ptr<armatools::p3d::P3DFile> p3d;
@@ -216,7 +231,7 @@ void TabP3dInfo::load_file(const std::string& path) {
         model_path_ = path;
         const auto& p = *model_->p3d;
 
-        app_log(LogLevel::Info, "Loaded P3D: " + path);
+        LOGI("Loaded P3D: " + path);
 
         // One-line model summary in ModelViewPanel toolbar
         std::ostringstream info;
@@ -234,7 +249,7 @@ void TabP3dInfo::load_file(const std::string& path) {
 
     } catch (const std::exception& e) {
         model_panel_.set_info_line(std::string("Error: ") + e.what());
-        app_log(LogLevel::Error, "P3D load error: " + std::string(e.what()));
+        LOGE("P3D load error: " + std::string(e.what()));
     }
 }
 
@@ -285,7 +300,7 @@ void TabP3dInfo::open_model_path(const std::string& model_path) {
         model_panel_.set_model_data(model_->p3d, model_path_);
     } catch (const std::exception& e) {
         model_panel_.set_info_line(std::string("Error: ") + e.what());
-        app_log(LogLevel::Error, "P3D load error: " + std::string(e.what()));
+        LOGE("P3D load error: " + std::string(e.what()));
     }
 }
 
@@ -466,7 +481,7 @@ void TabP3dInfo::on_texture_clicked(const std::string& texture_path) {
         if (try_decode_file(fs::path(cfg_->drive_root) / on_disk)) return;
     }
 
-    app_log(LogLevel::Warning, "Could not load texture preview: " + texture_path);
+    LOGW("Could not load texture preview: " + texture_path);
 }
 
 void TabP3dInfo::on_pbo_mode_changed() {
@@ -600,11 +615,11 @@ void TabP3dInfo::load_from_pbo(const armatools::pboindex::FindResult& r) {
 
         model_panel_.set_model_data(model_->p3d, model_path_);
 
-        app_log(LogLevel::Info, "Loaded P3D from PBO: " + model_path_);
+        LOGI("Loaded P3D from PBO: " + model_path_);
 
     } catch (const std::exception& e) {
         model_panel_.set_info_line(std::string("Error: ") + e.what());
-        app_log(LogLevel::Error, "P3D PBO load error: " + std::string(e.what()));
+        LOGE("P3D PBO load error: " + std::string(e.what()));
     }
 }
 

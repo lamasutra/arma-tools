@@ -62,6 +62,8 @@ std::string requested_backend_name(const SelectionRequest& request) {
 }  // namespace
 
 // Core selection logic used during UI domain initialization.
+SelectionResult select_backend(const BackendRegistry& registry,
+                               const SelectionRequest& request) {
     SelectionResult result;
     const auto& backends = registry.backends();
 

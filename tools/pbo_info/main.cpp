@@ -133,21 +133,21 @@ int main(int argc, char* argv[]) {
         stdin_stream = std::istringstream(buf.str());
         input = &stdin_stream;
         filename = "stdin";
-        armatools::cli::log_verbose("Reading PBO from stdin");
+        LOGI("Reading PBO from stdin");
     } else {
         file_stream.open(positional[0], std::ios::binary);
         if (!file_stream) {
-            armatools::cli::log_error("cannot open", positional[0]);
+            LOGE("cannot open", positional[0]);
             return 1;
         }
         input = &file_stream;
         filename = fs::path(positional[0]).filename().string();
-        armatools::cli::log_verbose("Reading", positional[0]);
+        LOGI("Reading", positional[0]);
         if (armatools::cli::debug_enabled()) {
             try {
-                armatools::cli::log_debug("Input size (bytes):", fs::file_size(positional[0]));
+                LOGD("Input size (bytes):", fs::file_size(positional[0]));
             } catch (const std::exception&) {
-                armatools::cli::log_debug("Input size unavailable for", positional[0]);
+                LOGD("Input size unavailable for", positional[0]);
             }
         }
     }
@@ -156,7 +156,7 @@ int main(int argc, char* argv[]) {
     try {
         p = armatools::pbo::read(*input);
     } catch (const std::exception& e) {
-        armatools::cli::log_error("parsing", filename, e.what());
+        LOGE("parsing", filename, e.what());
         return 1;
     }
 
@@ -174,21 +174,21 @@ int main(int argc, char* argv[]) {
                 std::string stem = input_path.stem().string();
                 output_dir = input_path.parent_path() / (stem + "_pbo_info");
             }
-            armatools::cli::log_verbose("Writing outputs to", output_dir.string());
+            LOGI("Writing outputs to", output_dir.string());
             write_output_files(doc, p, output_dir, pretty);
-            armatools::cli::log_plain("Output:", output_dir.string());
+            LOGI("Output:", output_dir.string());
         }
     } catch (const std::exception& e) {
-        armatools::cli::log_error("writing output:", e.what());
+        LOGE("writing output:", e.what());
         return 1;
     }
 
     if (armatools::cli::verbose_enabled()) {
-        armatools::cli::log_verbose("Total entries:", doc["totalFiles"].get<int>());
+        LOGI("Total entries:", doc["totalFiles"].get<int>());
     }
     if (armatools::cli::debug_enabled() && !p.entries.empty()) {
         const auto& first = p.entries.front();
-        armatools::cli::log_debug("First entry:", first.filename,
+        LOGD("First entry:", first.filename,
                                  "size", first.data_size, "method", first.packing_method);
     }
 
@@ -197,11 +197,11 @@ int main(int argc, char* argv[]) {
     std::string prefix_suffix;
     if (ext_it != p.extensions.end() && !ext_it->second.empty())
         prefix_suffix = " (prefix: " + ext_it->second + ")";
-    armatools::cli::log_plain("PBO:", filename + prefix_suffix);
-    armatools::cli::log_plain("Files:", doc["totalFiles"].get<int>(),
+    LOGI("PBO:", filename + prefix_suffix);
+    LOGI("Files:", doc["totalFiles"].get<int>(),
                               "Data size:", doc["totalDataSize"].get<int64_t>(),
                               "Original size:", doc["totalOriginalSize"].get<int64_t>());
-    armatools::cli::log_plain("SHA1:", doc["checksum"].get<std::string>());
+    LOGI("SHA1:", doc["checksum"].get<std::string>());
 
     return 0;
 }

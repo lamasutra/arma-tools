@@ -3,6 +3,7 @@
 #include "gl_error_log.h"
 #include "infra/gl/load_resource_text.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "p3d_model_loader.h"
 #include "render_domain/rd_runtime_state.h"
 #include "textures_loader.h"
@@ -798,7 +799,7 @@ void GLWrpTerrainView::set_world_data(const armatools::wrp::WorldData& world) {
        << " geomCell=" << cell_size_ << "m"
        << " tileCell=" << tile_cell_size_ << "m"
        << " textures=" << texture_entries_.size();
-    app_log(LogLevel::Debug, ss.str());
+    LOGD(ss.str());
 
     emit_terrain_stats();
     queue_render();
@@ -1150,7 +1151,7 @@ void GLWrpTerrainView::cleanup_texture_index_gl() {
 void GLWrpTerrainView::on_realize_gl() {
     make_current();
     if (has_error()) {
-        app_log(LogLevel::Error, "GLWrpTerrainView: GL context creation failed");
+        LOGE("GLWrpTerrainView: GL context creation failed");
         return;
     }
 
@@ -1529,7 +1530,7 @@ uint32_t GLWrpTerrainView::compile_shader(uint32_t type, const char* src) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        app_log(LogLevel::Error, std::string("GLWrpTerrainView shader compile error: ") + log);
+        LOGE(std::string("GLWrpTerrainView shader compile error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Shader compile error: ") + log));
     }
     return shader;
@@ -1545,7 +1546,7 @@ uint32_t GLWrpTerrainView::link_program(uint32_t vs, uint32_t fs) {
     if (!ok) {
         char log[512];
         glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-        app_log(LogLevel::Error, std::string("GLWrpTerrainView program link error: ") + log);
+        LOGE(std::string("GLWrpTerrainView program link error: ") + log);
         set_error(Glib::Error(GDK_GL_ERROR, 0, std::string("Program link error: ") + log));
     }
     return prog;
@@ -2169,10 +2170,9 @@ int GLWrpTerrainView::drain_ready_tile_results(int max_results) {
     for (auto& result : ready) {
         if (result.generation != tile_generation_) continue;
         result.texture.last_used_stamp = tile_cache_stamp_++;
-        if (result.texture.missing && tile_missing_logged_once_.insert(result.tile_index).second) {
-            app_log(LogLevel::Warning,
-                    "GLWrpTerrainView: missing texture for tile material index "
-                    + std::to_string(result.tile_index));
+        if (result.texture.missing) {
+            LOGW_ONCE(static_cast<uint64_t>(result.tile_index), 
+                      "GLWrpTerrainView: missing texture for tile material index " + std::to_string(result.tile_index));
         }
         tile_texture_cache_[result.tile_index] = std::move(result.texture);
         texture_cache_hits_++;
@@ -2372,11 +2372,7 @@ void GLWrpTerrainView::rebuild_tile_atlas_from_cache(const std::vector<int>& sel
     bool any_atlas = false;
     for (bool has : has_layer_atlas_) any_atlas = any_atlas || has;
     if (!any_atlas) {
-        if (!atlas_empty_logged_) {
-            app_log(LogLevel::Debug,
-                    "GLWrpTerrainView: terrain layered atlases empty (waiting for tile loads)");
-            atlas_empty_logged_ = true;
-        }
+        LOGD_RATE_LIMIT(1000, "GLWrpTerrainView: terrain layered atlases empty (waiting for tile loads)");
     } else {
         atlas_empty_logged_ = false;
     }
@@ -2893,14 +2889,14 @@ bool GLWrpTerrainView::ensure_object_model_asset(uint32_t model_id) {
     } catch (const std::exception& e) {
         if (!asset.missing_logged) {
             asset.missing_logged = true;
-            app_log(LogLevel::Warning,
-                    "GLWrpTerrainView: object model load failed: " + asset.model_name + " | " + e.what());
+            LOGW_ONCE(armatools::log::detail::fnv1a_hash(asset.model_name.c_str()), 
+                      "GLWrpTerrainView: object model load failed: " + asset.model_name + " | " + e.what());
         }
     } catch (...) {
         if (!asset.missing_logged) {
             asset.missing_logged = true;
-            app_log(LogLevel::Warning,
-                    "GLWrpTerrainView: object model load failed: " + asset.model_name);
+            LOGW_ONCE(armatools::log::detail::fnv1a_hash(asset.model_name.c_str()), 
+                      "GLWrpTerrainView: object model load failed: " + asset.model_name);
         }
     }
     asset.state = ObjectModelAsset::State::Failed;
@@ -3565,12 +3561,10 @@ void GLWrpTerrainView::pick_object_at(double x, double y) {
                 auto model = model_loader_->load_p3d(objects_[best_idx].model_name);
                 selected_built = build_selected_object_render(best_idx, model);
             } catch (const std::exception& e) {
-                app_log(LogLevel::Warning,
-                        "GLWrpTerrainView: selected object model load failed: "
+                LOGW(                        "GLWrpTerrainView: selected object model load failed: "
                         + objects_[best_idx].model_name + " | " + e.what());
             } catch (...) {
-                app_log(LogLevel::Warning,
-                        "GLWrpTerrainView: selected object model load failed: "
+                LOGW(                        "GLWrpTerrainView: selected object model load failed: "
                         + objects_[best_idx].model_name);
             }
         }

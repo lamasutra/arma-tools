@@ -1,11 +1,17 @@
 #include "render_domain/model_view_widget.h"
+#include "cli_logger.h"
 
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "render_domain/backend_gles/gl_model_view.h"
+#include "cli_logger.h"
 #include "render_domain/rd_backend_kind.h"
+#include "cli_logger.h"
 #include "render_domain/rd_scene_blob_builder.h"
+#include "cli_logger.h"
 
 #include <utility>
+#include "cli_logger.h"
 
 namespace render_domain {
 
@@ -100,7 +106,7 @@ void ModelViewWidget::set_lods(const std::vector<armatools::p3d::LOD>& lods) {
     SceneBlobBuildOutput scene;
     std::string error;
     if (!build_scene_blob_v1_from_lods(lods, &scene, &error)) {
-        app_log(LogLevel::Error, "ModelViewWidget: scene blob build failed: " + error);
+        LOGE("ModelViewWidget: scene blob build failed: " + error);
         impl_->gles.set_scene_blob(make_empty_scene_blob());
         return;
     }

@@ -172,7 +172,7 @@ Config load_config() {
         if (j.contains("asset_browser_defaults")) j.at("asset_browser_defaults").get_to(cfg.asset_browser_defaults);
         if (j.contains("obj_replace_defaults")) j.at("obj_replace_defaults").get_to(cfg.obj_replace_defaults);
     } catch (const json::exception& e) {
-        armatools::cli::log_error("Config parse error: " + std::string(e.what()));
+        LOGE("Config parse error: " + std::string(e.what()));
     }
     return cfg;
 }
@@ -187,7 +187,7 @@ LayoutConfig load_layout_config() {
         json j = json::parse(f);
         if (j.contains("panels")) j.at("panels").get_to(cfg.panels);
     } catch (const json::exception& e) {
-        armatools::cli::log_error("Layout config parse error: " + std::string(e.what()));
+        LOGE("Layout config parse error: " + std::string(e.what()));
     }
     return cfg;
 }

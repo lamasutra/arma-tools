@@ -1,9 +1,14 @@
 #include "audio_engine.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <cstring>
+#include "cli_logger.h"
 #include <string>
+#include "cli_logger.h"
 
 AudioEngine::AudioEngine() = default;
 
@@ -23,8 +28,7 @@ void AudioEngine::init_device() {
 
     ma_result result = ma_device_init(nullptr, &config, &device_);
     if (result != MA_SUCCESS) {
-        app_log(LogLevel::Error,
-                "miniaudio: failed to init device (" +
+        LOGE(                "miniaudio: failed to init device (" +
                     std::to_string(result) + " " +
                     ma_result_description(result) + ")");
         return;
@@ -62,8 +66,7 @@ void AudioEngine::play() {
     ma_result result = ma_device_start(&device_);
     if (result != MA_SUCCESS) {
         state_.store(PlayState::Stopped);
-        app_log(LogLevel::Error,
-                "miniaudio: failed to start playback (" +
+        LOGE(                "miniaudio: failed to start playback (" +
                     std::to_string(result) + " " +
                     ma_result_description(result) + ")");
     }

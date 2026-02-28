@@ -1,25 +1,45 @@
 #include "tab_asset_browser.h"
+#include "cli_logger.h"
 #include "audio_draw_util.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 #include "procedural_texture.h"
+#include "cli_logger.h"
 
 #include <armatools/config.h>
+#include "cli_logger.h"
 #include <armatools/armapath.h>
+#include "cli_logger.h"
 #include <armatools/ogg.h>
+#include "cli_logger.h"
 #include <armatools/p3d.h>
+#include "cli_logger.h"
 #include <armatools/paa.h>
+#include "cli_logger.h"
 #include <armatools/rvmat.h>
+#include "cli_logger.h"
 #include <armatools/wss.h>
+#include "cli_logger.h"
 
 #include <algorithm>
+#include "cli_logger.h"
 #include <array>
+#include "cli_logger.h"
 #include <cmath>
+#include "cli_logger.h"
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <iomanip>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 #include <thread>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -471,7 +491,7 @@ void TabAssetBrowser::set_config(Config* cfg) {
         index_ = snap.index;
 
         if (db_ && index_) {
-            app_log(LogLevel::Info, "Asset DB opened: " + snap.db_path);
+            LOGI("Asset DB opened: " + snap.db_path);
             model_panel_.set_config(cfg_);
             model_panel_.set_pboindex(db_.get(), index_.get());
             refresh_source_combo();
@@ -485,7 +505,7 @@ void TabAssetBrowser::set_config(Config* cfg) {
                      || snap.error.find("incompatible") != std::string::npos
                      || snap.error.find("missing required table") != std::string::npos;
         if (outdated) {
-            app_log(LogLevel::Warning, "Outdated DB schema, rebuilding: " + snap.error);
+            LOGW("Outdated DB schema, rebuilding: " + snap.error);
             db_.reset();
             index_.reset();
             std::error_code ec;
@@ -494,7 +514,7 @@ void TabAssetBrowser::set_config(Config* cfg) {
             fs::remove(cfg_->a3db_path + "-shm", ec);
             on_build_db();
         } else {
-            app_log(LogLevel::Error, std::string("Asset DB open error: ") + snap.error);
+            LOGE(std::string("Asset DB open error: ") + snap.error);
             status_label_.set_text(std::string("DB open error: ") + snap.error);
             index_.reset();
         }
@@ -550,7 +570,7 @@ void TabAssetBrowser::on_build_db() {
         return;
     }
 
-    app_log(LogLevel::Info, "Building asset database...");
+    LOGI("Building asset database...");
     {
         std::string cmd = "build_db -db " + cfg_->a3db_path;
         if (!cfg_->arma3_dir.empty()) cmd += " -arma3 " + cfg_->arma3_dir;
@@ -559,7 +579,7 @@ void TabAssetBrowser::on_build_db() {
         if (!cfg_->arma1_dir.empty()) cmd += " -arma1 " + cfg_->arma1_dir;
         if (!cfg_->arma2_dir.empty()) cmd += " -arma2 " + cfg_->arma2_dir;
         if (cfg_->asset_browser_defaults.on_demand_metadata) cmd += " -ondemand";
-        app_log(LogLevel::Debug, "exec: " + cmd);
+        LOGD("exec: " + cmd);
     }
     build_button_.set_sensitive(false);
     update_button_.set_sensitive(false);
@@ -589,7 +609,7 @@ void TabAssetBrowser::on_build_db() {
                     if (p.phase == "warning") {
                         auto warn = fs::path(p.pbo_path).filename().string() + ": " + p.file_name;
                         Glib::signal_idle().connect_once([this, warn]() {
-                            app_log(LogLevel::Warning, warn);
+                            LOGW(warn);
                         });
                         return;
                     }
@@ -612,7 +632,7 @@ void TabAssetBrowser::on_build_db() {
                 auto msg = "Build complete: " + std::to_string(result.pbo_count) + " PBOs, " +
                     std::to_string(result.file_count) + " files";
                 status_label_.set_text(msg);
-                app_log(LogLevel::Info, msg);
+                LOGI(msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
                 open_db();
@@ -621,7 +641,7 @@ void TabAssetBrowser::on_build_db() {
             auto msg = std::string(e.what());
             Glib::signal_idle().connect_once([this, msg]() {
                 status_label_.set_text("Build error: " + msg);
-                app_log(LogLevel::Error, "Asset DB build error: " + msg);
+                LOGE("Asset DB build error: " + msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
             });
@@ -636,7 +656,7 @@ void TabAssetBrowser::on_update_db() {
         return;
     }
 
-    app_log(LogLevel::Info, "Updating asset database...");
+    LOGI("Updating asset database...");
     {
         std::string cmd = "update_db -db " + cfg_->a3db_path;
         if (!cfg_->arma3_dir.empty()) cmd += " -arma3 " + cfg_->arma3_dir;
@@ -645,7 +665,7 @@ void TabAssetBrowser::on_update_db() {
         if (!cfg_->arma1_dir.empty()) cmd += " -arma1 " + cfg_->arma1_dir;
         if (!cfg_->arma2_dir.empty()) cmd += " -arma2 " + cfg_->arma2_dir;
         if (cfg_->asset_browser_defaults.on_demand_metadata) cmd += " -ondemand";
-        app_log(LogLevel::Debug, "exec: " + cmd);
+        LOGD("exec: " + cmd);
     }
     build_button_.set_sensitive(false);
     update_button_.set_sensitive(false);
@@ -672,7 +692,7 @@ void TabAssetBrowser::on_update_db() {
                     if (p.phase == "warning") {
                         auto warn = fs::path(p.pbo_path).filename().string() + ": " + p.file_name;
                         Glib::signal_idle().connect_once([this, warn]() {
-                            app_log(LogLevel::Warning, warn);
+                            LOGW(warn);
                         });
                         return;
                     }
@@ -696,7 +716,7 @@ void TabAssetBrowser::on_update_db() {
                     " -" + std::to_string(result.removed) +
                     " ~" + std::to_string(result.updated);
                 status_label_.set_text(msg);
-                app_log(LogLevel::Info, msg);
+                LOGI(msg);
                 build_button_.set_sensitive(true);
                 update_button_.set_sensitive(true);
                 open_db();
@@ -712,14 +732,14 @@ void TabAssetBrowser::on_update_db() {
                 fs::remove(db_path + "-wal", ec);
                 fs::remove(db_path + "-shm", ec);
                 Glib::signal_idle().connect_once([this, msg]() {
-                    app_log(LogLevel::Warning, "Outdated DB schema, rebuilding: " + msg);
+                    LOGW("Outdated DB schema, rebuilding: " + msg);
                     status_label_.set_text("Schema outdated, rebuilding...");
                     on_build_db();
                 });
             } else {
                 Glib::signal_idle().connect_once([this, msg]() {
                     status_label_.set_text("Update error: " + msg);
-                    app_log(LogLevel::Error, "Asset DB update error: " + msg);
+                    LOGE("Asset DB update error: " + msg);
                     build_button_.set_sensitive(true);
                     update_button_.set_sensitive(true);
                 });
@@ -835,7 +855,7 @@ void TabAssetBrowser::load_next_search_page(unsigned gen, bool reset) {
                     loading_more_results_ = false;
                     status_label_.set_text(has_more_results_ ? "Scroll to load more..." : "");
                     search_button_.set_sensitive(true);
-                    app_log(LogLevel::Info, "Search '" + pattern + "'" +
+                    LOGI("Search '" + pattern + "'" +
                         (source.empty() ? "" : " [" + source + "]") +
                         ": loaded " + std::to_string(search_results_.size()) +
                         (has_more_results_ ? "+" : "") + " results");
@@ -844,7 +864,7 @@ void TabAssetBrowser::load_next_search_page(unsigned gen, bool reset) {
             auto msg = std::string(e.what());
             Glib::signal_idle().connect_once([this, msg, gen]() {
                 if (gen != nav_generation_.load()) return;
-                app_log(LogLevel::Error, "Search error: " + msg);
+                LOGE("Search error: " + msg);
                 status_label_.set_text("Search error: " + msg);
                 loading_more_results_ = false;
                 search_button_.set_sensitive(true);
@@ -890,7 +910,7 @@ void TabAssetBrowser::load_next_directory_page(unsigned gen, bool reset) {
             auto msg = std::string(e.what());
             Glib::signal_idle().connect_once([this, msg, gen]() {
                 if (gen != nav_generation_.load()) return;
-                app_log(LogLevel::Error, "Navigate error: " + msg);
+                LOGE("Navigate error: " + msg);
                 status_label_.set_text("Navigate error: " + msg);
                 loading_more_results_ = false;
             });
@@ -1650,7 +1670,7 @@ void TabAssetBrowser::on_extract() {
                 std::ofstream out(out_path, std::ios::binary);
                 out.write(reinterpret_cast<const char*>(data.data()),
                           static_cast<std::streamsize>(data.size()));
-                app_log(LogLevel::Info, "Extracted: " + out_path.string());
+                LOGI("Extracted: " + out_path.string());
                 status_label_.set_text("Extracted to: " + out_path.string());
             } catch (const std::exception& e) {
                 status_label_.set_text(std::string("Extract error: ") + e.what());
@@ -1696,7 +1716,7 @@ void TabAssetBrowser::on_extract_to_drive() {
         out.write(reinterpret_cast<const char*>(data.data()),
                   static_cast<std::streamsize>(data.size()));
 
-        app_log(LogLevel::Info, "Extracted to drive: " + out_path.string());
+        LOGI("Extracted to drive: " + out_path.string());
         status_label_.set_text("Extracted to: " + out_path.string());
     } catch (const std::exception& e) {
         status_label_.set_text(std::string("Extract error: ") + e.what());

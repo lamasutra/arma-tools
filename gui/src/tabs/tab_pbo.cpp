@@ -1,13 +1,21 @@
 #include "tab_pbo.h"
+#include "cli_logger.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
+#include "cli_logger.h"
 
 #include <armatools/pbo.h>
+#include "cli_logger.h"
 
 #include <filesystem>
+#include "cli_logger.h"
 #include <fstream>
+#include "cli_logger.h"
 #include <iomanip>
+#include "cli_logger.h"
 #include <sstream>
+#include "cli_logger.h"
 
 namespace fs = std::filesystem;
 
@@ -167,7 +175,7 @@ void TabPbo::load_pbo(const std::string& path) {
         }
 
         auto pbo = armatools::pbo::read(f);
-        app_log(LogLevel::Info, "Loaded PBO: " + path + " (" + std::to_string(pbo.entries.size()) + " entries)");
+        LOGI("Loaded PBO: " + path + " (" + std::to_string(pbo.entries.size()) + " entries)");
 
         // PBO summary
         std::ostringstream summary;
@@ -205,7 +213,7 @@ void TabPbo::load_pbo(const std::string& path) {
         }
 
     } catch (const std::exception& e) {
-        app_log(LogLevel::Error, std::string("PBO load error: ") + e.what());
+        LOGE(std::string("PBO load error: ") + e.what());
         pbo_info_label_.set_text(std::string("Error: ") + e.what());
     }
 }
@@ -276,10 +284,10 @@ void TabPbo::on_extract() {
         auto result = run_subprocess(tool, args);
         Glib::signal_idle().connect_once([this, result]() {
             if (result.status == 0) {
-                app_log(LogLevel::Info, "PBO extraction complete");
+                LOGI("PBO extraction complete");
                 status_label_.set_text("Extraction complete.");
             } else {
-                app_log(LogLevel::Error, "PBO extraction failed: " + result.output);
+                LOGE("PBO extraction failed: " + result.output);
                 status_label_.set_text("Extraction failed: " + result.output);
             }
             extract_button_.set_sensitive(true);
@@ -335,10 +343,10 @@ void TabPbo::on_extract_selected() {
         auto result = run_subprocess(tool, args);
         Glib::signal_idle().connect_once([this, result, entry_name]() {
             if (result.status == 0) {
-                app_log(LogLevel::Info, "Extracted: " + entry_name);
+                LOGI("Extracted: " + entry_name);
                 status_label_.set_text("Extracted: " + entry_name);
             } else {
-                app_log(LogLevel::Error, "Extract failed: " + result.output);
+                LOGE("Extract failed: " + result.output);
                 status_label_.set_text("Extract failed: " + result.output);
             }
             extract_button_.set_sensitive(true);

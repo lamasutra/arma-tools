@@ -1,5 +1,6 @@
 #include "tab_obj_replace.h"
 #include "log_panel.h"
+#include "cli_logger.h"
 #include "pbo_util.h"
 
 #include <armatools/armapath.h>
@@ -46,11 +47,11 @@ std::string trim_copy(std::string value) {
 }
 
 void log_async_dialog_error(const std::string& action, const std::exception& e) {
-    app_log(LogLevel::Warning, "ObjReplace " + action + " failed: " + std::string(e.what()));
+    LOGW("ObjReplace " + action + " failed: " + std::string(e.what()));
 }
 
 void log_async_dialog_error(const std::string& action) {
-    app_log(LogLevel::Warning, "ObjReplace " + action + " failed: unknown error");
+    LOGW("ObjReplace " + action + " failed: unknown error");
 }
 
 struct TextureExtractStats {
@@ -82,7 +83,7 @@ TextureExtractStats extract_textures_to_drive(
         try {
             results = db.find_files(pattern);
         } catch (const std::exception& e) {
-            app_log(LogLevel::Debug, "ObjReplace texture lookup failed for " + tex + ": " + e.what());
+            LOGD("ObjReplace texture lookup failed for " + tex + ": " + e.what());
             stats.missing++;
             continue;
         } catch (...) {
@@ -533,9 +534,9 @@ void TabObjReplace::set_config(Config* cfg) {
         left_model_panel_.set_pboindex(db_.get(), index_.get());
         right_model_panel_.set_pboindex(db_.get(), index_.get());
         if (!snap.error.empty()) {
-            app_log(LogLevel::Warning, "ObjReplace: Failed to open PBO index: " + snap.error);
+            LOGW("ObjReplace: Failed to open PBO index: " + snap.error);
         } else if (db_ && index_) {
-            app_log(LogLevel::Info, "ObjReplace: PBO index loaded ("
+            LOGI("ObjReplace: PBO index loaded ("
                     + std::to_string(snap.prefix_count) + " prefixes)");
         }
     });
@@ -727,7 +728,7 @@ void TabObjReplace::on_wrp_load() {
 void TabObjReplace::load_replacement_file(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
-        app_log(LogLevel::Error, "Cannot open replacement file: " + path);
+        LOGE("Cannot open replacement file: " + path);
         return;
     }
 
@@ -767,7 +768,7 @@ void TabObjReplace::load_replacement_file(const std::string& path) {
         else if (e.is_matched()) matched++;
         else unmatched++;
     }
-    app_log(LogLevel::Info, "Loaded " + std::to_string(entries_.size())
+    LOGI("Loaded " + std::to_string(entries_.size())
             + " entries from " + path
             + " (" + std::to_string(matched) + " matched, "
             + std::to_string(unmatched) + " unmatched"
@@ -780,7 +781,7 @@ void TabObjReplace::load_replacement_file(const std::string& path) {
 void TabObjReplace::save_replacement_file(const std::string& path) {
     std::ofstream f(path);
     if (!f.is_open()) {
-        app_log(LogLevel::Error, "Cannot write replacement file: " + path);
+        LOGE("Cannot write replacement file: " + path);
         return;
     }
 
@@ -797,7 +798,7 @@ void TabObjReplace::save_replacement_file(const std::string& path) {
         save_config(*cfg_);
     }
 
-    app_log(LogLevel::Info, "Saved " + std::to_string(entries_.size())
+    LOGI("Saved " + std::to_string(entries_.size())
             + " entries to " + path);
     update_status_label();
 }
@@ -843,7 +844,7 @@ void TabObjReplace::load_wrp_file(const std::string& path) {
     if (loading_) return;
     loading_ = true;
 
-    app_log(LogLevel::Info, "Loading WRP for object counts: " + path);
+    LOGI("Loading WRP for object counts: " + path);
     status_label_.set_text("Loading WRP...");
 
     if (worker_.joinable()) worker_.join();
@@ -872,7 +873,7 @@ void TabObjReplace::load_wrp_file(const std::string& path) {
         Glib::signal_idle().connect_once([this, counts = std::move(counts),
                                           error = std::move(error), path]() {
             if (!error.empty()) {
-                app_log(LogLevel::Error, error);
+                LOGE(error);
                 status_label_.set_text(error);
                 loading_ = false;
                 return;
@@ -908,7 +909,7 @@ void TabObjReplace::load_wrp_file(const std::string& path) {
                 save_config(*cfg_);
             }
 
-            app_log(LogLevel::Info, "WRP loaded: " + std::to_string(counts.size())
+            LOGI("WRP loaded: " + std::to_string(counts.size())
                     + " models, " + std::to_string(updated) + " updated, "
                     + std::to_string(added) + " new unmatched");
 
@@ -982,8 +983,7 @@ void TabObjReplace::on_set_unmatched_to() {
         if (new_value.find(';') != std::string::npos ||
             new_value.find('\n') != std::string::npos ||
             new_value.find('\r') != std::string::npos) {
-            app_log(LogLevel::Warning,
-                    "Set Unmatched: invalid model path (contains ';' or newline)");
+            LOGW(                    "Set Unmatched: invalid model path (contains ';' or newline)");
             return;
         }
 
@@ -997,7 +997,7 @@ void TabObjReplace::on_set_unmatched_to() {
 
         if (changed > 0) {
             dirty_ = true;
-            app_log(LogLevel::Info, "Set " + std::to_string(changed)
+            LOGI("Set " + std::to_string(changed)
                     + " unmatched entries to: " + new_value);
             refresh_all();
         }
@@ -1011,7 +1011,7 @@ void TabObjReplace::on_set_unmatched_to() {
 
 void TabObjReplace::on_auto_match() {
     if (entries_.empty() || !db_) {
-        app_log(LogLevel::Warning, "Auto-Match requires a PBO index database");
+        LOGW("Auto-Match requires a PBO index database");
         return;
     }
     if (loading_) return;
@@ -1036,7 +1036,7 @@ void TabObjReplace::on_auto_match() {
     }
 
     if (work.empty()) {
-        app_log(LogLevel::Info, "Auto-Match: no unmatched entries to process");
+        LOGI("Auto-Match: no unmatched entries to process");
         auto_match_button_.set_sensitive(true);
         loading_ = false;
         update_status_label();
@@ -1052,7 +1052,7 @@ void TabObjReplace::on_auto_match() {
     worker_ = std::thread([this, db = std::move(db), work = std::move(work), total_work]() {
         if (!db) {
             Glib::signal_idle().connect_once([this]() {
-                app_log(LogLevel::Warning, "Auto-Match cancelled: PBO index is not available");
+                LOGW("Auto-Match cancelled: PBO index is not available");
                 auto_match_button_.set_sensitive(true);
                 loading_ = false;
                 update_status_label();
@@ -1093,13 +1093,13 @@ void TabObjReplace::on_auto_match() {
             } catch (const std::exception& e) {
                 auto msg = "Auto-Match: lookup failed for '" + w.filename + "': " + e.what();
                 Glib::signal_idle().connect_once([msg]() {
-                    app_log(LogLevel::Warning, msg);
+                    LOGW(msg);
                 });
                 continue;
             } catch (...) {
                 auto msg = "Auto-Match: lookup failed for '" + w.filename + "'";
                 Glib::signal_idle().connect_once([msg]() {
-                    app_log(LogLevel::Warning, msg);
+                    LOGW(msg);
                 });
                 continue;
             }
@@ -1124,7 +1124,7 @@ void TabObjReplace::on_auto_match() {
                                + " results for '" + w.filename + "' were self-matches"
                                + " (old: " + w.old_path + ")";
                     Glib::signal_idle().connect_once([msg]() {
-                        app_log(LogLevel::Debug, msg);
+                        LOGD(msg);
                     });
                 }
                 continue;
@@ -1159,10 +1159,10 @@ void TabObjReplace::on_auto_match() {
                     if (multi_count > 0)
                         msg += " (" + std::to_string(multi_count)
                                + " with multiple candidates — use Edit to select)";
-                    app_log(LogLevel::Info, msg);
+                    LOGI(msg);
                     refresh_all();
                 } else {
-                    app_log(LogLevel::Info, "Auto-Match: no new matches found");
+                    LOGI("Auto-Match: no new matches found");
                     update_status_label();
                 }
 
@@ -1290,7 +1290,7 @@ void TabObjReplace::start_auto_extract_worker(std::set<std::string> textures,
                << stats.missing << " missing, "
                << stats.failed << " failed.";
             status_label_.set_text(ss.str());
-            app_log(LogLevel::Info, "ObjReplace " + ss.str());
+            LOGI("ObjReplace " + ss.str());
 
             if (!pending.empty()) {
                 status_label_.set_text("Auto-extracting queued textures...");
@@ -1340,7 +1340,7 @@ void TabObjReplace::load_p3d_into_panel(ModelViewPanel& panel, Gtk::Label& label
 
     if (model_path.empty()) return;
     if (!model_loader_shared_) {
-        app_log(LogLevel::Warning, "ObjReplace: model loader service not configured");
+        LOGW("ObjReplace: model loader service not configured");
         label.set_text(model_path + " (model loader not configured)");
         return;
     }
@@ -1359,7 +1359,7 @@ void TabObjReplace::load_p3d_into_panel(ModelViewPanel& panel, Gtk::Label& label
         maybe_auto_extract(p3d);
         panel.load_p3d(model_path);
     } catch (const std::exception& e) {
-        app_log(LogLevel::Warning, "ObjReplace preview load failed: " + std::string(e.what()));
+        LOGW("ObjReplace preview load failed: " + std::string(e.what()));
         label.set_text(model_path + " (not found)");
     }
 }
@@ -2032,12 +2032,10 @@ void TabObjReplace::show_edit_dialog(uint64_t row_id) {
                 try {
                     results = db_->find_files("*" + filename);
                 } catch (const std::exception& e) {
-                    app_log(LogLevel::Warning,
-                            "ObjReplace: candidate lookup failed for '" + filename + "': " + e.what());
+                    LOGW(                            "ObjReplace: candidate lookup failed for '" + filename + "': " + e.what());
                     continue;
                 } catch (...) {
-                    app_log(LogLevel::Warning,
-                            "ObjReplace: candidate lookup failed for '" + filename + "'");
+                    LOGW(                            "ObjReplace: candidate lookup failed for '" + filename + "'");
                     continue;
                 }
                 bool found = false;
