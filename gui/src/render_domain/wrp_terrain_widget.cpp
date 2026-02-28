@@ -176,4 +176,8 @@ wrpterrain::CameraMode WrpTerrainWidget::camera_mode() const {
     return wrpterrain::CameraMode::Orbit;
 }
 
+void WrpTerrainWidget::set_gravity_enabled(bool enabled) {
+    if (has_gles()) impl_->gles.set_gravity_enabled(enabled);
+}
+
 }  // namespace render_domain

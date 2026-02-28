@@ -98,12 +98,9 @@ private:
     Gtk::Label terrain3d_seam_debug_label_{"Seam:"};
     Gtk::ComboBoxText terrain3d_seam_debug_combo_;
     Gtk::ToggleButton terrain3d_camera_mode_btn_;
+    Gtk::ToggleButton terrain3d_gravity_btn_;
     Gtk::ToggleButton terrain3d_wireframe_btn_;
     Gtk::ToggleButton terrain3d_objects_btn_;
-    Gtk::ToggleButton terrain3d_obj_buildings_btn_;
-    Gtk::ToggleButton terrain3d_obj_vegetation_btn_;
-    Gtk::ToggleButton terrain3d_obj_rocks_btn_;
-    Gtk::ToggleButton terrain3d_obj_props_btn_;
     Gtk::ToggleButton terrain3d_obj_bounds_btn_;
     Gtk::ToggleButton terrain3d_patch_bounds_btn_;
     Gtk::ToggleButton terrain3d_lod_tint_btn_;

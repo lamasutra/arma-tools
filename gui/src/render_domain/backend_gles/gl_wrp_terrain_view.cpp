@@ -335,6 +335,14 @@ GLWrpTerrainView::GLWrpTerrainView() {
     drag_orbit_->signal_drag_update().connect([this](double dx, double dy) {
         camera_controller_.orbit_from_drag(
             drag_start_azimuth_, drag_start_elevation_, dx, dy);
+        
+        if (gravity_enabled_) {
+            auto state = camera_controller_.camera_state();
+            float current_ground_y = sample_height_at_world(state.pivot[0], state.pivot[2]);
+            state.pivot[1] = current_ground_y + 1.5f;
+            camera_controller_.set_camera_state(state);
+        }
+
         queue_render();
     });
     add_controller(drag_orbit_);
@@ -347,6 +355,17 @@ GLWrpTerrainView::GLWrpTerrainView() {
     });
     drag_pan_->signal_drag_update().connect([this](double dx, double dy) {
         camera_controller_.pan_from_drag(drag_start_pivot_, dx, dy);
+        
+        auto state = camera_controller_.camera_state();
+        float current_ground_y = sample_height_at_world(state.pivot[0], state.pivot[2]);
+        if (gravity_enabled_) {
+            state.pivot[1] = current_ground_y + 1.5f;
+            camera_controller_.set_camera_state(state);
+        } else if (state.pivot[1] < current_ground_y + 0.5f) {
+            state.pivot[1] = current_ground_y + 0.5f;
+            camera_controller_.set_camera_state(state);
+        }
+
         queue_render();
     });
     add_controller(drag_pan_);
@@ -1179,6 +1198,23 @@ void GLWrpTerrainView::set_on_compass_info(std::function<void(const std::string&
     }
 }
 
+void GLWrpTerrainView::set_gravity_enabled(bool enabled) {
+    if (gravity_enabled_ == enabled) return;
+    gravity_enabled_ = enabled;
+    if (gravity_enabled_) {
+        // Snap to ground level immediately when turning on gravity
+        auto state = camera_controller_.camera_state();
+        float current_ground_y = sample_height_at_world(state.pivot[0], state.pivot[2]);
+        state.pivot[1] = current_ground_y + 1.5f;
+        camera_controller_.set_camera_state(state);
+        queue_render();
+    }
+}
+
+bool GLWrpTerrainView::gravity_enabled() const {
+    return gravity_enabled_;
+}
+
 void GLWrpTerrainView::set_model_loader_service(
     const std::shared_ptr<P3dModelLoaderService>& service) {
     model_loader_ = service;
@@ -1745,8 +1781,13 @@ bool GLWrpTerrainView::on_render_gl(const Glib::RefPtr<Gdk::GLContext>&) {
     if (on_compass_info_) {
         std::string compass = make_compass_text(camera_state.azimuth);
         
-        char buf[128];
-        snprintf(buf, sizeof(buf), " | Cam: %.1f, %.1f, %.1f | Wat: %.1f", eye[0], eye[1], eye[2], water_level_);
+        float step = std::max(0.5f, camera_controller_.distance() * 0.006f);
+        if (move_fast_ && !alt_pressed_) step *= 3.0f;
+        float speed_mps = step * (1000.0f / 16.0f);
+        
+        char buf[256];
+        snprintf(buf, sizeof(buf), " | Cam: %.1f, %.1f, %.1f | Spd: %.1f m/s | Wat: %.1f", 
+                 eye[0], eye[1], eye[2], speed_mps, water_level_);
         compass += buf;
 
         if (compass != last_compass_info_) {
@@ -2030,6 +2071,28 @@ float GLWrpTerrainView::sample_height_clamped(int gx, int gz) const {
                      + static_cast<size_t>(gx);
     if (idx >= heights_.size()) return 0.0f;
     return heights_[idx];
+}
+
+float GLWrpTerrainView::sample_height_at_world(float wx, float wz) const {
+    if (grid_w_ <= 0 || grid_h_ <= 0 || cell_size_ <= 0.0f) return 0.0f;
+    
+    // Convert world coords to exact grid fractional coords
+    float fx = wx / cell_size_;
+    float fz = source_z_from_render(wz) / cell_size_;
+
+    int x0 = static_cast<int>(std::floor(fx));
+    int z0 = static_cast<int>(std::floor(fz));
+    float tx = fx - static_cast<float>(x0);
+    float tz = fz - static_cast<float>(z0);
+
+    float h00 = sample_height_clamped(x0, z0);
+    float h10 = sample_height_clamped(x0 + 1, z0);
+    float h01 = sample_height_clamped(x0, z0 + 1);
+    float h11 = sample_height_clamped(x0 + 1, z0 + 1);
+
+    float h0 = h00 * (1.0f - tx) + h10 * tx;
+    float h1 = h01 * (1.0f - tx) + h11 * tx;
+    return h0 * (1.0f - tz) + h1 * tz;
 }
 
 std::array<float, 3> GLWrpTerrainView::sample_world_normal_clamped(int gx, int gz) const {
@@ -3817,6 +3880,17 @@ bool GLWrpTerrainView::movement_tick() {
     float step = std::max(0.5f, camera_controller_.distance() * 0.006f);
     if (move_fast_ && !alt_pressed_) step *= 3.0f;
     camera_controller_.move_local(forward * step, right * step, vertical * step);
+    
+    auto state = camera_controller_.camera_state();
+    float current_ground_y = sample_height_at_world(state.pivot[0], state.pivot[2]);
+    if (gravity_enabled_) {
+        state.pivot[1] = current_ground_y + 1.5f;
+        camera_controller_.set_camera_state(state);
+    } else if (state.pivot[1] < current_ground_y + 0.5f) {
+        state.pivot[1] = current_ground_y + 0.5f;
+        camera_controller_.set_camera_state(state);
+    }
+
     queue_render();
     return true;
 }

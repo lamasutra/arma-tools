@@ -48,6 +48,8 @@ public:
     void set_camera_mode(wrpterrain::CameraMode mode);
     [[nodiscard]] wrpterrain::CameraMode camera_mode() const;
 
+    void set_gravity_enabled(bool enabled);
+
 private:
     struct Impl;
 

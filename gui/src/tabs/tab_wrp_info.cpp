@@ -157,19 +157,14 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_seam_debug_combo_.append("depth", "Depth");
     terrain3d_seam_debug_combo_.append("normals", "Normals");
     terrain3d_seam_debug_combo_.set_active_id("final");
+    make_icon_toggle(terrain3d_gravity_btn_, "go-bottom-symbolic",
+                     "Enable gravity and lock to ground");
+    terrain3d_gravity_btn_.set_active(false);
     make_icon_toggle(terrain3d_camera_mode_btn_, "object-rotate-right-symbolic",
                      "Orbit camera (click to switch to first person)");
     terrain3d_camera_mode_btn_.set_active(true);
     make_icon_toggle(terrain3d_wireframe_btn_, "applications-engineering-symbolic", "Wireframe");
     make_icon_toggle(terrain3d_objects_btn_, "image-x-generic-symbolic", "Objects");
-    terrain3d_obj_buildings_btn_.set_label("Bld");
-    terrain3d_obj_buildings_btn_.set_tooltip_text("Render buildings");
-    terrain3d_obj_vegetation_btn_.set_label("Veg");
-    terrain3d_obj_vegetation_btn_.set_tooltip_text("Render vegetation");
-    terrain3d_obj_rocks_btn_.set_label("Rock");
-    terrain3d_obj_rocks_btn_.set_tooltip_text("Render rocks");
-    terrain3d_obj_props_btn_.set_label("Prop");
-    terrain3d_obj_props_btn_.set_tooltip_text("Render props/other");
     terrain3d_obj_bounds_btn_.set_label("BBox");
     terrain3d_obj_bounds_btn_.set_tooltip_text("Draw object bounds (debug)");
     make_icon_toggle(terrain3d_patch_bounds_btn_, "view-fullscreen-symbolic", "Patch bounds");
@@ -183,10 +178,6 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_water_level_spin_.set_size_request(80, -1);
     terrain3d_wireframe_btn_.set_active(false);
     terrain3d_objects_btn_.set_active(true);
-    terrain3d_obj_buildings_btn_.set_active(true);
-    terrain3d_obj_vegetation_btn_.set_active(true);
-    terrain3d_obj_rocks_btn_.set_active(true);
-    terrain3d_obj_props_btn_.set_active(true);
     terrain3d_obj_bounds_btn_.set_active(false);
     terrain3d_patch_bounds_btn_.set_active(false);
     terrain3d_lod_tint_btn_.set_active(false);
@@ -214,13 +205,10 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
     terrain3d_toolbar_.append(terrain3d_mode_combo_);
     terrain3d_toolbar_.append(terrain3d_seam_debug_label_);
     terrain3d_toolbar_.append(terrain3d_seam_debug_combo_);
+    terrain3d_toolbar_.append(terrain3d_gravity_btn_);
     terrain3d_toolbar_.append(terrain3d_camera_mode_btn_);
     terrain3d_toolbar_.append(terrain3d_wireframe_btn_);
     terrain3d_toolbar_.append(terrain3d_objects_btn_);
-    terrain3d_toolbar_.append(terrain3d_obj_buildings_btn_);
-    terrain3d_toolbar_.append(terrain3d_obj_vegetation_btn_);
-    terrain3d_toolbar_.append(terrain3d_obj_rocks_btn_);
-    terrain3d_toolbar_.append(terrain3d_obj_props_btn_);
     terrain3d_toolbar_.append(terrain3d_obj_bounds_btn_);
     terrain3d_toolbar_.append(terrain3d_patch_bounds_btn_);
     terrain3d_toolbar_.append(terrain3d_lod_tint_btn_);
@@ -336,22 +324,24 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
                 : wrpterrain::CameraMode::FirstPerson);
         update_camera_mode_button();
     });
+    terrain3d_gravity_btn_.signal_toggled().connect([this, update_camera_mode_button]() {
+        bool gravity = terrain3d_gravity_btn_.get_active();
+        terrain3d_view_.set_gravity_enabled(gravity);
+        
+        if (gravity) {
+            terrain3d_camera_mode_btn_.set_active(false);
+            terrain3d_camera_mode_btn_.set_sensitive(false);
+            terrain3d_view_.set_camera_mode(wrpterrain::CameraMode::FirstPerson);
+        } else {
+            terrain3d_camera_mode_btn_.set_sensitive(true);
+        }
+        update_camera_mode_button();
+    });
     update_camera_mode_button();
     terrain3d_objects_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_objects(terrain3d_objects_btn_.get_active());
         if (terrain3d_objects_btn_.get_active()) ensure_objects_loaded();
     });
-    auto apply_object_filters = [this]() {
-        terrain3d_view_.set_object_category_filters(
-            terrain3d_obj_buildings_btn_.get_active(),
-            terrain3d_obj_vegetation_btn_.get_active(),
-            terrain3d_obj_rocks_btn_.get_active(),
-            terrain3d_obj_props_btn_.get_active());
-    };
-    terrain3d_obj_buildings_btn_.signal_toggled().connect(apply_object_filters);
-    terrain3d_obj_vegetation_btn_.signal_toggled().connect(apply_object_filters);
-    terrain3d_obj_rocks_btn_.signal_toggled().connect(apply_object_filters);
-    terrain3d_obj_props_btn_.signal_toggled().connect(apply_object_filters);
     terrain3d_obj_bounds_btn_.signal_toggled().connect([this]() {
         terrain3d_view_.set_show_object_bounds(terrain3d_obj_bounds_btn_.get_active());
     });
@@ -397,7 +387,13 @@ TabWrpInfo::TabWrpInfo() : Gtk::Paned(Gtk::Orientation::HORIZONTAL) {
         else terrain3d_view_.set_seam_debug_mode(0);
     });
     right_notebook_.signal_switch_page().connect([this](Gtk::Widget*, guint page_num) {
-        if (page_num == 1) ensure_objects_loaded();
+        if (page_num == 1) {
+            ensure_objects_loaded();
+        } else if (page_num == 3) {
+            if (!objects_loaded_) {
+                terrain3d_objects_btn_.set_active(false);
+            }
+        }
     });
 
     terrain3d_mode_combo_.signal_changed().connect([this]() {
@@ -678,6 +674,7 @@ void TabWrpInfo::load_wrp(const WrpFileEntry& entry) {
     class_status_label_.set_text("Objects deferred (open Objects tab to load)");
     terrain3d_status_label_.set_text("Loading terrain...");
     terrain3d_compass_overlay_.set_text("N: --");
+    terrain3d_gravity_btn_.set_active(false);
     terrain3d_camera_mode_btn_.set_active(true);
     terrain3d_view_.set_camera_mode(wrpterrain::CameraMode::Orbit);
     terrain3d_view_.clear_world();

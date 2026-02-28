@@ -59,6 +59,9 @@ public:
     void set_camera_mode(wrpterrain::CameraMode mode);
     [[nodiscard]] wrpterrain::CameraMode camera_mode() const;
 
+    void set_gravity_enabled(bool enabled);
+    [[nodiscard]] bool gravity_enabled() const;
+
 private:
     static constexpr int kMaxTerrainSurfaces = 4;
     static constexpr int kTerrainRoleCount = 14; // sat, mask, (macro/normal/detail)*4
@@ -175,6 +178,7 @@ private:
     bool show_object_bounds_ = false;
     bool show_water_ = true;
     float water_level_ = 0.0f;
+    bool gravity_enabled_ = false;
     bool object_filter_buildings_ = true;
     bool object_filter_vegetation_ = true;
     bool object_filter_rocks_ = true;
@@ -503,6 +507,7 @@ private:
     void update_visible_patches(const float* mvp, const float* eye);
     int choose_patch_lod(const TerrainPatch& patch, const float* eye) const;
     float sample_height_clamped(int gx, int gz) const;
+    float sample_height_at_world(float wx, float wz) const;
     std::array<float, 3> sample_world_normal_clamped(int gx, int gz) const;
 #ifndef NDEBUG
     void validate_patch_edge_heights() const;
